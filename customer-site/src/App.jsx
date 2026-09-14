@@ -1,90 +1,77 @@
 import { useState } from 'react'
 
-const products = [
+const PRODUCTS = [
   {
-    name: 'Lash Cleanser',
-    description:
-      'Gentle, oil-free foam cleanser that keeps your lash extensions clean and extends retention. Safe for daily use.',
-    price: 'R 120',
-    badge: 'Best Seller',
-  },
-  {
-    name: 'Lash Sealant',
-    description:
-      'Protective coating that bonds to your extensions, adds shine and locks in moisture for longer-lasting lashes.',
-    price: 'R 95',
+    id: 1,
+    name: 'Classic Lash Trays',
+    description: 'Professional classic lash trays for individual lash extensions. Perfect for creating a natural, elegant look.',
+    detail: 'Diameter: 0.15 | Curl: D',
+    price: 130,
     badge: null,
+    image: '/images/classic-lash-trays.jpg',
   },
   {
-    name: 'Lash Brush Set (5 pack)',
-    description:
-      'Soft spoolie brushes for daily grooming. Keep your lashes fluffy, separated and perfectly fanned.',
-    price: 'R 65',
-    badge: 'New',
+    id: 2,
+    name: 'YY Lash Trays',
+    description: 'YY lash trays designed for a wispy, textured finish. Ideal for creating that effortlessly full look.',
+    detail: 'Diameter: 0.07 | Curl: D',
+    price: 150,
+    badge: 'Popular',
+    image: '/images/yy-lash-trays.jpg',
   },
   {
-    name: 'Under-Eye Gel Patches',
-    description:
-      'Cooling hydrogel patches that protect the under-eye area during lash application. Soothing and refreshing.',
-    price: 'R 80',
-    badge: null,
-  },
-  {
-    name: 'Lash Extension Adhesive',
-    description:
-      'Professional-grade bonding adhesive for long-lasting lash sets. Low fume formula with strong retention.',
-    price: 'R 180',
+    id: 3,
+    name: 'Volume Lash Trays',
+    description: 'Ultra-fine volume lash trays for handmade fans and Russian volume sets. Available in two curl options.',
+    detail: 'Diameter: 0.05 | Curl: Cc & D',
+    price: 150,
     badge: 'Pro Pick',
+    image: '/images/volume-lash-trays.jpg',
   },
   {
-    name: 'Aftercare Kit',
-    description:
-      'Complete starter kit including cleanser, sealant and a brush set. Everything you need to maintain your lashes at home.',
-    price: 'R 299',
-    badge: 'Bundle',
+    id: 4,
+    name: 'Lash Shampoo and Cleansing Brush Combo',
+    description: 'Keep your lash extensions clean and fresh with our gentle foaming lash shampoo paired with a soft cleansing brush.',
+    detail: 'Recommended for daily use',
+    price: 100,
+    badge: 'Best Seller',
+    image: '/images/lash-shampoo-combo.jpg',
   },
 ]
 
-const classes = [
+const CLASSES = [
   {
-    name: 'Classic Lash Application',
+    id: 1,
+    name: 'Classic Individual Lash Training',
+    duration: '1-day course',
+    level: 'Beginner',
+    price: 2500,
+    deposit: 500,
+    description: 'Unlock the art of effortless elegance with our Classic Lash training. A comprehensive 1-day course designed to give you everything you need to start your lash journey.',
+    learns: ['Classic lash training', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
+  },
+  {
+    id: 2,
+    name: 'Classic Individual Lash Training',
     duration: '2-day course',
     level: 'Beginner',
-    description:
-      'Learn the fundamentals of classic lash extensions from prep and isolation to application and aftercare advice.',
-    price: 'R 2 500',
-    seats: '6 seats available',
-    certification: 'Certificate of Completion included',
+    price: 4000,
+    deposit: 500,
+    description: 'Our comprehensive 2-day Classic Lash course gives you more time to practise and perfect your technique before you start working with clients.',
+    learns: ['Classic lash training', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
   },
   {
-    name: 'Volume and Mega Volume',
-    duration: '3-day course',
-    level: 'Intermediate',
-    description:
-      'Master the art of handmade fans, Russian volume and mega volume techniques for a full, dramatic look.',
-    price: 'R 3 800',
-    seats: '4 seats available',
-    certification: 'Certificate of Completion included',
-  },
-  {
-    name: 'Brow Lamination and Tint',
-    duration: '1-day course',
-    level: 'Beginner',
-    description:
-      'Full brow lamination and tinting course covering product knowledge, mapping, processing times and aftercare.',
-    price: 'R 1 800',
-    seats: '8 seats available',
-    certification: 'Certificate of Completion included',
-  },
-  {
-    name: 'Lash Removal and Refills',
-    duration: '1-day course',
-    level: 'Beginner',
-    description:
-      'Covers safe lash removal techniques and refill application to maintain density and client retention.',
-    price: 'R 1 200',
-    seats: '6 seats available',
-    certification: 'Certificate of Completion included',
+    id: 3,
+    name: 'Advanced Individual Lash Training',
+    duration: '4-day intensive course',
+    level: 'Advanced',
+    price: 6000,
+    deposit: 500,
+    description: 'Take your lash skills to the next level with our intensive 4-day Advanced course. Covering classic, hybrid and volume techniques, this course is designed to make you a well-rounded lash professional.',
+    learns: ['Classic, hybrid and volume lash', 'Fan making', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
   },
 ]
 
@@ -118,10 +105,67 @@ const policies = [
 
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
+  const [cart, setCart] = useState([])
+  const [cartOpen, setCartOpen] = useState(false)
+  const [checkoutStep, setCheckoutStep] = useState(false)
+  const [orderName, setOrderName] = useState('')
+  const [orderPhone, setOrderPhone] = useState('')
+  const [orderSubmitted, setOrderSubmitted] = useState(false)
+  const [copied, setCopied] = useState(false)
   const bookingUrl = 'https://lashesbyretha.setmore.com'
 
   const scrollToShop = () => {
     document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  const addToCart = (product) => {
+    setCart(prev => {
+      const existing = prev.find(item => item.id === product.id)
+      if (existing) {
+        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item)
+      }
+      return [...prev, { ...product, qty: 1 }]
+    })
+    setCartOpen(true)
+  }
+
+  const removeFromCart = (id) => {
+    setCart(prev => prev.filter(item => item.id !== id))
+  }
+
+  const updateQty = (id, delta) => {
+    setCart(prev => prev.map(item =>
+      item.id === id ? { ...item, qty: Math.max(1, item.qty + delta) } : item
+    ).filter(item => item.qty > 0))
+  }
+
+  const cartTotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0)
+  const cartCount = cart.reduce((sum, item) => sum + item.qty, 0)
+
+  const copyPaymentDetails = () => {
+    navigator.clipboard.writeText('FNB | Lashes By Retha | Account: 63093932440')
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2500)
+  }
+
+  const submitOrder = async () => {
+    if (!orderName.trim() || !orderPhone.trim()) return
+    try {
+      await fetch('http://localhost:3002/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: orderName,
+          customerPhone: orderPhone,
+          items: cart.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price })),
+          total: cartTotal,
+        }),
+      })
+      setOrderSubmitted(true)
+      setCart([])
+    } catch (err) {
+      console.error('Order submission failed:', err)
+    }
   }
 
   return (
@@ -595,6 +639,24 @@ function App() {
           color: #C47A8A;
         }
 
+        .class-item::before {
+          content: '-';
+          position: absolute;
+          left: 0;
+          color: #C47A8A;
+        }
+
+        @media (max-width: 440px) {
+          .cart-drawer {
+            width: 100vw !important;
+            right: -100vw !important;
+          }
+
+          .cart-drawer.open {
+            right: 0 !important;
+          }
+        }
+
         @media (max-width: 640px) {
           .nav {
             flex-direction: column;
@@ -631,6 +693,59 @@ function App() {
               Book Now
             </a>
           </li>
+          <li>
+            <button
+              onClick={() => setCartOpen(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                position: 'relative',
+                padding: '6px',
+                marginLeft: '12px',
+                color: '#2C2C2C',
+              }}
+            >
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <path d="M16 10a4 4 0 0 1-8 0" />
+              </svg>
+              {cartCount > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: 0,
+                    background: '#C47A8A',
+                    color: 'white',
+                    borderRadius: '50%',
+                    width: '16px',
+                    height: '16px',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {cartCount}
+                </span>
+              )}
+            </button>
+          </li>
         </ul>
       </nav>
 
@@ -657,14 +772,24 @@ function App() {
       <section id="shop" className="section">
         <h2 className="section-heading">Our Products</h2>
         <div className="products-grid">
-          {products.map((product) => (
-            <div className="product-card" key={product.name}>
-              <div className="product-image-placeholder">Product Image</div>
+          {PRODUCTS.map((product) => (
+            <div className="product-card" key={product.id}>
+              <div className="product-image-placeholder">
+                <img
+                  src={product.image}
+                  alt={product.name}
+                  style={{ width: '100%', height: '180px', objectFit: 'cover', borderRadius: '8px', marginBottom: 0 }}
+                  onError={(e) => { e.target.style.display = 'none' }}
+                />
+              </div>
               {product.badge && <span className="product-badge">{product.badge}</span>}
               <h3 className="product-name">{product.name}</h3>
               <p className="product-description">{product.description}</p>
-              <p className="product-price">{product.price}</p>
-              <button className="btn-add-cart">Add to Cart</button>
+              <div style={{ fontSize: '12px', color: '#9A7A82', marginBottom: '8px', fontStyle: 'italic' }}>
+                {product.detail}
+              </div>
+              <p className="product-price">R {product.price}</p>
+              <button className="btn-add-cart" onClick={() => addToCart(product)}>Add to Cart</button>
             </div>
           ))}
         </div>
@@ -673,18 +798,55 @@ function App() {
       <section id="classes" className="section section-alt">
         <h2 className="section-heading">Beauty Classes</h2>
         <div className="classes-grid">
-          {classes.map((cls) => (
-            <div className="class-card" key={cls.name}>
+          {CLASSES.map((cls) => (
+            <div className="class-card" key={cls.id}>
               <div className="class-card-top">
                 <span className="class-name">{cls.name}</span>
                 <span className="class-level-badge">{cls.level}</span>
               </div>
               <p className="class-duration">{cls.duration}</p>
               <p className="class-description">{cls.description}</p>
-              <p className="class-price">{cls.price}</p>
-              <p className="class-seats">{cls.seats}</p>
-              <p className="class-certification">{cls.certification}</p>
-              <button className="btn-enquire">Enquire Now</button>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    What you will learn
+                  </div>
+                  {cls.learns.map((item) => (
+                    <div
+                      className="class-item"
+                      key={item}
+                      style={{ fontSize: '13px', color: '#4A4A4A', lineHeight: 1.6, paddingLeft: '12px', position: 'relative' }}
+                    >
+                      {item}
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    What is included
+                  </div>
+                  {cls.includes.map((item) => (
+                    <div
+                      className="class-item"
+                      key={item}
+                      style={{ fontSize: '13px', color: '#4A4A4A', lineHeight: 1.6, paddingLeft: '12px', position: 'relative' }}
+                    >
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <p className="class-price">R {cls.price}</p>
+              <p className="class-seats">Non-refundable deposit of R{cls.deposit} to secure your spot</p>
+              <a
+                className="btn-enquire"
+                href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}
+              >
+                Enquire Now
+              </a>
             </div>
           ))}
         </div>
@@ -957,6 +1119,388 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {!showPolicies && cartCount > 0 && (
+        <div
+          style={{ position: 'fixed', bottom: '32px', right: '24px', zIndex: 500, cursor: 'pointer' }}
+          onClick={() => setCartOpen(true)}
+        >
+          <div
+            style={{
+              width: '52px',
+              height: '52px',
+              borderRadius: '50%',
+              background: '#C47A8A',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 16px rgba(196, 122, 138, 0.4)',
+              position: 'relative',
+            }}
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <path d="M16 10a4 4 0 0 1-8 0" />
+            </svg>
+            <div
+              style={{
+                position: 'absolute',
+                top: '-4px',
+                right: '-4px',
+                background: '#2C2C2C',
+                color: 'white',
+                borderRadius: '50%',
+                width: '20px',
+                height: '20px',
+                fontSize: '11px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {cartCount}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!showPolicies && (
+        <>
+          {cartOpen && (
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                background: 'rgba(44,44,44,0.4)',
+                zIndex: 600,
+              }}
+              onClick={() => {
+                setCartOpen(false)
+                setCheckoutStep(false)
+                setOrderSubmitted(false)
+              }}
+            />
+          )}
+
+          <div
+            className={`cart-drawer${cartOpen ? ' open' : ''}`}
+            style={{
+              position: 'fixed',
+              top: 0,
+              right: cartOpen ? '0' : '-420px',
+              width: '400px',
+              maxWidth: '100vw',
+              height: '100%',
+              background: '#FFFAF8',
+              zIndex: 700,
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '-4px 0 24px rgba(44,44,44,0.12)',
+              transition: 'right 0.3s ease',
+            }}
+          >
+            <div
+              style={{
+                padding: '20px 24px',
+                borderBottom: '1px solid #F5DDE2',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C' }}>
+                Your Cart
+              </div>
+              <button
+                onClick={() => {
+                  setCartOpen(false)
+                  setCheckoutStep(false)
+                  setOrderSubmitted(false)
+                }}
+                style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
+              >
+                x
+              </button>
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
+              {orderSubmitted ? (
+                <div style={{ textAlign: 'center', paddingTop: '40px' }}>
+                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', color: '#2C2C2C', marginBottom: '12px' }}>
+                    Thank you, your order has been placed!
+                  </div>
+                  <p style={{ fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '24px' }}>
+                    We have received your order and will be in touch on WhatsApp to confirm your payment and arrange delivery. We appreciate your support!
+                  </p>
+                  <button
+                    onClick={() => {
+                      setCartOpen(false)
+                      setOrderSubmitted(false)
+                      setCheckoutStep(false)
+                    }}
+                    style={{
+                      background: '#C47A8A',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '24px',
+                      padding: '12px 28px',
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Continue Shopping
+                  </button>
+                </div>
+              ) : !checkoutStep ? (
+                cart.length === 0 ? (
+                  <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', marginTop: '40px' }}>
+                    Your cart is empty.
+                  </p>
+                ) : (
+                  <>
+                    {cart.map((item) => (
+                      <div
+                        key={item.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          paddingBottom: '16px',
+                          marginBottom: '16px',
+                          borderBottom: '1px solid #F5DDE2',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: '#2C2C2C', marginBottom: '4px' }}>
+                            {item.name}
+                          </div>
+                          <div style={{ fontSize: '13px', color: '#9A7A82' }}>R {item.price}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <button
+                            onClick={() => updateQty(item.id, -1)}
+                            style={{
+                              width: '28px',
+                              height: '28px',
+                              borderRadius: '50%',
+                              border: '1px solid #F5DDE2',
+                              background: 'white',
+                              cursor: 'pointer',
+                              fontSize: '16px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: '#2C2C2C',
+                            }}
+                          >
+                            -
+                          </button>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#2C2C2C', minWidth: '16px', textAlign: 'center' }}>
+                            {item.qty}
+                          </span>
+                          <button
+                            onClick={() => addToCart(item)}
+                            style={{
+                              width: '28px',
+                              height: '28px',
+                              borderRadius: '50%',
+                              border: '1px solid #F5DDE2',
+                              background: 'white',
+                              cursor: 'pointer',
+                              fontSize: '16px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: '#2C2C2C',
+                            }}
+                          >
+                            +
+                          </button>
+                          <button
+                            onClick={() => removeFromCart(item.id)}
+                            style={{ background: 'none', border: 'none', color: '#C8A8B0', fontSize: '14px', cursor: 'pointer', marginLeft: '4px' }}
+                          >
+                            x
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        marginTop: '8px',
+                        paddingTop: '16px',
+                        borderTop: '2px solid #F5DDE2',
+                      }}
+                    >
+                      <span style={{ fontSize: '14px', fontWeight: 600, color: '#2C2C2C' }}>Subtotal</span>
+                      <span style={{ fontSize: '16px', fontWeight: 700, color: '#C47A8A' }}>R {cartTotal}</span>
+                    </div>
+
+                    <button
+                      onClick={() => setCheckoutStep(true)}
+                      style={{
+                        width: '100%',
+                        background: '#C47A8A',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '24px',
+                        padding: '14px',
+                        fontSize: '15px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        marginTop: '20px',
+                      }}
+                    >
+                      Proceed to Checkout
+                    </button>
+                  </>
+                )
+              ) : (
+                <>
+                  <button
+                    onClick={() => setCheckoutStep(false)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#C47A8A',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      padding: 0,
+                      marginBottom: '20px',
+                      textDecoration: 'underline',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    Back to cart
+                  </button>
+
+                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '16px' }}>
+                    Your Details
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Your name"
+                    value={orderName}
+                    onChange={(e) => setOrderName(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      borderRadius: '10px',
+                      border: '1px solid #F5DDE2',
+                      fontSize: '14px',
+                      marginBottom: '12px',
+                      background: 'white',
+                      color: '#2C2C2C',
+                      fontFamily: 'inherit',
+                      boxSizing: 'border-box',
+                      outline: 'none',
+                    }}
+                  />
+
+                  <input
+                    type="text"
+                    placeholder="Your WhatsApp number"
+                    value={orderPhone}
+                    onChange={(e) => setOrderPhone(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      borderRadius: '10px',
+                      border: '1px solid #F5DDE2',
+                      fontSize: '14px',
+                      marginBottom: '12px',
+                      background: 'white',
+                      color: '#2C2C2C',
+                      fontFamily: 'inherit',
+                      boxSizing: 'border-box',
+                      outline: 'none',
+                    }}
+                  />
+
+                  <div
+                    style={{
+                      background: '#FDF0F3',
+                      borderRadius: '12px',
+                      padding: '16px 20px',
+                      marginTop: '8px',
+                      marginBottom: '20px',
+                      border: '1px solid #F5DDE2',
+                    }}
+                  >
+                    <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '10px' }}>
+                      Payment Details
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
+                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Lashes By Retha</div>
+                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
+                    <button
+                      onClick={copyPaymentDetails}
+                      style={{
+                        marginTop: '10px',
+                        background: 'none',
+                        border: '1px solid #C47A8A',
+                        color: '#C47A8A',
+                        borderRadius: '20px',
+                        padding: '6px 16px',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      {copied ? 'Copied!' : 'Copy payment details'}
+                    </button>
+                    <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', lineHeight: 1.6 }}>
+                      Please send your proof of payment via WhatsApp to 082 685 5399 after making payment.
+                    </p>
+                  </div>
+
+                  <p style={{ fontSize: '13px', color: '#7A6670', marginBottom: '16px' }}>
+                    Order total: R {cartTotal}
+                  </p>
+
+                  <button
+                    onClick={submitOrder}
+                    disabled={!orderName.trim() || !orderPhone.trim()}
+                    style={{
+                      width: '100%',
+                      background: '#C47A8A',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '24px',
+                      padding: '14px',
+                      fontSize: '15px',
+                      fontWeight: 700,
+                      cursor: (!orderName.trim() || !orderPhone.trim()) ? 'not-allowed' : 'pointer',
+                      opacity: (!orderName.trim() || !orderPhone.trim()) ? 0.5 : 1,
+                    }}
+                  >
+                    Place Order
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </div>
   )
