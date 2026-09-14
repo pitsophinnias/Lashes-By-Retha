@@ -203,19 +203,13 @@ function App() {
           justify-content: space-between;
           background-color: #FDF0F3;
           color: #2C2C2C;
-          padding: 1.25rem 2rem;
+          height: 100px;
+          padding-left: 2rem;
+          padding-right: 2rem;
           position: sticky;
           top: 0;
           z-index: 100;
           box-shadow: 0 1px 8px rgba(196, 122, 138, 0.12);
-        }
-
-        .nav-logo {
-          font-family: 'Cormorant Garamond', serif;
-          font-size: 22px;
-          font-weight: 700;
-          letter-spacing: 0.5px;
-          color: #C47A8A;
         }
 
         .nav-links {
@@ -678,7 +672,11 @@ function App() {
       {!showPolicies && (
       <>
       <nav className="nav">
-        <div className="nav-logo">Lashes By Retha</div>
+        <img
+          src="/logo.png"
+          alt="Lashes By Retha"
+          style={{ height: '90px', width: 'auto', objectFit: 'contain', display: 'block' }}
+        />
         <ul className="nav-links">
           <li><a href="#home">Home</a></li>
           <li><a href="#shop">Shop</a></li>
