@@ -118,6 +118,8 @@ function App() {
   const [productImages, setProductImages] = useState({})
   const [productPositions, setProductPositions] = useState({})
   const [galleryImages, setGalleryImages] = useState([])
+  const [categories, setCategories] = useState([])
+  const [productCategories, setProductCategories] = useState({})
   const bookingUrl = 'https://lashesbyretha.setmore.com'
 
   useEffect(() => {
@@ -136,6 +138,14 @@ function App() {
     fetch(`${API}/api/gallery`)
       .then(r => r.json())
       .then(data => setGalleryImages(data))
+      .catch(() => {})
+    fetch(`${API}/api/categories`)
+      .then(r => r.json())
+      .then(data => setCategories(data))
+      .catch(() => {})
+    fetch(`${API}/api/categories/products/all`)
+      .then(r => r.json())
+      .then(data => setProductCategories(data))
       .catch(() => {})
   }, [])
 
@@ -192,6 +202,37 @@ function App() {
       console.error('Order submission failed:', err)
     }
   }
+
+  const renderProductCard = (product) => (
+    <div className="product-card" key={product.id}>
+      {productImages[product.id] ? (
+        <img
+          src={`${API}${productImages[product.id]}`}
+          alt={product.name}
+          style={{
+            width: '100%',
+            height: '180px',
+            objectFit: 'cover',
+            borderRadius: '8px',
+            display: 'block',
+            objectPosition: productPositions[product.id]
+              ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
+              : '50% 50%',
+          }}
+        />
+      ) : (
+        <div className="product-image-placeholder">Product Image</div>
+      )}
+      {product.badge && <span className="product-badge">{product.badge}</span>}
+      <h3 className="product-name">{product.name}</h3>
+      <p className="product-description">{product.description}</p>
+      <div style={{ fontSize: '12px', color: '#9A7A82', marginBottom: '8px', fontStyle: 'italic' }}>
+        {product.detail}
+      </div>
+      <p className="product-price">R {product.price}</p>
+      <button className="btn-add-cart" onClick={() => addToCart(product)}>Add to Cart</button>
+    </div>
+  )
 
   return (
     <div className="page">
@@ -598,6 +639,13 @@ function App() {
           }
         }
 
+        @media (max-width: 768px) {
+          .product-grid { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+        @media (max-width: 480px) {
+          .product-grid { grid-template-columns: 1fr !important; }
+        }
+
         /* Contact */
         .contact-details {
           max-width: 500px;
@@ -794,38 +842,56 @@ function App() {
 
       <section id="shop" className="section">
         <h2 className="section-heading">Our Products</h2>
-        <div className="products-grid">
-          {PRODUCTS.map((product) => (
-            <div className="product-card" key={product.id}>
-              {productImages[product.id] ? (
-                <img
-                  src={`${API}${productImages[product.id]}`}
-                  alt={product.name}
-                  style={{
-                    width: '100%',
-                    height: '180px',
-                    objectFit: 'cover',
-                    borderRadius: '8px',
-                    display: 'block',
-                    objectPosition: productPositions[product.id]
-                      ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
-                      : '50% 50%',
-                  }}
-                />
-              ) : (
-                <div className="product-image-placeholder">Product Image</div>
-              )}
-              {product.badge && <span className="product-badge">{product.badge}</span>}
-              <h3 className="product-name">{product.name}</h3>
-              <p className="product-description">{product.description}</p>
-              <div style={{ fontSize: '12px', color: '#9A7A82', marginBottom: '8px', fontStyle: 'italic' }}>
-                {product.detail}
+        {(() => {
+          const grouped = []
+
+          // Add categorised groups in order
+          categories.forEach(cat => {
+            const catProducts = PRODUCTS.filter(p => productCategories[p.id] === cat.id)
+            if (catProducts.length > 0) {
+              grouped.push({ id: cat.id, name: cat.name, products: catProducts })
+            }
+          })
+
+          // Add uncategorised products at the end
+          const uncategorised = PRODUCTS.filter(p => !productCategories[p.id])
+          if (uncategorised.length > 0) {
+            grouped.push({ id: 'uncategorised', name: null, products: uncategorised })
+          }
+
+          // If no categories loaded yet, show all products flat (fallback)
+          if (grouped.length === 0) {
+            return (
+              <div className="product-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px', textAlign: 'left' }}>
+                {PRODUCTS.map(product => renderProductCard(product))}
               </div>
-              <p className="product-price">R {product.price}</p>
-              <button className="btn-add-cart" onClick={() => addToCart(product)}>Add to Cart</button>
+            )
+          }
+
+          return grouped.map(group => (
+            <div key={group.id} style={{ marginBottom: '48px', textAlign: 'left' }}>
+              {group.name && (
+                <div style={{ marginBottom: '24px' }}>
+                  <h3 style={{
+                    fontFamily: "'Cormorant Garamond', serif",
+                    fontSize: '26px',
+                    fontWeight: '700',
+                    color: '#2C2C2C',
+                    marginBottom: '6px',
+                  }}>{group.name}</h3>
+                  <div style={{ width: '32px', height: '2px', background: '#C47A8A' }} />
+                </div>
+              )}
+              <div className="product-grid" style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '24px',
+              }}>
+                {group.products.map(product => renderProductCard(product))}
+              </div>
             </div>
-          ))}
-        </div>
+          ))
+        })()}
       </section>
 
       <section id="classes" className="section section-alt">
