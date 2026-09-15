@@ -49,6 +49,47 @@ const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 102
 const orders = []
 const positions = {}
 
+// Notifications store
+const notifications = []
+let notificationIdCounter = 1
+
+const addNotification = (type, title, message) => {
+  const notification = {
+    id: notificationIdCounter++,
+    type, // 'order' | 'image' | 'section' | 'system'
+    title,
+    message,
+    read: false,
+    createdAt: new Date().toISOString(),
+  }
+  notifications.unshift(notification)
+  // Keep only last 50 notifications
+  if (notifications.length > 50) notifications.pop()
+  return notification
+}
+
+const archivedNotifications = []
+
+const archiveOldNotifications = () => {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+  const toArchive = notifications.filter(n => new Date(n.createdAt) < sevenDaysAgo)
+  toArchive.forEach(n => {
+    archivedNotifications.unshift({ ...n, archived: true })
+    const index = notifications.findIndex(x => x.id === n.id)
+    if (index !== -1) notifications.splice(index, 1)
+  })
+  // Keep only last 100 archived notifications
+  if (archivedNotifications.length > 100) {
+    archivedNotifications.splice(100)
+  }
+}
+
+// Run cleanup every hour
+setInterval(archiveOldNotifications, 60 * 60 * 1000)
+
+// Add a welcome notification on startup
+addNotification('system', 'Dashboard ready', 'Hair By Her admin dashboard is live and running.')
+
 // Categories store
 const categories = [
   { id: 1, name: 'Lashes', createdAt: new Date().toISOString() },
@@ -84,11 +125,21 @@ app.post('/api/orders', (req, res) => {
   }
   orders.push(order)
   console.log('New order received:', JSON.stringify(order, null, 2))
+  addNotification('order', 'New order received', `${customerName} placed an order for ${items.length} item${items.length !== 1 ? 's' : ''} totalling R${total}.`)
   res.status(201).json({ success: true, orderId: order.id })
 })
 
 app.get('/api/orders', (req, res) => {
   res.json(orders)
+})
+
+app.patch('/api/orders/:id/confirm', (req, res) => {
+  const id = parseInt(req.params.id)
+  const order = orders.find(o => o.id === id)
+  if (!order) return res.status(404).json({ error: 'Order not found' })
+  order.status = 'confirmed'
+  addNotification('order', 'Order confirmed', `Order #${id} for ${order.customerName} has been marked as confirmed.`)
+  res.json({ success: true })
 })
 
 // Save image position
@@ -132,6 +183,7 @@ app.post('/api/categories', (req, res) => {
   }
   categories.push(category)
   console.log(`Category created: ${category.name} (id: ${category.id})`)
+  addNotification('section', 'Section created', `A new product section "${trimmed}" was created.`)
   res.status(201).json(category)
 })
 
@@ -142,6 +194,7 @@ app.delete('/api/categories/:id', (req, res) => {
   if (index === -1) return res.status(404).json({ error: 'Category not found' })
   const name = categories[index].name
   categories.splice(index, 1)
+  addNotification('section', 'Section removed', `The product section "${name}" was removed.`)
   // Remove assignments for this category
   Object.keys(productCategories).forEach(pid => {
     if (productCategories[pid] === id) delete productCategories[pid]
@@ -183,6 +236,7 @@ app.post('/api/upload/:type/:id', upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const url = `/uploads/${req.params.type}/${req.file.filename}`
   console.log(`Image uploaded: ${url}`)
+  addNotification('image', 'Image uploaded', `A new image was uploaded for ${req.params.type} (id: ${req.params.id}).`)
   res.json({ success: true, url })
 })
 
@@ -191,6 +245,7 @@ app.post('/api/upload/gallery', upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const url = `/uploads/gallery/${req.file.filename}`
   console.log(`Gallery image uploaded: ${url}`)
+  addNotification('image', 'Gallery image added', 'A new image was added to the gallery.')
   res.json({ success: true, url })
 })
 
@@ -232,6 +287,36 @@ app.get('/api/upload/:type/:id', (req, res) => {
   } catch {
     res.json({ url: null })
   }
+})
+
+// Get all notifications
+app.get('/api/notifications', (req, res) => {
+  res.json(notifications)
+})
+
+// Get archived notifications (older than 7 days)
+app.get('/api/notifications/archived', (req, res) => {
+  res.json(archivedNotifications)
+})
+
+// Mark a notification as read
+app.patch('/api/notifications/:id/read', (req, res) => {
+  const id = parseInt(req.params.id)
+  const notification = notifications.find(n => n.id === id)
+  if (!notification) return res.status(404).json({ error: 'Notification not found' })
+  notification.read = true
+  res.json({ success: true })
+})
+
+// Mark all notifications as read
+app.patch('/api/notifications/read-all', (req, res) => {
+  notifications.forEach(n => { n.read = true })
+  res.json({ success: true })
+})
+
+// Get unread count
+app.get('/api/notifications/unread-count', (req, res) => {
+  res.json({ count: notifications.filter(n => !n.read).length })
 })
 
 app.listen(PORT, () => {
