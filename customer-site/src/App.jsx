@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 
 const PRODUCTS = [
   {
@@ -103,6 +103,8 @@ const policies = [
   },
 ]
 
+const API = 'http://localhost:3002'
+
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
   const [cart, setCart] = useState([])
@@ -112,7 +114,29 @@ function App() {
   const [orderPhone, setOrderPhone] = useState('')
   const [orderSubmitted, setOrderSubmitted] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [productImages, setProductImages] = useState({})
+  const [productPositions, setProductPositions] = useState({})
+  const [galleryImages, setGalleryImages] = useState([])
   const bookingUrl = 'https://lashesbyretha.setmore.com'
+
+  useEffect(() => {
+    PRODUCTS.forEach(async p => {
+      try {
+        const res = await fetch(`${API}/api/upload/products/${p.id}`)
+        const data = await res.json()
+        if (data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
+      } catch {}
+      try {
+        const posRes = await fetch(`${API}/api/position/products/${p.id}`)
+        const posData = await posRes.json()
+        if (posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
+      } catch {}
+    })
+    fetch(`${API}/api/gallery`)
+      .then(r => r.json())
+      .then(data => setGalleryImages(data))
+      .catch(() => {})
+  }, [])
 
   const scrollToShop = () => {
     document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })
@@ -772,14 +796,24 @@ function App() {
         <div className="products-grid">
           {PRODUCTS.map((product) => (
             <div className="product-card" key={product.id}>
-              <div className="product-image-placeholder">
+              {productImages[product.id] ? (
                 <img
-                  src={product.image}
+                  src={`${API}${productImages[product.id]}`}
                   alt={product.name}
-                  style={{ width: '100%', height: '180px', objectFit: 'cover', borderRadius: '8px', marginBottom: 0 }}
-                  onError={(e) => { e.target.style.display = 'none' }}
+                  style={{
+                    width: '100%',
+                    height: '180px',
+                    objectFit: 'cover',
+                    borderRadius: '8px',
+                    display: 'block',
+                    objectPosition: productPositions[product.id]
+                      ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
+                      : '50% 50%',
+                  }}
                 />
-              </div>
+              ) : (
+                <div className="product-image-placeholder">Product Image</div>
+              )}
               {product.badge && <span className="product-badge">{product.badge}</span>}
               <h3 className="product-name">{product.name}</h3>
               <p className="product-description">{product.description}</p>
@@ -854,39 +888,62 @@ function App() {
         <h2 className="section-heading">Our Work</h2>
         <p className="section-text gallery-subheading">A glimpse of the sets we create</p>
         <div className="gallery-grid">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-            <div style={{ height: '220px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-            <div style={{ height: '260px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-            <div style={{ height: '210px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-            <div style={{ height: '280px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-            <div style={{ height: '240px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-            <div style={{ height: '270px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-            <div style={{ height: '200px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-            <div style={{ height: '300px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-            <div style={{ height: '230px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-              <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-            </div>
-          </div>
+          {galleryImages.length > 0 ? (
+            [0, 1, 2].map((colIndex) => (
+              <div key={colIndex} style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
+                {galleryImages
+                  .filter((_, i) => i % 3 === colIndex)
+                  .map((img) => (
+                    <div
+                      key={img.filename}
+                      style={{ borderRadius: '10px', overflow: 'hidden', marginBottom: '12px', breakInside: 'avoid' }}
+                    >
+                      <img
+                        src={`${API}${img.url}`}
+                        alt="Lash work"
+                        style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block' }}
+                      />
+                    </div>
+                  ))}
+              </div>
+            ))
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
+                <div style={{ height: '220px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '260px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '210px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
+                <div style={{ height: '280px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '240px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '270px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
+                <div style={{ height: '200px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '300px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '230px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </section>
 
