@@ -354,12 +354,12 @@ function App() {
         {activeTab === 'gallery' && (
           <div>
             <label htmlFor="file-gallery-new" className="upload-btn" style={{ marginBottom: '20px', display: 'inline-block' }}>
-              Add Gallery Image
+              Add Photo or Video
             </label>
             <input
               id="file-gallery-new"
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               onChange={(e) => handleUpload('gallery', null, e.target.files[0])}
             />
             {Object.keys(uploadStatus).filter(k => k.startsWith('gallery-')).map(key => {
@@ -382,11 +382,22 @@ function App() {
               >
                 {galleryImages.map(img => (
                   <div key={img.filename} style={{ borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
-                    <img
-                      src={`${API}${img.url}`}
-                      alt={img.filename}
-                      style={{ width: '100%', height: '160px', objectFit: 'cover', display: 'block' }}
-                    />
+                    {img.type === 'video' ? (
+                      <video
+                        src={`${API}${img.url}`}
+                        style={{ width: '100%', height: '160px', objectFit: 'cover', display: 'block', borderRadius: '8px' }}
+                        muted
+                        autoPlay
+                        loop
+                        playsInline
+                      />
+                    ) : (
+                      <img
+                        src={`${API}${img.url}`}
+                        alt={img.filename}
+                        style={{ width: '100%', height: '160px', objectFit: 'cover', display: 'block' }}
+                      />
+                    )}
                   </div>
                 ))}
               </div>

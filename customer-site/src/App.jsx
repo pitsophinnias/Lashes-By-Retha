@@ -114,6 +114,7 @@ function App() {
   const [orderPhone, setOrderPhone] = useState('')
   const [orderSubmitted, setOrderSubmitted] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [policyTab, setPolicyTab] = useState('booking')
   const [productImages, setProductImages] = useState({})
   const [productPositions, setProductPositions] = useState({})
   const [galleryImages, setGalleryImages] = useState([])
@@ -167,7 +168,7 @@ function App() {
   const cartCount = cart.reduce((sum, item) => sum + item.qty, 0)
 
   const copyPaymentDetails = () => {
-    navigator.clipboard.writeText('FNB | Lashes By Retha | Account: 63093932440')
+    navigator.clipboard.writeText('63093932440')
     setCopied(true)
     setTimeout(() => setCopied(false), 2500)
   }
@@ -704,7 +705,7 @@ function App() {
         <ul className="nav-links">
           <li><a href="#home">Home</a></li>
           <li><a href="#shop">Shop</a></li>
-          <li><a href="#classes">Classes</a></li>
+          <li><a href="#classes">Lash Training</a></li>
           <li>
             <a
               className="book-now-link"
@@ -828,7 +829,7 @@ function App() {
       </section>
 
       <section id="classes" className="section section-alt">
-        <h2 className="section-heading">Beauty Classes</h2>
+        <h2 className="section-heading">Lash Training</h2>
         <div className="classes-grid">
           {CLASSES.map((cls) => (
             <div className="class-card" key={cls.id}>
@@ -898,11 +899,22 @@ function App() {
                       key={img.filename}
                       style={{ borderRadius: '10px', overflow: 'hidden', marginBottom: '12px', breakInside: 'avoid' }}
                     >
-                      <img
-                        src={`${API}${img.url}`}
-                        alt="Lash work"
-                        style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block' }}
-                      />
+                      {img.type === 'video' ? (
+                        <video
+                          src={`${API}${img.url}`}
+                          autoPlay
+                          muted
+                          loop
+                          playsInline
+                          style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block', borderRadius: '8px' }}
+                        />
+                      ) : (
+                        <img
+                          src={`${API}${img.url}`}
+                          alt="Lash work"
+                          style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block' }}
+                        />
+                      )}
                     </div>
                   ))}
               </div>
@@ -952,7 +964,7 @@ function App() {
         <div className="contact-details">
           <span>125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911</span>
           <span>+27 82 685 5399</span>
-          <span>Appointments: 90-minute slots, Tuesday to Saturday, 8:00 AM to 5:00 PM</span>
+          <span>Tuesday to Saturday, 8:00 AM to 7:00 PM</span>
           <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer">
             Chat on WhatsApp
           </a>
@@ -1018,6 +1030,29 @@ function App() {
               <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
             </svg>
           </a>
+          <a
+            className="social-icon-link"
+            href="https://www.tiktok.com/@lashes_by_retha?_r=1&_t=ZS-99kLLHuvNt2"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="TikTok"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '40px',
+              height: '40px',
+              borderRadius: '50%',
+              background: '#FDF0F3',
+              border: '1px solid #F5DDE2',
+              color: '#C47A8A',
+              transition: 'background 0.2s',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+              <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.27 6.27 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.18 8.18 0 0 0 4.78 1.52V6.75a4.85 4.85 0 0 1-1.01-.06z" />
+            </svg>
+          </a>
         </div>
         <button
           className="footer-policies-link"
@@ -1028,7 +1063,7 @@ function App() {
         >
           Policies
         </button>
-        <p>&copy; 2026 Lashes By Retha. All rights reserved.</p>
+        <p>&copy; 2026 Hair By Her. All rights reserved.</p>
       </footer>
       </>
       )}
@@ -1054,7 +1089,7 @@ function App() {
                 color: '#C47A8A',
               }}
             >
-              Lashes By Retha
+              Hair By Her
             </span>
             <button
               onClick={() => setShowPolicies(false)}
@@ -1090,47 +1125,133 @@ function App() {
             </p>
             <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '16px 0 48px 0' }} />
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              {policies.map((policy) => (
+            <div
+              style={{
+                display: 'flex',
+                gap: 0,
+                marginBottom: '32px',
+                borderRadius: '24px',
+                border: '1px solid #F5DDE2',
+                overflow: 'hidden',
+                width: 'fit-content',
+              }}
+            >
+              <button
+                onClick={() => setPolicyTab('booking')}
+                style={{
+                  padding: '10px 24px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  border: 'none',
+                  fontFamily: 'inherit',
+                  transition: 'background 0.2s',
+                  background: policyTab === 'booking' ? '#C47A8A' : '#FFFFFF',
+                  color: policyTab === 'booking' ? '#FFFFFF' : '#7A6670',
+                }}
+              >
+                Booking Policy
+              </button>
+              <button
+                onClick={() => setPolicyTab('product')}
+                style={{
+                  padding: '10px 24px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  border: 'none',
+                  fontFamily: 'inherit',
+                  transition: 'background 0.2s',
+                  background: policyTab === 'product' ? '#C47A8A' : '#FFFFFF',
+                  color: policyTab === 'product' ? '#FFFFFF' : '#7A6670',
+                }}
+              >
+                Product Policy
+              </button>
+            </div>
+
+            {policyTab === 'booking' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {policies.map((policy) => (
+                  <div
+                    key={policy.label}
+                    style={{
+                      background: '#FFFFFF',
+                      borderRadius: '12px',
+                      borderLeft: '4px solid #C47A8A',
+                      padding: '24px 28px',
+                      boxShadow: '0 2px 12px rgba(196, 122, 138, 0.08)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        letterSpacing: '2px',
+                        color: '#C47A8A',
+                        textTransform: 'uppercase',
+                        marginBottom: '10px',
+                      }}
+                    >
+                      {policy.label}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: "'Cormorant Garamond', serif",
+                        fontSize: '20px',
+                        fontWeight: 600,
+                        color: '#2C2C2C',
+                        marginBottom: '10px',
+                      }}
+                    >
+                      {policy.heading}
+                    </div>
+                    <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>
+                      {policy.body}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {policyTab === 'product' && (
+              <div
+                style={{
+                  background: '#FFFFFF',
+                  borderRadius: '12px',
+                  borderLeft: '4px solid #C47A8A',
+                  padding: '24px 28px',
+                  boxShadow: '0 2px 12px rgba(196, 122, 138, 0.08)',
+                }}
+              >
                 <div
-                  key={policy.label}
                   style={{
-                    background: '#FFFFFF',
-                    borderRadius: '12px',
-                    borderLeft: '4px solid #C47A8A',
-                    padding: '24px 28px',
-                    boxShadow: '0 2px 12px rgba(196, 122, 138, 0.08)',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    letterSpacing: '2px',
+                    color: '#C47A8A',
+                    textTransform: 'uppercase',
+                    marginBottom: '10px',
                   }}
                 >
-                  <div
-                    style={{
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      letterSpacing: '2px',
-                      color: '#C47A8A',
-                      textTransform: 'uppercase',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    {policy.label}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: '20px',
-                      fontWeight: 600,
-                      color: '#2C2C2C',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    {policy.heading}
-                  </div>
-                  <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>
-                    {policy.body}
-                  </div>
+                  Coming Soon
                 </div>
-              ))}
-            </div>
+                <div
+                  style={{
+                    fontFamily: "'Cormorant Garamond', serif",
+                    fontSize: '20px',
+                    fontWeight: 600,
+                    color: '#2C2C2C',
+                    marginBottom: '10px',
+                  }}
+                >
+                  Product Policies
+                </div>
+                <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>
+                  Our product policies are currently being finalised. Please check back soon or reach out to us on WhatsApp at 082 685 5399 if you have any questions about a purchase.
+                </div>
+              </div>
+            )}
 
             <div
               style={{
@@ -1155,8 +1276,8 @@ function App() {
                 Prefer to save a copy? Download our policies summary below.
               </p>
               <a
-                href="/policies-summary.pdf"
-                download="Lashes-By-Retha-Policies.pdf"
+                href="/Hair-By-Her-Policies.pdf"
+                download="Hair-By-Her-Policies.pdf"
                 style={{
                   display: 'inline-block',
                   background: '#C47A8A',
@@ -1506,7 +1627,7 @@ function App() {
                       Payment Details
                     </div>
                     <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Lashes By Retha</div>
+                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Hair By Her</div>
                     <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
                     <button
                       onClick={copyPaymentDetails}
