@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react'
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
+} from 'recharts'
 
 const PRODUCTS = [
   { id: 1, name: 'Classic Lash Trays', detail: 'Diameter: 0.15 | Curl: D', price: 130 },
@@ -16,7 +19,7 @@ const CLASSES = [
 const API = 'http://localhost:3002'
 
 function App() {
-  const [activePage, setActivePage] = useState('products')
+  const [activePage, setActivePage] = useState('dashboard')
   const [imageTab, setImageTab] = useState('products')
   const [productImages, setProductImages] = useState({})
   const [classImages, setClassImages] = useState({})
@@ -28,6 +31,27 @@ function App() {
   const [productCategories, setProductCategories] = useState({})
   const [newCategoryName, setNewCategoryName] = useState('')
   const [categoryStatus, setCategoryStatus] = useState(null)
+  const [notifications, setNotifications] = useState([])
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [revenueData, setRevenueData] = useState([])
+  const [recentOrders, setRecentOrders] = useState([])
+  const [archivedNotifications, setArchivedNotifications] = useState([])
+  const [notifTab, setNotifTab] = useState('all')
+  const [orders, setOrders] = useState([])
+  const [ordersLoading, setOrdersLoading] = useState(false)
+
+  const fetchOrders = async () => {
+    setOrdersLoading(true)
+    try {
+      const res = await fetch(`${API}/api/orders`)
+      const data = await res.json()
+      setOrders(data.reverse()) // newest first
+    } catch {
+      // silent fail
+    } finally {
+      setOrdersLoading(false)
+    }
+  }
 
   useEffect(() => {
     // Fetch product images
@@ -67,6 +91,35 @@ function App() {
       .then(r => r.json())
       .then(data => setProductCategories(data))
       .catch(() => {})
+    // Fetch notifications
+    fetch(`${API}/api/notifications`)
+      .then(r => r.json())
+      .then(data => {
+        setNotifications(data)
+        setUnreadCount(data.filter(n => !n.read).length)
+      })
+      .catch(() => {})
+    // Fetch orders for dashboard
+    fetch(`${API}/api/orders`)
+      .then(r => r.json())
+      .then(data => {
+        setRecentOrders(data.slice(0, 5))
+        // Build monthly revenue data from orders
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+        const monthlyTotals = Array(12).fill(0)
+        data.forEach(order => {
+          const month = new Date(order.createdAt).getMonth()
+          monthlyTotals[month] += order.total || 0
+        })
+        setRevenueData(months.map((name, i) => ({ name, revenue: monthlyTotals[i] })))
+      })
+      .catch(() => {})
+    // Fetch archived notifications
+    fetch(`${API}/api/notifications/archived`)
+      .then(r => r.json())
+      .then(data => setArchivedNotifications(data))
+      .catch(() => {})
+    fetchOrders()
   }, [])
 
   const handleUpload = async (type, id, file) => {
@@ -177,6 +230,29 @@ function App() {
           [productId]: categoryId ? parseInt(categoryId) : null,
         }))
       }
+    } catch {}
+  }
+
+  const markAllRead = async () => {
+    try {
+      await fetch(`${API}/api/notifications/read-all`, { method: 'PATCH' })
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })))
+      setUnreadCount(0)
+    } catch {}
+  }
+
+  const markOneRead = async (id) => {
+    try {
+      await fetch(`${API}/api/notifications/${id}/read`, { method: 'PATCH' })
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
+      setUnreadCount(prev => Math.max(0, prev - 1))
+    } catch {}
+  }
+
+  const confirmOrder = async (id) => {
+    try {
+      await fetch(`${API}/api/orders/${id}/confirm`, { method: 'PATCH' })
+      setOrders(prev => prev.map(o => o.id === id ? { ...o, status: 'confirmed' } : o))
     } catch {}
   }
 
@@ -437,6 +513,216 @@ function App() {
           padding-bottom: 8px;
           border-bottom: 1px solid #E8E8E8;
         }
+
+        /* Dashboard stats cards */
+        .stat-card {
+          background: white;
+          border-radius: 10px;
+          border: 1px solid #E8E8E8;
+          padding: 20px 24px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+
+        .stat-value {
+          font-size: 28px;
+          font-weight: 700;
+          color: #1A1A1A;
+          line-height: 1;
+          margin-bottom: 4px;
+        }
+
+        .stat-label {
+          font-size: 12px;
+          color: #AAAAAA;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          font-weight: 600;
+        }
+
+        .dashboard-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 24px;
+          margin-bottom: 24px;
+        }
+
+        .dashboard-wide {
+          grid-column: 1 / -1;
+        }
+
+        .panel {
+          background: white;
+          border-radius: 10px;
+          border: 1px solid #E8E8E8;
+          padding: 20px 24px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+
+        .panel-heading {
+          font-size: 14px;
+          font-weight: 700;
+          color: #1A1A1A;
+          margin-bottom: 16px;
+          padding-bottom: 12px;
+          border-bottom: 1px solid #F4F4F5;
+        }
+
+        /* Orders table */
+        .orders-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+        }
+
+        .orders-table th {
+          text-align: left;
+          font-size: 11px;
+          font-weight: 700;
+          color: #AAAAAA;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          padding: 0 0 10px 0;
+          border-bottom: 1px solid #F4F4F5;
+        }
+
+        .orders-table td {
+          padding: 10px 0;
+          border-bottom: 1px solid #F9F9F9;
+          color: #1A1A1A;
+          vertical-align: middle;
+        }
+
+        .orders-table tbody tr:hover { background: #FAFAFA; cursor: pointer; }
+
+        .status-badge {
+          display: inline-block;
+          padding: 3px 10px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 700;
+          background: #FFF3E0;
+          color: #E65100;
+        }
+
+        .status-badge.confirmed {
+          background: #E8F5E9;
+          color: #2E7D32;
+        }
+
+        /* Calendar shell */
+        .calendar-grid {
+          display: grid;
+          grid-template-columns: repeat(7, 1fr);
+          gap: 4px;
+        }
+
+        .cal-day-label {
+          font-size: 11px;
+          font-weight: 700;
+          color: #AAAAAA;
+          text-align: center;
+          padding: 4px 0;
+          text-transform: uppercase;
+        }
+
+        .cal-day {
+          aspect-ratio: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          color: #444444;
+          border-radius: 6px;
+          cursor: default;
+          position: relative;
+        }
+
+        .cal-day.today {
+          background: #C47A8A;
+          color: white;
+          font-weight: 700;
+        }
+
+        .cal-day.other-month {
+          color: #DDDDDD;
+        }
+
+        .cal-day.has-booking::after {
+          content: '';
+          position: absolute;
+          bottom: 3px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: #C47A8A;
+        }
+
+        /* Notification items */
+        .notif-item {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 14px 0;
+          border-bottom: 1px solid #F4F4F5;
+        }
+
+        .notif-item.unread {
+          background: #FAFAFA;
+          margin: 0 -24px;
+          padding: 14px 24px;
+          border-left: 3px solid #C47A8A;
+        }
+
+        .notif-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #C47A8A;
+          flex-shrink: 0;
+          margin-top: 5px;
+        }
+
+        .notif-dot.read {
+          background: #E0E0E0;
+        }
+
+        .notif-type-badge {
+          display: inline-block;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 2px 8px;
+          border-radius: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin-bottom: 3px;
+        }
+
+        .notif-type-order    { background: #FFF3E0; color: #E65100; }
+        .notif-type-image    { background: #E3F2FD; color: #1565C0; }
+        .notif-type-section  { background: #F3E5F5; color: #6A1B9A; }
+        .notif-type-system   { background: #E8F5E9; color: #2E7D32; }
+
+        .notif-title {
+          font-size: 13px;
+          font-weight: 600;
+          color: #1A1A1A;
+          margin-bottom: 2px;
+        }
+
+        .notif-message {
+          font-size: 12px;
+          color: #888888;
+          line-height: 1.5;
+        }
+
+        .notif-time {
+          font-size: 11px;
+          color: #BBBBBB;
+          margin-top: 3px;
+        }
+
       `}</style>
       <div style={{ display: 'flex', minHeight: '100vh', background: '#F4F4F5', fontFamily: "'Lato', sans-serif" }}>
 
@@ -452,10 +738,12 @@ function App() {
           {/* Nav */}
           <nav style={{ padding: '16px 12px', flex: 1 }}>
             {[
-              { label: 'Products', value: 'products' },
-              { label: 'Image Management', value: 'images' },
-              { label: 'Lash Training', value: 'training' },
-              { label: 'Orders', value: 'orders' },
+              { label: 'Dashboard', value: 'dashboard', icon: 'D' },
+              { label: 'Products', value: 'products', icon: 'P' },
+              { label: 'Image Management', value: 'images', icon: 'I' },
+              { label: 'Lash Training', value: 'training', icon: 'T' },
+              { label: 'Orders', value: 'orders', icon: 'O' },
+              { label: 'Notifications', value: 'notifications', icon: 'N' },
             ].map(item => (
               <button
                 key={item.value}
@@ -492,6 +780,19 @@ function App() {
                   }} />
                 )}
                 <span style={{ marginLeft: activePage === item.value ? 10 : 0 }}>{item.label}</span>
+                {item.value === 'notifications' && unreadCount > 0 && (
+                  <span style={{
+                    background: '#C47A8A',
+                    color: 'white',
+                    borderRadius: 10,
+                    padding: '1px 7px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    marginLeft: 8,
+                  }}>
+                    {unreadCount}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -509,20 +810,196 @@ function App() {
           {/* Top bar */}
           <div style={{ background: '#FFFFFF', borderBottom: '1px solid #E5E5E5', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: '#1A1A1A' }}>
-              {{ products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders' }[activePage]}
+              {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications' }[activePage]}
             </div>
             <div style={{ fontSize: 12, color: '#888888', background: '#F4F4F5', padding: '4px 12px', borderRadius: 20 }}>
+              {activePage === 'dashboard' && 'Overview'}
               {activePage === 'products' && `${categories.length} sections`}
               {activePage === 'images' && imageTab === 'products' && '4 products'}
               {activePage === 'images' && imageTab === 'classes' && '3 classes'}
               {activePage === 'images' && imageTab === 'gallery' && `${galleryImages.length} files`}
               {activePage === 'training' && '3 classes'}
-              {activePage === 'orders' && '0 orders'}
+              {activePage === 'orders' && `${orders.length} order${orders.length !== 1 ? 's' : ''}`}
+              {activePage === 'notifications' && `${unreadCount} unread`}
             </div>
           </div>
 
           {/* Content */}
           <div style={{ padding: 32, maxWidth: 900 }}>
+
+            {activePage === 'dashboard' && (() => {
+              const today = new Date()
+              const year = today.getFullYear()
+              const month = today.getMonth()
+              const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December']
+              const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+
+              // Build calendar days
+              const firstDay = new Date(year, month, 1).getDay()
+              const daysInMonth = new Date(year, month + 1, 0).getDate()
+              const daysInPrevMonth = new Date(year, month, 0).getDate()
+
+              const calDays = []
+              // Previous month padding
+              for (let i = firstDay - 1; i >= 0; i--) {
+                calDays.push({ day: daysInPrevMonth - i, current: false })
+              }
+              // Current month
+              for (let i = 1; i <= daysInMonth; i++) {
+                calDays.push({ day: i, current: true, isToday: i === today.getDate() })
+              }
+              // Next month padding
+              const remaining = 42 - calDays.length
+              for (let i = 1; i <= remaining; i++) {
+                calDays.push({ day: i, current: false })
+              }
+
+              const totalRevenue = recentOrders.reduce((sum, o) => sum + (o.total || 0), 0)
+              const totalOrders = recentOrders.length
+
+              return (
+                <div>
+                  {/* Stats row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+                    {[
+                      { label: 'Total Orders', value: totalOrders },
+                      { label: 'Revenue (R)', value: `R ${totalRevenue}` },
+                      { label: 'Sections', value: categories.length },
+                      { label: 'Gallery Files', value: galleryImages.length },
+                    ].map(stat => (
+                      <div key={stat.label} className="stat-card">
+                        <div className="stat-value">{stat.value}</div>
+                        <div className="stat-label">{stat.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Revenue chart */}
+                  <div className="panel" style={{ marginBottom: 24 }}>
+                    <div className="panel-heading">Monthly Revenue (R)</div>
+                    {revenueData.every(d => d.revenue === 0) ? (
+                      <div style={{ fontSize: 13, color: '#AAAAAA', textAlign: 'center', padding: '32px 0' }}>
+                        No order data yet. Revenue will appear here once orders are placed.
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={revenueData} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#F4F4F5" vertical={false} />
+                          <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#AAAAAA' }} axisLine={false} tickLine={false} />
+                          <YAxis tick={{ fontSize: 11, fill: '#AAAAAA' }} axisLine={false} tickLine={false} />
+                          <Tooltip
+                            contentStyle={{ border: '1px solid #E8E8E8', borderRadius: 8, fontSize: 12 }}
+                            formatter={(value) => [`R ${value}`, 'Revenue']}
+                          />
+                          <Bar dataKey="revenue" radius={[4, 4, 0, 0]}>
+                            {revenueData.map((entry, index) => (
+                              <Cell
+                                key={index}
+                                fill={index === today.getMonth() ? '#C47A8A' : '#F2D0D8'}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+
+                  {/* Two column — recent orders + calendar */}
+                  <div className="dashboard-grid">
+                    {/* Recent orders */}
+                    <div className="panel">
+                      <div className="panel-heading">Recent Orders</div>
+                      {recentOrders.length === 0 ? (
+                        <div style={{ fontSize: 13, color: '#AAAAAA', padding: '16px 0' }}>
+                          No orders yet.
+                        </div>
+                      ) : (
+                        <table className="orders-table">
+                          <thead>
+                            <tr>
+                              <th>Customer</th>
+                              <th>Items</th>
+                              <th>Total</th>
+                              <th>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {recentOrders.map(order => (
+                              <tr
+                                key={order.id}
+                                onClick={() => setActivePage('orders')}
+                                style={{ cursor: 'pointer' }}
+                              >
+                                <td style={{ fontWeight: 600 }}>{order.customerName}</td>
+                                <td style={{ color: '#888888' }}>{order.items?.length || 0} item{order.items?.length !== 1 ? 's' : ''}</td>
+                                <td style={{ fontWeight: 600, color: '#C47A8A' }}>R {order.total}</td>
+                                <td>
+                                  <span className={`status-badge${order.status === 'confirmed' ? ' confirmed' : ''}`}>
+                                    {order.status || 'pending'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+
+                    {/* Calendar */}
+                    <div className="panel">
+                      <div className="panel-heading">
+                        {monthNames[month]} {year}
+                        <span style={{ fontSize: 11, color: '#AAAAAA', fontWeight: 400, marginLeft: 8 }}>
+                          Setmore bookings — coming soon
+                        </span>
+                      </div>
+                      <div className="calendar-grid">
+                        {dayNames.map(d => (
+                          <div key={d} className="cal-day-label">{d}</div>
+                        ))}
+                        {calDays.map((d, i) => (
+                          <div
+                            key={i}
+                            className={[
+                              'cal-day',
+                              !d.current ? 'other-month' : '',
+                              d.isToday ? 'today' : '',
+                            ].join(' ').trim()}
+                          >
+                            {d.day}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Recent notifications preview */}
+                  <div className="panel">
+                    <div className="panel-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>Recent Activity</span>
+                      <button
+                        onClick={() => setActivePage('notifications')}
+                        style={{ background: 'none', border: 'none', fontSize: 12, color: '#C47A8A', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
+                      >
+                        View all
+                      </button>
+                    </div>
+                    {notifications.slice(0, 4).map(n => (
+                      <div key={n.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
+                        <span className={`notif-dot${n.read ? ' read' : ''}`} style={{ marginTop: 4 }} />
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{n.title}</div>
+                          <div style={{ fontSize: 12, color: '#AAAAAA' }}>{n.message}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {notifications.length === 0 && (
+                      <div style={{ fontSize: 13, color: '#AAAAAA', padding: '12px 0' }}>No activity yet.</div>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
 
             {activePage === 'products' && (
               <div>
@@ -852,18 +1329,280 @@ function App() {
             )}
 
             {activePage === 'orders' && (
-              <div style={{ background: '#FFFFFF', borderRadius: '10px', border: '1px solid #E8E8E8', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-                <div style={{ fontSize: '16px', fontWeight: 700, color: '#1A1A1A', marginBottom: '8px' }}>
-                  Orders
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A' }}>
+                      {orders.length} order{orders.length !== 1 ? 's' : ''}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#AAAAAA', marginTop: 2 }}>
+                      Click an order to expand details
+                    </div>
+                  </div>
+                  <button className="secondary-btn" onClick={fetchOrders}>
+                    Refresh
+                  </button>
                 </div>
-                <p style={{ fontSize: '14px', color: '#888888', lineHeight: 1.6, marginBottom: '20px' }}>
-                  Order management is coming soon. When customers submit orders through the website, they will appear here for you to confirm payment and arrange delivery.
-                </p>
-                <div style={{ display: 'inline-block', background: '#F4F4F5', color: '#AAAAAA', borderRadius: '20px', padding: '6px 16px', fontSize: '13px', fontWeight: 600 }}>
-                  No orders yet
-                </div>
+
+                {ordersLoading && (
+                  <div style={{ fontSize: 13, color: '#AAAAAA', padding: '20px 0' }}>Loading orders...</div>
+                )}
+
+                {!ordersLoading && orders.length === 0 && (
+                  <div className="panel" style={{ fontSize: 13, color: '#AAAAAA' }}>
+                    No orders yet. When customers place orders on the website they will appear here.
+                  </div>
+                )}
+
+                {!ordersLoading && orders.map(order => (
+                  <div key={order.id} className="panel" style={{ marginBottom: 12, padding: 0, overflow: 'hidden' }}>
+
+                    {/* Order header */}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '16px 20px',
+                      borderBottom: order.expanded ? '1px solid #F4F4F5' : 'none',
+                      cursor: 'pointer',
+                      background: order.expanded ? '#FAFAFA' : 'white',
+                    }}
+                      onClick={() => setOrders(prev => prev.map(o =>
+                        o.id === order.id ? { ...o, expanded: !o.expanded } : o
+                      ))}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: '#1A1A1A' }}>
+                            {order.customerName}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#AAAAAA', marginTop: 2 }}>
+                            {order.customerPhone} · {new Date(order.createdAt).toLocaleDateString('en-ZA', {
+                              day: 'numeric', month: 'short', year: 'numeric',
+                              hour: '2-digit', minute: '2-digit'
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#C47A8A' }}>R {order.total}</div>
+                        <span className={`status-badge${order.status === 'confirmed' ? ' confirmed' : ''}`}>
+                          {order.status || 'pending'}
+                        </span>
+                        <div style={{ fontSize: 12, color: '#CCCCCC' }}>{order.expanded ? 'v' : '>'}</div>
+                      </div>
+                    </div>
+
+                    {/* Expanded order details */}
+                    {order.expanded && (
+                      <div style={{ padding: '16px 20px' }}>
+
+                        {/* Items list */}
+                        <div style={{ marginBottom: 16 }}>
+                          <div className="field-label" style={{ marginBottom: 8 }}>Items Ordered</div>
+                          {order.items?.map((item, i) => (
+                            <div key={i} style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '8px 0',
+                              borderBottom: '1px solid #F9F9F9',
+                              fontSize: 13,
+                            }}>
+                              <div>
+                                <span style={{ fontWeight: 600, color: '#1A1A1A' }}>{item.name}</span>
+                                <span style={{ color: '#AAAAAA', marginLeft: 8 }}>x{item.qty}</span>
+                              </div>
+                              <span style={{ color: '#C47A8A', fontWeight: 600 }}>R {item.price * item.qty}</span>
+                            </div>
+                          ))}
+                          <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            padding: '10px 0 0 0',
+                            fontSize: 14,
+                            fontWeight: 700,
+                          }}>
+                            <span>Total</span>
+                            <span style={{ color: '#C47A8A' }}>R {order.total}</span>
+                          </div>
+                        </div>
+
+                        {/* Customer details */}
+                        <div style={{ marginBottom: 16 }}>
+                          <div className="field-label" style={{ marginBottom: 8 }}>Customer Details</div>
+                          <div style={{ fontSize: 13, color: '#444444', lineHeight: 1.8 }}>
+                            <div>Name: <strong>{order.customerName}</strong></div>
+                            <div>WhatsApp: <strong>{order.customerPhone}</strong></div>
+                          </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                          {order.status !== 'confirmed' && (
+                            <button
+                              className="upload-btn"
+                              onClick={() => confirmOrder(order.id)}
+                            >
+                              Confirm Payment Received
+                            </button>
+                          )}
+                          <a
+                            href={`https://wa.me/${order.customerPhone.replace(/\D/g,'')}?text=${encodeURIComponent(`Hi ${order.customerName}, thank you for your order with Hair By Her. We have received your payment and will be in touch shortly to arrange delivery.`)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'inline-block',
+                              background: '#25D366',
+                              color: 'white',
+                              borderRadius: 6,
+                              padding: '8px 16px',
+                              fontSize: 13,
+                              fontWeight: 600,
+                              textDecoration: 'none',
+                            }}
+                          >
+                            WhatsApp Customer
+                          </a>
+                          {order.status === 'confirmed' && (
+                            <div style={{ fontSize: 13, color: '#4CAF50', fontWeight: 600 }}>
+                              Payment confirmed
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
+
+            {activePage === 'notifications' && (() => {
+              const tabs = [
+                { label: 'All',      value: 'all' },
+                { label: 'Orders',   value: 'order' },
+                { label: 'Images',   value: 'image' },
+                { label: 'Sections', value: 'section' },
+                { label: 'System',   value: 'system' },
+                { label: 'Archive',  value: 'archive' },
+              ]
+
+              const activeNotifs = notifTab === 'archive'
+                ? archivedNotifications
+                : notifTab === 'all'
+                  ? notifications
+                  : notifications.filter(n => n.type === notifTab)
+
+              return (
+                <div>
+                  {/* Header row */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A' }}>
+                        {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#AAAAAA', marginTop: 2 }}>
+                        Notifications auto-archive after 7 days
+                      </div>
+                    </div>
+                    {unreadCount > 0 && notifTab !== 'archive' && (
+                      <button className="secondary-btn" onClick={markAllRead}>
+                        Mark all as read
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Type tabs */}
+                  <div style={{
+                    display: 'flex',
+                    gap: 0,
+                    borderBottom: '1px solid #E8E8E8',
+                    marginBottom: 20,
+                    overflowX: 'auto',
+                  }}>
+                    {tabs.map(tab => {
+                      const count = tab.value === 'archive'
+                        ? archivedNotifications.length
+                        : tab.value === 'all'
+                          ? notifications.length
+                          : notifications.filter(n => n.type === tab.value).length
+                      return (
+                        <button
+                          key={tab.value}
+                          onClick={() => setNotifTab(tab.value)}
+                          style={{
+                            padding: '10px 18px',
+                            border: 'none',
+                            background: 'transparent',
+                            fontSize: 13,
+                            fontFamily: 'inherit',
+                            cursor: 'pointer',
+                            color: notifTab === tab.value ? '#C47A8A' : '#888888',
+                            borderBottom: notifTab === tab.value ? '2px solid #C47A8A' : '2px solid transparent',
+                            fontWeight: notifTab === tab.value ? 700 : 500,
+                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          {tab.label}
+                          {count > 0 && (
+                            <span style={{
+                              background: notifTab === tab.value ? '#C47A8A' : '#E8E8E8',
+                              color: notifTab === tab.value ? 'white' : '#888888',
+                              borderRadius: 10,
+                              padding: '1px 7px',
+                              fontSize: 10,
+                              fontWeight: 700,
+                            }}>
+                              {count}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Notification list */}
+                  <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+                    {activeNotifs.length === 0 && (
+                      <div style={{ padding: 24, fontSize: 13, color: '#AAAAAA' }}>
+                        {notifTab === 'archive'
+                          ? 'No archived notifications yet. Notifications older than 7 days will appear here.'
+                          : 'No notifications in this category.'}
+                      </div>
+                    )}
+                    {activeNotifs.map(n => (
+                      <div
+                        key={n.id}
+                        className={`notif-item${!n.read && notifTab !== 'archive' ? ' unread' : ''}`}
+                        onClick={() => !n.read && notifTab !== 'archive' && markOneRead(n.id)}
+                        style={{ cursor: !n.read && notifTab !== 'archive' ? 'pointer' : 'default' }}
+                      >
+                        <span className={`notif-dot${n.read || notifTab === 'archive' ? ' read' : ''}`} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <span className={`notif-type-badge notif-type-${n.type}`}>{n.type}</span>
+                            {notifTab === 'archive' && (
+                              <span style={{ fontSize: 10, color: '#BBBBBB', fontStyle: 'italic' }}>Archived</span>
+                            )}
+                          </div>
+                          <div className="notif-title">{n.title}</div>
+                          <div className="notif-message">{n.message}</div>
+                          <div className="notif-time">
+                            {new Date(n.createdAt).toLocaleDateString('en-ZA', {
+                              day: 'numeric', month: 'short', year: 'numeric',
+                              hour: '2-digit', minute: '2-digit'
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
 
           </div>
         </div>
