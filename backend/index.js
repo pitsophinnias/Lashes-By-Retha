@@ -37,13 +37,14 @@ const storage = multer.diskStorage({
 })
 
 const fileFilter = (req, file, cb) => {
-  const allowed = ['.jpg', '.jpeg', '.png', '.webp']
+  const allowedImages = ['.jpg', '.jpeg', '.png', '.webp']
+  const allowedVideos = ['.mp4', '.mov', '.webm']
   const ext = path.extname(file.originalname).toLowerCase()
-  if (allowed.includes(ext)) cb(null, true)
-  else cb(new Error('Only image files are allowed'), false)
+  if ([...allowedImages, ...allowedVideos].includes(ext)) cb(null, true)
+  else cb(new Error('Only image and video files are allowed'), false)
 }
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } })
+const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 1024 } })
 
 const orders = []
 const positions = {}
@@ -113,9 +114,21 @@ app.post('/api/upload/gallery', upload.single('image'), (req, res) => {
 // Get all gallery images
 app.get('/api/gallery', (req, res) => {
   try {
+    const imageExts = ['.jpg', '.jpeg', '.png', '.webp']
+    const videoExts = ['.mp4', '.mov', '.webm']
     const files = fs.readdirSync(GALLERY_DIR)
-      .filter(f => ['.jpg', '.jpeg', '.png', '.webp'].includes(path.extname(f).toLowerCase()))
-      .map(f => ({ filename: f, url: `/uploads/gallery/${f}` }))
+      .filter(f => {
+        const ext = path.extname(f).toLowerCase()
+        return [...imageExts, ...videoExts].includes(ext)
+      })
+      .map(f => {
+        const ext = path.extname(f).toLowerCase()
+        return {
+          filename: f,
+          url: `/uploads/gallery/${f}`,
+          type: videoExts.includes(ext) ? 'video' : 'image'
+        }
+      })
     res.json(files)
   } catch {
     res.json([])
