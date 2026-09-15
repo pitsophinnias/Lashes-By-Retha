@@ -49,6 +49,21 @@ const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 102
 const orders = []
 const positions = {}
 
+// Categories store
+const categories = [
+  { id: 1, name: 'Lashes', createdAt: new Date().toISOString() },
+  { id: 2, name: 'Wigs', createdAt: new Date().toISOString() },
+]
+let categoryIdCounter = 3
+
+// Product category assignments: { productId: categoryId }
+const productCategories = {
+  1: 1, // Classic Lash Trays -> Lashes
+  2: 1, // YY Lash Trays -> Lashes
+  3: 1, // Volume Lash Trays -> Lashes
+  4: 1, // Lash Shampoo Combo -> Lashes
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', project: 'Lashes By Retha' })
 })
@@ -93,6 +108,74 @@ app.post('/api/position/:type/:id', (req, res) => {
 app.get('/api/position/:type/:id', (req, res) => {
   const key = `${req.params.type}-${req.params.id}`
   res.json({ position: positions[key] || null })
+})
+
+// Get all categories
+app.get('/api/categories', (req, res) => {
+  res.json(categories)
+})
+
+// Create a new category
+app.post('/api/categories', (req, res) => {
+  const { name } = req.body
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Category name is required' })
+  }
+  const trimmed = name.trim()
+  if (categories.find(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
+    return res.status(400).json({ error: 'A category with that name already exists' })
+  }
+  const category = {
+    id: categoryIdCounter++,
+    name: trimmed,
+    createdAt: new Date().toISOString(),
+  }
+  categories.push(category)
+  console.log(`Category created: ${category.name} (id: ${category.id})`)
+  res.status(201).json(category)
+})
+
+// Delete a category
+app.delete('/api/categories/:id', (req, res) => {
+  const id = parseInt(req.params.id)
+  const index = categories.findIndex(c => c.id === id)
+  if (index === -1) return res.status(404).json({ error: 'Category not found' })
+  const name = categories[index].name
+  categories.splice(index, 1)
+  // Remove assignments for this category
+  Object.keys(productCategories).forEach(pid => {
+    if (productCategories[pid] === id) delete productCategories[pid]
+  })
+  console.log(`Category deleted: ${name}`)
+  res.json({ success: true })
+})
+
+// Get category assignment for a product
+app.get('/api/categories/product/:productId', (req, res) => {
+  const pid = parseInt(req.params.productId)
+  const categoryId = productCategories[pid] || null
+  const category = categoryId ? categories.find(c => c.id === categoryId) : null
+  res.json({ categoryId, categoryName: category ? category.name : null })
+})
+
+// Assign a product to a category
+app.post('/api/categories/product/:productId', (req, res) => {
+  const pid = parseInt(req.params.productId)
+  const { categoryId } = req.body
+  if (!categoryId) {
+    delete productCategories[pid]
+    return res.json({ success: true, message: 'Product removed from category' })
+  }
+  const category = categories.find(c => c.id === categoryId)
+  if (!category) return res.status(404).json({ error: 'Category not found' })
+  productCategories[pid] = categoryId
+  console.log(`Product ${pid} assigned to category: ${category.name}`)
+  res.json({ success: true, categoryId, categoryName: category.name })
+})
+
+// Get all products with their category assignments
+app.get('/api/categories/products/all', (req, res) => {
+  res.json(productCategories)
 })
 
 // Upload image for a product or class
