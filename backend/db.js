@@ -61,6 +61,35 @@ const createTables = async () => {
       type VARCHAR(10) NOT NULL DEFAULT 'image',
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS roles (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(50) NOT NULL UNIQUE,
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username VARCHAR(100) NOT NULL UNIQUE,
+      email VARCHAR(255),
+      password_hash VARCHAR(255) NOT NULL,
+      role_id INTEGER REFERENCES roles(id),
+      must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      username VARCHAR(100),
+      action VARCHAR(255) NOT NULL,
+      details TEXT,
+      ip_address VARCHAR(50),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `)
 
   // Seed default categories if none exist
@@ -76,6 +105,33 @@ const createTables = async () => {
       VALUES (1, 1), (2, 1), (3, 1), (4, 1)
       ON CONFLICT (product_id) DO NOTHING;
     `)
+  }
+
+  // Seed roles if none exist
+  const { rows: roleRows } = await pool.query('SELECT COUNT(*) FROM roles')
+  if (parseInt(roleRows[0].count) === 0) {
+    await pool.query(`
+      INSERT INTO roles (name, description) VALUES
+        ('sysadmin', 'Full system access including user management, audit logs and system settings'),
+        ('owner', 'Business operations including orders, products, classes and business notifications'),
+        ('staff', 'Read-only access to dashboard and order confirmation only')
+      ON CONFLICT (name) DO NOTHING;
+    `)
+    console.log('Roles seeded')
+  }
+
+  // Seed sysadmin user if none exist
+  const { rows: userRows } = await pool.query('SELECT COUNT(*) FROM users')
+  if (parseInt(userRows[0].count) === 0) {
+    const bcrypt = require('bcrypt')
+    const hash = await bcrypt.hash(process.env.ADMIN_DEFAULT_PASSWORD || 'hbh@1234', 12)
+    const roleResult = await pool.query("SELECT id FROM roles WHERE name = 'sysadmin'")
+    await pool.query(
+      `INSERT INTO users (username, email, password_hash, role_id, must_change_password)
+       VALUES ($1, $2, $3, $4, FALSE)`,
+      ['Pitso', 'pitso@hairbyher.co.za', hash, roleResult.rows[0].id]
+    )
+    console.log('Sysadmin user seeded: Pitso')
   }
 
   console.log('Database tables ready')

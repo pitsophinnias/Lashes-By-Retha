@@ -6,6 +6,10 @@ const fs = require('fs')
 const dotenv = require('dotenv')
 dotenv.config()
 
+const bcrypt = require('bcrypt')
+const jwt = require('jsonwebtoken')
+const { authenticate, requireRole, JWT_SECRET } = require('./auth')
+
 const { pool, createTables } = require('./db')
 
 const app = express()
@@ -64,6 +68,17 @@ const addNotification = async (type, title, message) => {
   }
 }
 
+const addAuditLog = async (userId, username, action, details, ipAddress) => {
+  try {
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, username, action, details, ip_address) VALUES ($1, $2, $3, $4, $5)',
+      [userId, username, action, details || null, ipAddress || null]
+    )
+  } catch (err) {
+    console.error('Audit log error:', err.message)
+  }
+}
+
 // ── Auto-archive notifications older than 7 days ─────────────────────────────
 const archiveOldNotifications = async () => {
   try {
@@ -87,8 +102,217 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', project: 'Lashes By Retha' })
 })
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+// Login
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' })
+  }
+  try {
+    const result = await pool.query(
+      `SELECT u.*, r.name as role_name FROM users u
+       JOIN roles r ON r.id = u.role_id
+       WHERE u.username = $1 AND u.is_active = TRUE`,
+      [username]
+    )
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid username or password' })
+    }
+    const user = result.rows[0]
+    const valid = await bcrypt.compare(password, user.password_hash)
+    if (!valid) {
+      await addAuditLog(user.id, user.username, 'LOGIN_FAILED', 'Invalid password', req.ip)
+      return res.status(401).json({ error: 'Invalid username or password' })
+    }
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role_name },
+      JWT_SECRET,
+      { expiresIn: '8h' }
+    )
+    await addAuditLog(user.id, user.username, 'LOGIN', 'Successful login', req.ip)
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role_name,
+        must_change_password: user.must_change_password,
+      }
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Login failed' })
+  }
+})
+
+// Get current user
+app.get('/api/auth/me', authenticate, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.username, u.email, u.must_change_password, r.name as role
+       FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1`,
+      [req.user.id]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' })
+    res.json(result.rows[0])
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch user' })
+  }
+})
+
+// Change password
+app.post('/api/auth/change-password', authenticate, async (req, res) => {
+  const { current_password, new_password } = req.body
+  if (!new_password || new_password.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters' })
+  }
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id])
+    const user = result.rows[0]
+    if (current_password) {
+      const valid = await bcrypt.compare(current_password, user.password_hash)
+      if (!valid) return res.status(401).json({ error: 'Current password is incorrect' })
+    }
+    const hash = await bcrypt.hash(new_password, 12)
+    await pool.query(
+      'UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE id = $2',
+      [hash, req.user.id]
+    )
+    await addAuditLog(req.user.id, req.user.username, 'PASSWORD_CHANGED', 'User changed their password', req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to change password' })
+  }
+})
+
+// Get all users (sysadmin and owner only)
+app.get('/api/users', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.username, u.email, u.is_active, u.must_change_password,
+              u.created_at, r.name as role
+       FROM users u JOIN roles r ON r.id = u.role_id
+       ORDER BY u.created_at DESC`
+    )
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch users' })
+  }
+})
+
+// Create user (sysadmin: any role, owner: staff only)
+app.post('/api/users', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { username, email, password, role_name } = req.body
+  if (!username || !password || !role_name) {
+    return res.status(400).json({ error: 'Username, password and role are required' })
+  }
+  // Owner can only create staff
+  if (req.user.role === 'owner' && role_name !== 'staff') {
+    return res.status(403).json({ error: 'Owners can only create staff users' })
+  }
+  try {
+    const roleResult = await pool.query('SELECT id FROM roles WHERE name = $1', [role_name])
+    if (roleResult.rows.length === 0) return res.status(400).json({ error: 'Invalid role' })
+    const hash = await bcrypt.hash(password, 12)
+    const result = await pool.query(
+      `INSERT INTO users (username, email, password_hash, role_id, must_change_password, created_by)
+       VALUES ($1, $2, $3, $4, TRUE, $5) RETURNING id, username, email`,
+      [username, email || null, hash, roleResult.rows[0].id, req.user.id]
+    )
+    await addAuditLog(req.user.id, req.user.username, 'USER_CREATED',
+      `Created user "${username}" with role "${role_name}"`, req.ip)
+    res.status(201).json(result.rows[0])
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: 'Username already exists' })
+    res.status(500).json({ error: 'Failed to create user' })
+  }
+})
+
+// Update user (sysadmin only for role changes, owner can deactivate staff)
+app.patch('/api/users/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { is_active, role_name, email } = req.body
+  const targetId = parseInt(req.params.id)
+  try {
+    let roleId = null
+    if (role_name) {
+      if (req.user.role !== 'sysadmin') {
+        return res.status(403).json({ error: 'Only sysadmin can change roles' })
+      }
+      const roleResult = await pool.query('SELECT id FROM roles WHERE name = $1', [role_name])
+      if (roleResult.rows.length === 0) return res.status(400).json({ error: 'Invalid role' })
+      roleId = roleResult.rows[0].id
+    }
+    await pool.query(
+      `UPDATE users SET
+        is_active = COALESCE($1, is_active),
+        role_id = COALESCE($2, role_id),
+        email = COALESCE($3, email)
+       WHERE id = $4`,
+      [is_active, roleId, email, targetId]
+    )
+    await addAuditLog(req.user.id, req.user.username, 'USER_UPDATED',
+      `Updated user id ${targetId}`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update user' })
+  }
+})
+
+// Reset user password (sysadmin only)
+app.post('/api/users/:id/reset-password', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { new_password } = req.body
+  if (!new_password || new_password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' })
+  }
+  try {
+    const hash = await bcrypt.hash(new_password, 12)
+    await pool.query(
+      'UPDATE users SET password_hash = $1, must_change_password = TRUE WHERE id = $2',
+      [hash, req.params.id]
+    )
+    await addAuditLog(req.user.id, req.user.username, 'PASSWORD_RESET',
+      `Reset password for user id ${req.params.id}`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reset password' })
+  }
+})
+
+// Get roles (sysadmin only)
+app.get('/api/roles', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM roles ORDER BY id')
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch roles' })
+  }
+})
+
+// Get audit logs (sysadmin only)
+app.get('/api/audit-logs', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1
+    const limit = 50
+    const offset = (page - 1) * limit
+    const result = await pool.query(
+      'SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+      [limit, offset]
+    )
+    const count = await pool.query('SELECT COUNT(*) FROM audit_logs')
+    res.json({
+      logs: result.rows,
+      total: parseInt(count.rows[0].count),
+      page,
+      pages: Math.ceil(parseInt(count.rows[0].count) / limit)
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch audit logs' })
+  }
+})
+
 // ── Orders ────────────────────────────────────────────────────────────────────
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', authenticate, async (req, res) => {
   const { customerName, customerPhone, items, total } = req.body
   if (!customerName || !customerPhone || !items || !Array.isArray(items)) {
     return res.status(400).json({ error: 'Missing required fields' })
@@ -115,7 +339,7 @@ app.post('/api/orders', async (req, res) => {
   }
 })
 
-app.get('/api/orders', async (req, res) => {
+app.get('/api/orders', authenticate, async (req, res) => {
   try {
     const ordersResult = await pool.query(
       'SELECT * FROM orders ORDER BY created_at DESC'
@@ -143,7 +367,7 @@ app.get('/api/orders', async (req, res) => {
   }
 })
 
-app.patch('/api/orders/:id/confirm', async (req, res) => {
+app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
   const id = parseInt(req.params.id)
   try {
     const result = await pool.query(
@@ -162,7 +386,7 @@ app.patch('/api/orders/:id/confirm', async (req, res) => {
 })
 
 // ── Image uploads ─────────────────────────────────────────────────────────────
-app.post('/api/upload/:type/:id', upload.single('image'), async (req, res) => {
+app.post('/api/upload/:type/:id', authenticate, upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const url = `/uploads/${req.params.type}/${req.file.filename}`
   await addNotification('image', 'Image uploaded',
@@ -170,7 +394,7 @@ app.post('/api/upload/:type/:id', upload.single('image'), async (req, res) => {
   res.json({ success: true, url })
 })
 
-app.post('/api/upload/gallery', upload.single('image'), async (req, res) => {
+app.post('/api/upload/gallery', authenticate, upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const ext = path.extname(req.file.filename).toLowerCase()
   const videoExts = ['.mp4', '.mov', '.webm']
@@ -214,7 +438,7 @@ app.get('/api/upload/:type/:id', (req, res) => {
 })
 
 // ── Image positions ───────────────────────────────────────────────────────────
-app.post('/api/position/:type/:id', async (req, res) => {
+app.post('/api/position/:type/:id', authenticate, async (req, res) => {
   const { type, id } = req.params
   const { position } = req.body
   if (!position || typeof position.x !== 'number' || typeof position.y !== 'number') {
@@ -258,7 +482,7 @@ app.get('/api/categories', async (req, res) => {
   }
 })
 
-app.post('/api/categories', async (req, res) => {
+app.post('/api/categories', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const { name } = req.body
   if (!name || !name.trim()) return res.status(400).json({ error: 'Category name is required' })
   const trimmed = name.trim()
@@ -276,7 +500,7 @@ app.post('/api/categories', async (req, res) => {
   }
 })
 
-app.delete('/api/categories/:id', async (req, res) => {
+app.delete('/api/categories/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const id = parseInt(req.params.id)
   try {
     const catResult = await pool.query('SELECT name FROM categories WHERE id = $1', [id])
@@ -319,7 +543,7 @@ app.get('/api/categories/product/:productId', async (req, res) => {
   }
 })
 
-app.post('/api/categories/product/:productId', async (req, res) => {
+app.post('/api/categories/product/:productId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const pid = parseInt(req.params.productId)
   const { categoryId } = req.body
   try {
@@ -342,7 +566,7 @@ app.post('/api/categories/product/:productId', async (req, res) => {
 })
 
 // ── Notifications ─────────────────────────────────────────────────────────────
-app.get('/api/notifications/archived', async (req, res) => {
+app.get('/api/notifications/archived', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM notifications WHERE archived = TRUE ORDER BY created_at DESC LIMIT 100'
@@ -356,7 +580,7 @@ app.get('/api/notifications/archived', async (req, res) => {
   }
 })
 
-app.get('/api/notifications/unread-count', async (req, res) => {
+app.get('/api/notifications/unread-count', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT COUNT(*) FROM notifications WHERE read = FALSE AND archived = FALSE'
@@ -367,7 +591,7 @@ app.get('/api/notifications/unread-count', async (req, res) => {
   }
 })
 
-app.get('/api/notifications', async (req, res) => {
+app.get('/api/notifications', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM notifications WHERE archived = FALSE ORDER BY created_at DESC LIMIT 50'
@@ -381,7 +605,7 @@ app.get('/api/notifications', async (req, res) => {
   }
 })
 
-app.patch('/api/notifications/read-all', async (req, res) => {
+app.patch('/api/notifications/read-all', authenticate, async (req, res) => {
   try {
     await pool.query('UPDATE notifications SET read = TRUE WHERE archived = FALSE')
     res.json({ success: true })
@@ -390,7 +614,7 @@ app.patch('/api/notifications/read-all', async (req, res) => {
   }
 })
 
-app.patch('/api/notifications/:id/read', async (req, res) => {
+app.patch('/api/notifications/:id/read', authenticate, async (req, res) => {
   try {
     await pool.query('UPDATE notifications SET read = TRUE WHERE id = $1', [req.params.id])
     res.json({ success: true })
