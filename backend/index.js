@@ -399,6 +399,110 @@ app.patch('/api/notifications/:id/read', async (req, res) => {
   }
 })
 
+// ── Students ──────────────────────────────────────────────────────────────────
+// Get all students for a class
+app.get('/api/classes/:classId/students', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM students WHERE class_id = $1 ORDER BY enrolled_at DESC',
+      [req.params.classId]
+    )
+    res.json(result.rows)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch students' })
+  }
+})
+
+// Add a student to a class
+app.post('/api/classes/:classId/students', async (req, res) => {
+  const { name, whatsapp, payment_status, notes } = req.body
+  if (!name || !whatsapp) {
+    return res.status(400).json({ error: 'Name and WhatsApp number are required' })
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO students (class_id, name, whatsapp, payment_status, notes)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [req.params.classId, name, whatsapp, payment_status || 'unpaid', notes || '']
+    )
+    await addNotification('section', 'New student enrolled',
+      `${name} has been added to class ${req.params.classId}.`)
+    res.status(201).json(result.rows[0])
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to add student' })
+  }
+})
+
+// Update a student's payment status
+app.patch('/api/classes/:classId/students/:studentId', async (req, res) => {
+  const { payment_status, notes } = req.body
+  try {
+    const result = await pool.query(
+      `UPDATE students SET payment_status = COALESCE($1, payment_status),
+       notes = COALESCE($2, notes)
+       WHERE id = $3 AND class_id = $4 RETURNING *`,
+      [payment_status, notes, req.params.studentId, req.params.classId]
+    )
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Student not found' })
+    res.json(result.rows[0])
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update student' })
+  }
+})
+
+// Remove a student
+app.delete('/api/classes/:classId/students/:studentId', async (req, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM students WHERE id = $1 AND class_id = $2',
+      [req.params.studentId, req.params.classId]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to remove student' })
+  }
+})
+
+// ── Product overrides ─────────────────────────────────────────────────────────
+// Update a product's details (name, price, description)
+app.patch('/api/products/:productId', async (req, res) => {
+  const { name, price, description } = req.body
+  const pid = parseInt(req.params.productId)
+  // Products are defined in the frontend PRODUCTS constant
+  // We store overrides in a product_overrides table
+  try {
+    await pool.query(
+      `INSERT INTO product_overrides (product_id, name, price, description)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (product_id) DO UPDATE
+       SET name = COALESCE($2, product_overrides.name),
+           price = COALESCE($3, product_overrides.price),
+           description = COALESCE($4, product_overrides.description)`,
+      [pid, name || null, price || null, description || null]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update product' })
+  }
+})
+
+// Get product overrides
+app.get('/api/products/overrides', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM product_overrides')
+    const map = {}
+    result.rows.forEach(r => { map[r.product_id] = r })
+    res.json(map)
+  } catch {
+    res.json({})
+  }
+})
+
 // ── Start server ──────────────────────────────────────────────────────────────
 const start = async () => {
   await createTables()

@@ -61,6 +61,24 @@ const createTables = async () => {
       type VARCHAR(10) NOT NULL DEFAULT 'image',
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS students (
+      id SERIAL PRIMARY KEY,
+      class_id INTEGER NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      whatsapp VARCHAR(50) NOT NULL,
+      payment_status VARCHAR(50) NOT NULL DEFAULT 'unpaid',
+      notes TEXT DEFAULT '',
+      enrolled_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS product_overrides (
+      product_id INTEGER PRIMARY KEY,
+      name VARCHAR(255),
+      price NUMERIC(10,2),
+      description TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `)
 
   // Seed default categories if none exist
