@@ -677,58 +677,7 @@ function App() {
 
         /* Contact */
         #contact {
-          padding: 80px 20px;
-        }
-
-        #contact .section-heading {
-          text-align: left;
-        }
-
-        #contact .section-heading::after {
-          margin: 8px 0 24px 0;
-        }
-
-        .contact-grid {
-          max-width: 860px;
-          margin: 0 auto;
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 48px;
-          align-items: start;
-        }
-
-        @media (max-width: 768px) {
-          .contact-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-
-        .contact-details {
-          max-width: 500px;
-          margin: 0;
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-          font-size: 14px;
-          color: #5A4A50;
-          line-height: 2;
-          text-align: left;
-        }
-
-        .contact-details a {
-          color: #C47A8A;
-          text-decoration: none;
-          font-weight: 600;
-          display: block;
-          margin-top: 4px;
-        }
-
-        .contact-details a:hover {
-          color: #A8606F;
-        }
-
-        .book-setmore-btn:hover {
-          background: #A0566A !important;
+          padding: 72px 24px;
         }
 
         /* Footer */
@@ -1099,44 +1048,46 @@ function App() {
       </section>
 
       <section id="contact" className="section">
-        <h2 className="section-heading">Contact Us</h2>
-        <div className="contact-grid">
-          <div className="contact-details">
-            <span>125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911</span>
-            <span>+27 82 685 5399</span>
-            <span>Tuesday to Saturday, 8:00 AM to 7:00 PM</span>
-            <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer">
-              Chat on WhatsApp
-            </a>
+        <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: '48px' }}>
+            <h2 style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: '38px',
+              fontWeight: '700',
+              color: '#2C2C2C',
+              marginBottom: '8px',
+            }}>
+              Contact Us
+            </h2>
+            <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '8px auto 0 auto' }} />
           </div>
-          <div style={{ background: '#FFFFFF', borderRadius: '16px', padding: '28px', boxShadow: '0 2px 16px rgba(196,122,138,0.10)' }}>
-            <h3 style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '10px' }}>
-              Book an Appointment
-            </h3>
-            <p style={{ fontSize: '13px', color: '#7A6670', lineHeight: 1.7, marginBottom: '20px' }}>
-              We use Setmore for all appointment bookings. Click below to view availability and secure your slot.
-            </p>
-            <a
-              className="book-setmore-btn"
-              href={bookingUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: 'block',
-                background: '#C47A8A',
-                color: 'white',
-                textDecoration: 'none',
-                borderRadius: '10px',
-                padding: '13px 24px',
-                fontSize: '13px',
-                fontWeight: 700,
-                textAlign: 'center',
-                letterSpacing: '0.5px',
-                transition: 'background 0.2s',
-              }}
-            >
-              Book Now on Setmore
-            </a>
+
+          <div style={{ background: '#FFFFFF', borderRadius: '16px', padding: '32px', boxShadow: '0 2px 16px rgba(196,122,138,0.10)', border: '1px solid #F5DDE2', maxWidth: '560px', margin: '0 auto' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '20px', display: 'block' }}>
+              Get in Touch
+            </span>
+
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Address</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Phone</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C' }}>+27 82 685 5399</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Hours</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C' }}>Tuesday to Saturday, 8:00 AM to 7:00 PM</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>WhatsApp</span>
+              <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
+                Chat with us on WhatsApp
+              </a>
+            </div>
           </div>
         </div>
       </section>
