@@ -127,26 +127,35 @@ function App() {
       try {
         const res = await fetch(`${API}/api/upload/products/${p.id}`)
         const data = await res.json()
-        if (data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
+        if (data && data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
       } catch {}
       try {
         const posRes = await fetch(`${API}/api/position/products/${p.id}`)
         const posData = await posRes.json()
-        if (posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
+        if (posData && posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
       } catch {}
     })
     fetch(`${API}/api/gallery`)
       .then(r => r.json())
-      .then(data => setGalleryImages(data))
-      .catch(() => {})
+      .then(data => {
+        if (Array.isArray(data)) setGalleryImages(data)
+        else setGalleryImages([])
+      })
+      .catch(() => setGalleryImages([]))
     fetch(`${API}/api/categories`)
       .then(r => r.json())
-      .then(data => setCategories(data))
-      .catch(() => {})
+      .then(data => {
+        if (Array.isArray(data)) setCategories(data)
+        else setCategories([])
+      })
+      .catch(() => setCategories([]))
     fetch(`${API}/api/categories/products/all`)
       .then(r => r.json())
-      .then(data => setProductCategories(data))
-      .catch(() => {})
+      .then(data => {
+        if (data && typeof data === 'object' && !Array.isArray(data)) setProductCategories(data)
+        else setProductCategories({})
+      })
+      .catch(() => setProductCategories({}))
   }, [])
 
   const scrollToShop = () => {

@@ -18,7 +18,7 @@ const CLASSES = [
 
 const API = 'http://localhost:3002'
 
-function App() {
+export default function App({ user, onLogout }) {
   const [activePage, setActivePage] = useState('dashboard')
   const [imageTab, setImageTab] = useState('products')
   const [productImages, setProductImages] = useState({})
@@ -40,12 +40,20 @@ function App() {
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(false)
 
+  const [bPwCurrent, setBPwCurrent] = useState('')
+  const [bPwNew, setBPwNew] = useState('')
+  const [bPwConfirm, setBPwConfirm] = useState('')
+  const [bPwMsg, setBPwMsg] = useState('')
+  const [newStaffUser, setNewStaffUser] = useState({ username: '', password: '' })
+  const [staffCreateMsg, setStaffCreateMsg] = useState('')
+
   const fetchOrders = async () => {
     setOrdersLoading(true)
     try {
       const res = await fetch(`${API}/api/orders`)
       const data = await res.json()
-      setOrders(data.reverse()) // newest first
+      if (Array.isArray(data)) setOrders(data.reverse()) // newest first
+      else setOrders([])
     } catch {
       // silent fail
     } finally {
@@ -54,70 +62,92 @@ function App() {
   }
 
   useEffect(() => {
+    const token = localStorage.getItem('hbh_token')
+    if (!token) return
     // Fetch product images
     PRODUCTS.forEach(async p => {
       const res = await fetch(`${API}/api/upload/products/${p.id}`)
       const data = await res.json()
-      if (data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
+      if (data && data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
       try {
         const posRes = await fetch(`${API}/api/position/products/${p.id}`)
         const posData = await posRes.json()
-        if (posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
+        if (posData && posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
       } catch {}
     })
     // Fetch class images
     CLASSES.forEach(async c => {
       const res = await fetch(`${API}/api/upload/classes/${c.id}`)
       const data = await res.json()
-      if (data.url) setClassImages(prev => ({ ...prev, [c.id]: data.url }))
+      if (data && data.url) setClassImages(prev => ({ ...prev, [c.id]: data.url }))
       try {
         const posRes = await fetch(`${API}/api/position/classes/${c.id}`)
         const posData = await posRes.json()
-        if (posData.position) setClassPositions(prev => ({ ...prev, [c.id]: posData.position }))
+        if (posData && posData.position) setClassPositions(prev => ({ ...prev, [c.id]: posData.position }))
       } catch {}
     })
     // Fetch gallery
     fetch(`${API}/api/gallery`)
       .then(r => r.json())
-      .then(data => setGalleryImages(data))
+      .then(data => {
+        if (Array.isArray(data)) setGalleryImages(data)
+        else setGalleryImages([])
+      })
       .catch(() => {})
     // Fetch categories
     fetch(`${API}/api/categories`)
       .then(r => r.json())
-      .then(data => setCategories(data))
+      .then(data => {
+        if (Array.isArray(data)) setCategories(data)
+        else setCategories([])
+      })
       .catch(() => {})
     // Fetch product category assignments
     fetch(`${API}/api/categories/products/all`)
       .then(r => r.json())
-      .then(data => setProductCategories(data))
+      .then(data => {
+        if (data && typeof data === 'object' && !Array.isArray(data)) setProductCategories(data)
+        else setProductCategories({})
+      })
       .catch(() => {})
     // Fetch notifications
     fetch(`${API}/api/notifications`)
       .then(r => r.json())
       .then(data => {
-        setNotifications(data)
-        setUnreadCount(data.filter(n => !n.read).length)
+        if (Array.isArray(data)) {
+          setNotifications(data)
+          setUnreadCount(data.filter(n => !n.read).length)
+        } else {
+          setNotifications([])
+        }
       })
       .catch(() => {})
     // Fetch orders for dashboard
     fetch(`${API}/api/orders`)
       .then(r => r.json())
       .then(data => {
-        setRecentOrders(data.slice(0, 5))
-        // Build monthly revenue data from orders
-        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-        const monthlyTotals = Array(12).fill(0)
-        data.forEach(order => {
-          const month = new Date(order.createdAt).getMonth()
-          monthlyTotals[month] += order.total || 0
-        })
-        setRevenueData(months.map((name, i) => ({ name, revenue: monthlyTotals[i] })))
+        if (Array.isArray(data)) {
+          setRecentOrders(data.slice(0, 5))
+          // Build monthly revenue data from orders
+          const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+          const monthlyTotals = Array(12).fill(0)
+          data.forEach(order => {
+            const month = new Date(order.createdAt).getMonth()
+            monthlyTotals[month] += order.total || 0
+          })
+          setRevenueData(months.map((name, i) => ({ name, revenue: monthlyTotals[i] })))
+        } else {
+          setRecentOrders([])
+        }
       })
       .catch(() => {})
     // Fetch archived notifications
     fetch(`${API}/api/notifications/archived`)
       .then(r => r.json())
-      .then(data => setArchivedNotifications(data))
+      .then(data => {
+        if (Array.isArray(data)) setArchivedNotifications(data)
+        else setArchivedNotifications([])
+      })
       .catch(() => {})
     fetchOrders()
   }, [])
@@ -254,6 +284,57 @@ function App() {
       await fetch(`${API}/api/orders/${id}/confirm`, { method: 'PATCH' })
       setOrders(prev => prev.map(o => o.id === id ? { ...o, status: 'confirmed' } : o))
     } catch {}
+  }
+
+  const getAuthHeaders = () => ({
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
+  })
+
+  const changeBusinessPassword = async () => {
+    setBPwMsg('')
+    if (bPwNew !== bPwConfirm) { setBPwMsg('Passwords do not match.'); return }
+    if (bPwNew.length < 6) { setBPwMsg('Password must be at least 6 characters.'); return }
+    try {
+      const res = await fetch(`${API}/api/auth/change-password`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ current_password: bPwCurrent, new_password: bPwNew }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setBPwMsg('Password changed successfully.')
+        setBPwCurrent(''); setBPwNew(''); setBPwConfirm('')
+      } else {
+        setBPwMsg(data.error || 'Failed to change password.')
+      }
+    } catch { setBPwMsg('Failed to change password.') }
+  }
+
+  const createStaffUser = async () => {
+    setStaffCreateMsg('')
+    if (!newStaffUser.username.trim() || !newStaffUser.password.trim()) {
+      setStaffCreateMsg('Username and password are required.')
+      return
+    }
+    try {
+      const res = await fetch(`${API}/api/users`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          username: newStaffUser.username.trim(),
+          password: newStaffUser.password,
+          role_name: 'staff',
+        }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setStaffCreateMsg(`Staff user "${newStaffUser.username}" created successfully.`)
+        setNewStaffUser({ username: '', password: '' })
+      } else {
+        setStaffCreateMsg(data.error || 'Failed to create user.')
+      }
+    } catch { setStaffCreateMsg('Failed to create user.') }
   }
 
   return (
@@ -785,6 +866,7 @@ function App() {
               { label: 'Lash Training', value: 'training', icon: 'T' },
               { label: 'Orders', value: 'orders', icon: 'O' },
               { label: 'Notifications', value: 'notifications', icon: 'N' },
+              { label: 'Settings', value: 'settings' },
             ].map(item => (
               <button
                 key={item.value}
@@ -840,8 +922,28 @@ function App() {
 
           {/* Sidebar footer */}
           <div style={{ padding: '16px 20px', borderTop: '1px solid #3E2A30', fontSize: 11, color: '#9A7A80', lineHeight: 1.6 }}>
-            <div>Hair By Her</div>
-            <div>082 685 5399</div>
+            <div style={{ fontSize: 12, color: '#C4A0A8', marginBottom: 4 }}>
+              Signed in as <strong style={{ color: '#EDD5DB' }}>{user?.username || 'Admin'}</strong>
+            </div>
+            <div style={{ fontSize: 11, color: '#9A7A80', marginBottom: 10 }}>
+              {user?.role || ''}
+            </div>
+            <button
+              onClick={onLogout}
+              style={{
+                background: 'none',
+                border: '1px solid #3E2A30',
+                color: '#C4A0A8',
+                borderRadius: 6,
+                padding: '6px 14px',
+                fontSize: 12,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                width: '100%',
+              }}
+            >
+              Sign Out
+            </button>
           </div>
         </div>
 
@@ -851,7 +953,7 @@ function App() {
           {/* Top bar */}
           <div style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF', letterSpacing: '0.3px' }}>
-              {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications' }[activePage]}
+              {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications', settings: 'Settings' }[activePage]}
             </div>
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 20, fontWeight: 600 }}>
               {activePage === 'dashboard' && 'Overview'}
@@ -862,6 +964,7 @@ function App() {
               {activePage === 'training' && '3 classes'}
               {activePage === 'orders' && `${orders.length} order${orders.length !== 1 ? 's' : ''}`}
               {activePage === 'notifications' && `${unreadCount} unread`}
+              {activePage === 'settings' && 'Account'}
             </div>
           </div>
 
@@ -1868,11 +1971,119 @@ function App() {
               )
             })()}
 
+            {activePage === 'settings' && (
+              <div>
+                <div style={{
+                  background: 'linear-gradient(135deg, #8C5A6A 0%, #C4A882 100%)',
+                  borderRadius: 14,
+                  padding: '24px 28px',
+                  marginBottom: 24,
+                  color: 'white',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Settings</div>
+                    <div style={{ fontSize: 13, opacity: 0.8 }}>Manage your account preferences</div>
+                  </div>
+                </div>
+
+                <div style={{ background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)', maxWidth: 480 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }}>Change Password</div>
+
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Current Password</label>
+                  <input
+                    type="password"
+                    placeholder="Current password"
+                    value={bPwCurrent}
+                    onChange={e => setBPwCurrent(e.target.value)}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #EDD5DB', fontSize: 13, fontFamily: 'inherit', color: '#2C1A20', background: 'white', outline: 'none', marginBottom: 12 }}
+                  />
+
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>New Password</label>
+                  <input
+                    type="password"
+                    placeholder="New password (min 6 characters)"
+                    value={bPwNew}
+                    onChange={e => setBPwNew(e.target.value)}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #EDD5DB', fontSize: 13, fontFamily: 'inherit', color: '#2C1A20', background: 'white', outline: 'none', marginBottom: 12 }}
+                  />
+
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Confirm New Password</label>
+                  <input
+                    type="password"
+                    placeholder="Confirm new password"
+                    value={bPwConfirm}
+                    onChange={e => setBPwConfirm(e.target.value)}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #EDD5DB', fontSize: 13, fontFamily: 'inherit', color: '#2C1A20', background: 'white', outline: 'none', marginBottom: 12 }}
+                  />
+
+                  {bPwMsg && (
+                    <div style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      marginBottom: 14,
+                      color: bPwMsg.includes('successfully') ? '#2E7D32' : '#C47A8A',
+                    }}>
+                      {bPwMsg}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={changeBusinessPassword}
+                    style={{ background: '#C47A8A', color: 'white', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                  >
+                    Change Password
+                  </button>
+                </div>
+
+                {user?.role === 'owner' && (
+                  <div style={{ background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)', maxWidth: 480, marginTop: 20 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Create Staff User</div>
+                    <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>Add a staff member who can view orders and the dashboard.</div>
+
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Username</label>
+                    <input
+                      type="text"
+                      placeholder="Staff username"
+                      value={newStaffUser.username}
+                      onChange={e => setNewStaffUser(p => ({ ...p, username: e.target.value }))}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #EDD5DB', fontSize: 13, fontFamily: 'inherit', color: '#2C1A20', background: 'white', outline: 'none', marginBottom: 12 }}
+                    />
+
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Temporary Password</label>
+                    <input
+                      type="password"
+                      placeholder="Set a temporary password"
+                      value={newStaffUser.password}
+                      onChange={e => setNewStaffUser(p => ({ ...p, password: e.target.value }))}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #EDD5DB', fontSize: 13, fontFamily: 'inherit', color: '#2C1A20', background: 'white', outline: 'none', marginBottom: 12 }}
+                    />
+
+                    {staffCreateMsg && (
+                      <div style={{
+                        fontSize: 13, fontWeight: 600, marginBottom: 14,
+                        color: staffCreateMsg.includes('created') ? '#2E7D32' : '#C47A8A',
+                      }}>
+                        {staffCreateMsg}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={createStaffUser}
+                      style={{ background: '#C47A8A', color: 'white', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                    >
+                      Create Staff User
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
           </div>
         </div>
       </div>
     </>
   )
 }
-
-export default App
