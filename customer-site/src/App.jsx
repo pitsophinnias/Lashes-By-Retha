@@ -205,32 +205,37 @@ function App() {
 
   const renderProductCard = (product) => (
     <div className="product-card" key={product.id}>
-      {productImages[product.id] ? (
-        <img
-          src={`${API}${productImages[product.id]}`}
-          alt={product.name}
-          style={{
-            width: '100%',
-            height: '180px',
-            objectFit: 'cover',
-            borderRadius: '8px',
-            display: 'block',
-            objectPosition: productPositions[product.id]
-              ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
-              : '50% 50%',
-          }}
-        />
-      ) : (
-        <div className="product-image-placeholder">Product Image</div>
-      )}
-      {product.badge && <span className="product-badge">{product.badge}</span>}
-      <h3 className="product-name">{product.name}</h3>
-      <p className="product-description">{product.description}</p>
-      <div style={{ fontSize: '12px', color: '#9A7A82', marginBottom: '8px', fontStyle: 'italic' }}>
-        {product.detail}
+      <div style={{ height: '200px', overflow: 'hidden', position: 'relative' }}>
+        {productImages[product.id] ? (
+          <img
+            className="product-img"
+            src={`${API}${productImages[product.id]}`}
+            alt={product.name}
+            style={{
+              width: '100%',
+              height: '200px',
+              objectFit: 'cover',
+              display: 'block',
+              transition: 'transform 0.3s ease',
+              objectPosition: productPositions[product.id]
+                ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
+                : '50% 50%',
+            }}
+          />
+        ) : (
+          <div className="product-image-placeholder">Product Image</div>
+        )}
       </div>
-      <p className="product-price">R {product.price}</p>
-      <button className="btn-add-cart" onClick={() => addToCart(product)}>Add to Cart</button>
+      <div style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+        {product.badge && <span className="product-badge" style={{ marginBottom: '8px' }}>{product.badge}</span>}
+        <h3 className="product-name">{product.name}</h3>
+        <p className="product-description">{product.description}</p>
+        <div style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
+          {product.detail}
+        </div>
+        <p className="product-price">R {product.price}</p>
+        <button className="btn-add-cart add-to-cart-btn" onClick={() => addToCart(product)}>Add to Cart</button>
+      </div>
     </div>
   )
 
@@ -313,7 +318,10 @@ function App() {
         .hero {
           width: 100%;
           background: radial-gradient(ellipse at 60% 40%, #FADADD 0%, #FFFAF8 70%);
-          padding: 6rem 2rem;
+          padding-top: 6rem;
+          padding-bottom: 60px;
+          padding-left: 2rem;
+          padding-right: 2rem;
           text-align: center;
         }
 
@@ -436,17 +444,21 @@ function App() {
         }
 
         .product-card {
-          background-color: #FFFFFF;
+          background: #FFFFFF;
+          border-radius: 16px;
+          overflow: hidden;
           box-shadow: 0 2px 16px rgba(196, 122, 138, 0.10);
-          border-radius: 14px;
           border: 1px solid #F5DDE2;
-          padding: 20px;
           display: flex;
           flex-direction: column;
         }
 
+        .product-card:hover .product-img {
+          transform: scale(1.04);
+        }
+
         .product-image-placeholder {
-          height: 180px;
+          height: 200px;
           background-color: #FADADD;
           display: flex;
           align-items: center;
@@ -454,8 +466,6 @@ function App() {
           color: #C47A8A;
           font-size: 13px;
           font-style: italic;
-          border-radius: 8px;
-          margin-bottom: 14px;
         }
 
         .product-badge {
@@ -471,20 +481,23 @@ function App() {
 
         .product-name {
           font-family: 'Cormorant Garamond', serif;
-          font-weight: 600;
-          font-size: 17px;
+          font-weight: 700;
+          font-size: 18px;
+          color: #2C2C2C;
           margin-bottom: 6px;
+          line-height: 1.2;
         }
 
         .product-description {
-          font-size: 14px;
+          font-size: 13px;
           color: #7A6670;
-          line-height: 1.5;
-          margin-bottom: 12px;
+          line-height: 1.6;
+          margin-bottom: 8px;
+          flex: 1;
         }
 
         .product-price {
-          font-size: 18px;
+          font-size: 20px;
           font-weight: 700;
           color: #C47A8A;
           margin-bottom: 14px;
@@ -495,17 +508,21 @@ function App() {
           background-color: #C47A8A;
           color: #FFFFFF;
           border: none;
-          padding: 10px;
-          border-radius: 24px;
-          font-size: 14px;
-          font-weight: 600;
+          padding: 12px;
+          border-radius: 10px;
+          font-size: 13px;
+          font-weight: 700;
           cursor: pointer;
-          margin-top: auto;
-          transition: background-color 0.2s ease;
+          letter-spacing: 0.5px;
+          transition: background 0.2s;
         }
 
         .btn-add-cart:hover {
           background-color: #A8606F;
+        }
+
+        .add-to-cart-btn:hover {
+          background: #A0566A !important;
         }
 
         /* Classes */
@@ -521,11 +538,13 @@ function App() {
         .class-card {
           background-color: #FFFFFF;
           box-shadow: 0 2px 16px rgba(196, 122, 138, 0.10);
-          border-radius: 14px;
+          border-radius: 16px;
           border: 1px solid #F5DDE2;
-          padding: 24px;
+          padding: 28px;
           display: flex;
           flex-direction: column;
+          position: relative;
+          overflow: hidden;
         }
 
         .class-card-top {
@@ -537,8 +556,10 @@ function App() {
 
         .class-name {
           font-family: 'Cormorant Garamond', serif;
-          font-weight: 600;
+          font-weight: 700;
           font-size: 20px;
+          color: #2C2C2C;
+          margin-bottom: 4px;
         }
 
         .class-level-badge {
@@ -553,29 +574,31 @@ function App() {
 
         .class-duration {
           font-size: 13px;
-          color: #7A6670;
+          color: #9A8A8E;
           margin-top: 4px;
-          margin-bottom: 10px;
+          margin-bottom: 12px;
         }
 
         .class-description {
-          font-size: 14px;
-          color: #7A6670;
-          line-height: 1.5;
-          margin-bottom: 14px;
+          font-size: 13px;
+          color: #5A4A50;
+          line-height: 1.7;
+          margin-bottom: 16px;
         }
 
         .class-price {
-          font-size: 22px;
+          font-size: 24px;
           font-weight: 700;
           color: #C47A8A;
+          margin-bottom: 4px;
         }
 
         .class-seats {
-          font-size: 13px;
-          color: #7A6670;
+          font-size: 12px;
+          color: #9A8A8E;
           margin-top: 4px;
-          margin-bottom: 16px;
+          margin-bottom: 18px;
+          font-style: italic;
         }
 
         .class-certification {
@@ -590,18 +613,24 @@ function App() {
           border: 2px solid #C47A8A;
           background-color: transparent;
           color: #C47A8A;
-          padding: 10px;
-          border-radius: 24px;
-          font-size: 14px;
-          font-weight: 600;
+          padding: 12px;
+          border-radius: 10px;
+          font-size: 13px;
+          font-weight: 700;
           cursor: pointer;
+          letter-spacing: 0.5px;
           margin-top: auto;
-          transition: background-color 0.2s ease, color 0.2s ease;
+          transition: all 0.2s;
         }
 
         .btn-enquire:hover {
           background-color: #C47A8A;
           color: #FFFFFF;
+        }
+
+        .enquire-btn:hover {
+          background: #C47A8A !important;
+          color: white !important;
         }
 
         /* Gallery */
@@ -647,42 +676,25 @@ function App() {
         }
 
         /* Contact */
-        .contact-details {
-          max-width: 500px;
-          margin: 2rem auto 0 auto;
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-          font-size: 1.05rem;
-          color: #7A6670;
-        }
-
-        .contact-details a {
-          color: #C47A8A;
-          text-decoration: none;
-          font-weight: 600;
-        }
-
-        .contact-details a:hover {
-          color: #A8606F;
+        #contact {
+          padding: 72px 24px;
         }
 
         /* Footer */
         .footer {
-          background-color: #FDF0F3;
-          color: #7A6670;
+          background-color: #2C1A20;
+          color: #C4A0A8;
           text-align: center;
-          padding: 1.5rem 2rem;
+          padding: 32px 20px;
           font-size: 13px;
-          border-top: 1px solid #F5DDE2;
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 12px;
         }
 
         .social-icon-link:hover {
           background: #C47A8A !important;
+          border-color: #C47A8A !important;
         }
 
         .social-icon-link:hover svg {
@@ -693,8 +705,8 @@ function App() {
         .footer-policies-link {
           background: none;
           border: none;
-          color: #7A6670;
-          font-size: 13px;
+          color: rgba(255,255,255,0.5);
+          font-size: 12px;
           text-decoration: underline;
           cursor: pointer;
           font-family: inherit;
@@ -871,15 +883,16 @@ function App() {
           return grouped.map(group => (
             <div key={group.id} style={{ marginBottom: '48px', textAlign: 'left' }}>
               {group.name && (
-                <div style={{ marginBottom: '24px' }}>
+                <div style={{ marginBottom: '20px', paddingLeft: '8px' }}>
                   <h3 style={{
                     fontFamily: "'Cormorant Garamond', serif",
-                    fontSize: '26px',
+                    fontSize: '24px',
                     fontWeight: '700',
                     color: '#2C2C2C',
                     marginBottom: '6px',
+                    letterSpacing: '0.3px',
                   }}>{group.name}</h3>
-                  <div style={{ width: '32px', height: '2px', background: '#C47A8A' }} />
+                  <div style={{ width: '28px', height: '2px', background: '#C47A8A', marginLeft: '2px' }} />
                 </div>
               )}
               <div className="product-grid" style={{
@@ -899,6 +912,15 @@ function App() {
         <div className="classes-grid">
           {CLASSES.map((cls) => (
             <div className="class-card" key={cls.id}>
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: 80,
+                height: 80,
+                background: 'radial-gradient(circle at top right, #F7EEF0 0%, transparent 70%)',
+                pointerEvents: 'none',
+              }} />
               <div className="class-card-top">
                 <span className="class-name">{cls.name}</span>
                 <span className="class-level-badge">{cls.level}</span>
@@ -907,28 +929,28 @@ function App() {
               <p className="class-description">{cls.description}</p>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
-                  <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
                     What you will learn
                   </div>
                   {cls.learns.map((item) => (
                     <div
                       className="class-item"
                       key={item}
-                      style={{ fontSize: '13px', color: '#4A4A4A', lineHeight: 1.6, paddingLeft: '12px', position: 'relative' }}
+                      style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
                     >
                       {item}
                     </div>
                   ))}
                 </div>
                 <div>
-                  <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
                     What is included
                   </div>
                   {cls.includes.map((item) => (
                     <div
                       className="class-item"
                       key={item}
-                      style={{ fontSize: '13px', color: '#4A4A4A', lineHeight: 1.6, paddingLeft: '12px', position: 'relative' }}
+                      style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
                     >
                       {item}
                     </div>
@@ -938,7 +960,7 @@ function App() {
               <p className="class-price">R {cls.price}</p>
               <p className="class-seats">Non-refundable deposit of R{cls.deposit} to secure your spot</p>
               <a
-                className="btn-enquire"
+                className="btn-enquire enquire-btn"
                 href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -988,36 +1010,36 @@ function App() {
           ) : (
             <>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-                <div style={{ height: '220px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                <div style={{ height: '220px', background: '#F7EEF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
                 </div>
-                <div style={{ height: '260px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                <div style={{ height: '260px', background: '#EDD5DB', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
                 </div>
-                <div style={{ height: '210px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-                <div style={{ height: '280px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '240px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '270px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                <div style={{ height: '210px', background: '#F2E4E8', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-                <div style={{ height: '200px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                <div style={{ height: '280px', background: '#EDD5DB', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
                 </div>
-                <div style={{ height: '300px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                <div style={{ height: '240px', background: '#F7EEF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
                 </div>
-                <div style={{ height: '230px', background: '#FADADD', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '12px', fontStyle: 'italic', color: '#C47A8A' }}>Lash Work</span>
+                <div style={{ height: '270px', background: '#F5EDF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
+                <div style={{ height: '200px', background: '#F2E4E8', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '300px', background: '#F7EEF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
+                </div>
+                <div style={{ height: '230px', background: '#EDD5DB', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
+                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
                 </div>
               </div>
             </>
@@ -1026,18 +1048,52 @@ function App() {
       </section>
 
       <section id="contact" className="section">
-        <h2 className="section-heading">Contact Us</h2>
-        <div className="contact-details">
-          <span>125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911</span>
-          <span>+27 82 685 5399</span>
-          <span>Tuesday to Saturday, 8:00 AM to 7:00 PM</span>
-          <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer">
-            Chat on WhatsApp
-          </a>
+        <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: '48px' }}>
+            <h2 style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: '38px',
+              fontWeight: '700',
+              color: '#2C2C2C',
+              marginBottom: '8px',
+            }}>
+              Contact Us
+            </h2>
+            <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '8px auto 0 auto' }} />
+          </div>
+
+          <div style={{ background: '#FFFFFF', borderRadius: '16px', padding: '32px', boxShadow: '0 2px 16px rgba(196,122,138,0.10)', border: '1px solid #F5DDE2', maxWidth: '560px', margin: '0 auto' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '20px', display: 'block' }}>
+              Get in Touch
+            </span>
+
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Address</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Phone</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C' }}>+27 82 685 5399</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Hours</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C' }}>Tuesday to Saturday, 8:00 AM to 7:00 PM</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>WhatsApp</span>
+              <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
+                Chat with us on WhatsApp
+              </a>
+            </div>
+          </div>
         </div>
       </section>
 
       <footer className="footer">
+        <div style={{ maxWidth: '860px', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
         <div style={{ display: 'flex', gap: '16px', alignItems: 'center', justifyContent: 'center' }}>
           <a
             className="social-icon-link"
@@ -1052,9 +1108,9 @@ function App() {
               width: '40px',
               height: '40px',
               borderRadius: '50%',
-              background: '#FDF0F3',
-              border: '1px solid #F5DDE2',
-              color: '#C47A8A',
+              background: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.15)',
+              color: '#C4A0A8',
               transition: 'background 0.2s',
             }}
           >
@@ -1086,9 +1142,9 @@ function App() {
               width: '40px',
               height: '40px',
               borderRadius: '50%',
-              background: '#FDF0F3',
-              border: '1px solid #F5DDE2',
-              color: '#C47A8A',
+              background: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.15)',
+              color: '#C4A0A8',
               transition: 'background 0.2s',
             }}
           >
@@ -1109,9 +1165,9 @@ function App() {
               width: '40px',
               height: '40px',
               borderRadius: '50%',
-              background: '#FDF0F3',
-              border: '1px solid #F5DDE2',
-              color: '#C47A8A',
+              background: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.15)',
+              color: '#C4A0A8',
               transition: 'background 0.2s',
             }}
           >
@@ -1129,7 +1185,8 @@ function App() {
         >
           Policies
         </button>
-        <p>&copy; 2026 Hair By Her. All rights reserved.</p>
+        <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>&copy; 2026 Hair By Her. All rights reserved.</p>
+        </div>
       </footer>
       </>
       )}

@@ -262,41 +262,47 @@ function App() {
         @import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;600;700&display=swap');
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Lato', sans-serif; background: #F4F4F5; color: #1A1A1A; }
+        body { font-family: 'Lato', sans-serif; background: #FAF6F4; color: #1A1A1A; }
 
         /* Cards */
         .admin-card {
-          background: #FFFFFF;
-          border-radius: 10px;
-          border: 1px solid #E8E8E8;
-          padding: 16px;
+          border-radius: 12px;
+          border: none;
+          padding: 18px 20px;
           display: flex;
           align-items: center;
           gap: 16px;
           margin-bottom: 10px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+          box-shadow: 0 2px 6px rgba(44,20,28,0.07);
+          transition: box-shadow 0.15s, transform 0.15s;
+        }
+
+        .admin-card:hover {
+          box-shadow: 0 4px 14px rgba(44,20,28,0.12);
+          transform: translateY(-1px);
         }
 
         /* Card image */
         .card-img {
-          width: 80px;
-          height: 80px;
-          border-radius: 8px;
+          width: 88px;
+          height: 88px;
+          border-radius: 10px;
           background: #F4F4F5;
           flex-shrink: 0;
           display: flex;
           align-items: center;
           justify-content: center;
           font-size: 11px;
-          color: #AAAAAA;
+          color: #BBBBBB;
           font-style: italic;
           overflow: hidden;
+          border: 1px solid #EEEEEE;
         }
 
         .card-img img {
-          width: 80px;
-          height: 80px;
-          border-radius: 8px;
+          width: 88px;
+          height: 88px;
+          border-radius: 10px;
           object-fit: cover;
         }
 
@@ -305,30 +311,32 @@ function App() {
           background: #C47A8A;
           color: white;
           border: none;
-          border-radius: 6px;
-          padding: 8px 16px;
+          border-radius: 8px;
+          padding: 9px 18px;
           font-size: 13px;
           font-family: inherit;
           cursor: pointer;
           font-weight: 600;
           white-space: nowrap;
+          transition: background 0.15s;
         }
 
-        .upload-btn:hover { background: #A8606F; }
+        .upload-btn:hover { background: #A0566A; }
 
         .secondary-btn {
-          background: #F4F4F5;
-          color: #444444;
-          border: 1px solid #E0E0E0;
-          border-radius: 6px;
+          background: #F7EEF0;
+          color: #8C5A6A;
+          border: 1px solid #EDD5DB;
+          border-radius: 8px;
           padding: 8px 16px;
           font-size: 13px;
           font-family: inherit;
           cursor: pointer;
-          font-weight: 500;
+          font-weight: 600;
+          transition: background 0.15s;
         }
 
-        .secondary-btn:hover { background: #EBEBEB; }
+        .secondary-btn:hover { background: #EDD5DB; }
 
         /* Status messages */
         .success-msg {
@@ -372,12 +380,12 @@ function App() {
         }
 
         .adj-btn {
-          width: 26px;
-          height: 26px;
-          border-radius: 5px;
-          border: 1px solid #E0E0E0;
+          width: 28px;
+          height: 28px;
+          border-radius: 6px;
+          border: 1px solid #E8E8E8;
           background: #F9F9F9;
-          color: #444444;
+          color: #666666;
           font-size: 12px;
           cursor: pointer;
           display: flex;
@@ -385,9 +393,17 @@ function App() {
           justify-content: center;
           font-weight: 700;
           line-height: 1;
+          transition: all 0.15s;
         }
 
-        .adj-btn:hover { background: #C47A8A; color: white; border-color: #C47A8A; }
+        .adj-btn:hover {
+          background: #C47A8A;
+          color: white;
+          border-color: #C47A8A;
+        }
+
+        /* Order card header hover */
+        .order-card-header:hover { background: #FAFAFA !important; }
 
         .pos-label {
           font-size: 10px;
@@ -408,16 +424,16 @@ function App() {
         .category-input {
           flex: 1;
           padding: 10px 14px;
-          border-radius: 6px;
-          border: 1px solid #E0E0E0;
+          border-radius: 8px;
+          border: 1px solid #EDD5DB;
           font-size: 14px;
           font-family: inherit;
-          color: #1A1A1A;
-          background: white;
+          color: #2C1A20;
+          background: #FFFFFF;
           outline: none;
         }
 
-        .category-input:focus { border-color: #C47A8A; }
+        .category-input:focus { border-color: #C47A8A; box-shadow: 0 0 0 3px rgba(196,122,138,0.15); }
 
         /* Category list */
         .category-list {
@@ -431,46 +447,57 @@ function App() {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          background: white;
-          border: 1px solid #E8E8E8;
-          border-radius: 8px;
-          padding: 12px 16px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+          background: #F5F2EE;
+          border: none;
+          border-radius: 12px;
+          padding: 14px 18px;
+          box-shadow: 0 2px 6px rgba(44,20,28,0.06);
+          transition: box-shadow 0.15s;
+        }
+
+        .category-item:hover {
+          box-shadow: 0 4px 12px rgba(44,20,28,0.10);
         }
 
         .category-name {
           font-size: 15px;
-          font-weight: 600;
-          color: #1A1A1A;
+          font-weight: 700;
+          color: #2C1A20;
         }
 
         .category-count {
           font-size: 12px;
-          color: #AAAAAA;
-          margin-top: 2px;
+          color: #9A8A8E;
+          margin-top: 3px;
         }
 
         .delete-btn {
           background: none;
-          border: 1px solid #E0E0E0;
-          color: #AAAAAA;
+          border: 1px solid #E8E8E8;
+          color: #BBBBBB;
           border-radius: 6px;
-          padding: 6px 12px;
+          padding: 7px 14px;
           font-size: 12px;
           cursor: pointer;
           font-family: inherit;
+          font-weight: 500;
+          transition: all 0.15s;
         }
 
-        .delete-btn:hover { border-color: #E57373; color: #E57373; }
+        .delete-btn:hover {
+          border-color: #E57373;
+          color: #E57373;
+          background: #FFF5F5;
+        }
 
         /* Category select */
         .category-select {
-          border: 1px solid #E0E0E0;
-          border-radius: 6px;
-          padding: 5px 8px;
+          border: 1px solid #EDD5DB;
+          border-radius: 8px;
+          padding: 6px 10px;
           font-size: 12px;
           font-family: inherit;
-          color: #1A1A1A;
+          color: #2C1A20;
           background: white;
           cursor: pointer;
           outline: none;
@@ -482,16 +509,24 @@ function App() {
         /* Gallery grid */
         .gallery-grid-admin {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-          gap: 10px;
+          grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+          gap: 12px;
           margin-top: 16px;
         }
 
         .gallery-tile {
-          border-radius: 8px;
+          border-radius: 12px;
           overflow: hidden;
-          background: #F4F4F5;
+          background: #EDD5DB;
           aspect-ratio: 1;
+          box-shadow: 0 2px 8px rgba(44,20,28,0.08);
+          transition: box-shadow 0.15s, transform 0.15s;
+          border: none;
+        }
+
+        .gallery-tile:hover {
+          box-shadow: 0 4px 16px rgba(44,20,28,0.14);
+          transform: translateY(-1px);
         }
 
         .gallery-tile img,
@@ -504,44 +539,50 @@ function App() {
 
         /* Tab section heading */
         .section-heading {
-          font-size: 13px;
+          font-size: 11px;
           font-weight: 700;
-          color: #888888;
+          color: #8C5A6A;
           text-transform: uppercase;
-          letter-spacing: 1.2px;
+          letter-spacing: 1.5px;
           margin-bottom: 16px;
-          padding-bottom: 8px;
-          border-bottom: 1px solid #E8E8E8;
+          padding: 10px 14px;
+          background: #EDD5DB;
+          border-radius: 8px;
         }
 
         /* Dashboard stats cards */
         .stat-card {
           background: white;
-          border-radius: 10px;
-          border: 1px solid #E8E8E8;
-          padding: 20px 24px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+          border-radius: 12px;
+          border: none;
+          padding: 22px 24px;
+          box-shadow: 0 2px 8px rgba(44,20,28,0.10);
+          transition: box-shadow 0.15s, transform 0.15s;
+        }
+
+        .stat-card:hover {
+          box-shadow: 0 4px 16px rgba(44,20,28,0.15);
+          transform: translateY(-1px);
         }
 
         .stat-value {
-          font-size: 28px;
+          font-size: 30px;
           font-weight: 700;
-          color: #1A1A1A;
           line-height: 1;
-          margin-bottom: 4px;
+          margin-bottom: 6px;
+          letter-spacing: -0.5px;
         }
 
         .stat-label {
-          font-size: 12px;
-          color: #AAAAAA;
+          font-size: 11px;
           text-transform: uppercase;
-          letter-spacing: 1px;
+          letter-spacing: 1.2px;
           font-weight: 600;
         }
 
         .dashboard-grid {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1.2fr 0.8fr;
           gap: 24px;
           margin-bottom: 24px;
         }
@@ -551,20 +592,21 @@ function App() {
         }
 
         .panel {
-          background: white;
-          border-radius: 10px;
-          border: 1px solid #E8E8E8;
-          padding: 20px 24px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+          background: #FFFFFF;
+          border-radius: 12px;
+          border: none;
+          padding: 0;
+          box-shadow: 0 2px 8px rgba(44,20,28,0.08);
+          overflow: hidden;
         }
 
         .panel-heading {
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 700;
-          color: #1A1A1A;
-          margin-bottom: 16px;
-          padding-bottom: 12px;
-          border-bottom: 1px solid #F4F4F5;
+          letter-spacing: 0.3px;
+          padding: 14px 20px;
+          border-bottom: none;
+          margin-bottom: 0;
         }
 
         /* Orders table */
@@ -578,18 +620,19 @@ function App() {
           text-align: left;
           font-size: 11px;
           font-weight: 700;
-          color: #AAAAAA;
+          color: #5A4A50;
           text-transform: uppercase;
           letter-spacing: 1px;
           padding: 0 0 10px 0;
-          border-bottom: 1px solid #F4F4F5;
+          border-bottom: 1px solid #D5E8DC;
         }
 
         .orders-table td {
           padding: 10px 0;
-          border-bottom: 1px solid #F9F9F9;
-          color: #1A1A1A;
+          border-bottom: 1px solid #EEF6F1;
+          color: #2C1A20;
           vertical-align: middle;
+          font-size: 13px;
         }
 
         .orders-table tbody tr:hover { background: #FAFAFA; cursor: pointer; }
@@ -664,14 +707,12 @@ function App() {
           display: flex;
           align-items: flex-start;
           gap: 12px;
-          padding: 14px 0;
-          border-bottom: 1px solid #F4F4F5;
+          padding: 14px 24px;
+          border-bottom: 1px solid #F7EEF0;
         }
 
         .notif-item.unread {
-          background: #FAFAFA;
-          margin: 0 -24px;
-          padding: 14px 24px;
+          background: #FDF0F3;
           border-left: 3px solid #C47A8A;
         }
 
@@ -724,13 +765,13 @@ function App() {
         }
 
       `}</style>
-      <div style={{ display: 'flex', minHeight: '100vh', background: '#F4F4F5', fontFamily: "'Lato', sans-serif" }}>
+      <div style={{ display: 'flex', minHeight: '100vh', background: '#FAF6F4', fontFamily: "'Lato', sans-serif" }}>
 
         {/* SIDEBAR */}
-        <div style={{ position: 'fixed', top: 0, left: 0, width: 240, height: '100vh', background: '#1A1A1A', display: 'flex', flexDirection: 'column', zIndex: 100, overflowY: 'auto' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, width: 240, height: '100vh', background: '#2C1A20', display: 'flex', flexDirection: 'column', zIndex: 100, overflowY: 'auto' }}>
 
           {/* Logo */}
-          <div style={{ padding: '24px 20px', borderBottom: '1px solid #2E2E2E' }}>
+          <div style={{ padding: '24px 20px', borderBottom: '1px solid #3E2A30' }}>
             <img src="/logo.png" alt="Hair By Her" style={{ height: 48, width: 'auto', objectFit: 'contain', display: 'block', mixBlendMode: 'lighten' }} />
             <div style={{ fontSize: 11, color: '#888888', letterSpacing: '1.5px', textTransform: 'uppercase', marginTop: 8 }}>Admin Dashboard</div>
           </div>
@@ -755,8 +796,8 @@ function App() {
                   padding: '10px 14px',
                   borderRadius: 8,
                   border: 'none',
-                  background: activePage === item.value ? '#2E2E2E' : 'transparent',
-                  color: activePage === item.value ? '#FFFFFF' : '#AAAAAA',
+                  background: activePage === item.value ? '#3E2A30' : 'transparent',
+                  color: activePage === item.value ? '#FFFFFF' : '#C4A0A8',
                   fontSize: 14,
                   fontWeight: activePage === item.value ? 700 : 500,
                   cursor: 'pointer',
@@ -798,21 +839,21 @@ function App() {
           </nav>
 
           {/* Sidebar footer */}
-          <div style={{ padding: '16px 20px', borderTop: '1px solid #2E2E2E', fontSize: 11, color: '#666666', lineHeight: 1.6 }}>
+          <div style={{ padding: '16px 20px', borderTop: '1px solid #3E2A30', fontSize: 11, color: '#9A7A80', lineHeight: 1.6 }}>
             <div>Hair By Her</div>
             <div>082 685 5399</div>
           </div>
         </div>
 
         {/* MAIN CONTENT */}
-        <div style={{ marginLeft: 240, flex: 1, minHeight: '100vh', background: '#F4F4F5' }}>
+        <div style={{ marginLeft: 240, flex: 1, minHeight: '100vh', background: '#FAF6F4' }}>
 
           {/* Top bar */}
-          <div style={{ background: '#FFFFFF', borderBottom: '1px solid #E5E5E5', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#1A1A1A' }}>
+          <div style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF', letterSpacing: '0.3px' }}>
               {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications' }[activePage]}
             </div>
-            <div style={{ fontSize: 12, color: '#888888', background: '#F4F4F5', padding: '4px 12px', borderRadius: 20 }}>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 20, fontWeight: 600 }}>
               {activePage === 'dashboard' && 'Overview'}
               {activePage === 'products' && `${categories.length} sections`}
               {activePage === 'images' && imageTab === 'products' && '4 products'}
@@ -825,7 +866,7 @@ function App() {
           </div>
 
           {/* Content */}
-          <div style={{ padding: 32, maxWidth: 900 }}>
+          <div style={{ padding: 32, maxWidth: 1200 }}>
 
             {activePage === 'dashboard' && (() => {
               const today = new Date()
@@ -857,145 +898,209 @@ function App() {
               const totalRevenue = recentOrders.reduce((sum, o) => sum + (o.total || 0), 0)
               const totalOrders = recentOrders.length
 
+              const statCards = [
+                {
+                  label: 'Total Orders',
+                  value: totalOrders,
+                  bg: '#C47A8A',
+                  textColor: '#FFFFFF',
+                  labelColor: 'rgba(255,255,255,0.75)',
+                },
+                {
+                  label: 'Revenue',
+                  value: `R ${Number(totalRevenue).toLocaleString('en-ZA')}`,
+                  bg: '#8C5A6A',
+                  textColor: '#FFFFFF',
+                  labelColor: 'rgba(255,255,255,0.75)',
+                },
+                {
+                  label: 'Sections',
+                  value: categories.length,
+                  bg: '#7A9E8A',
+                  textColor: '#FFFFFF',
+                  labelColor: 'rgba(255,255,255,0.75)',
+                },
+                {
+                  label: 'Gallery Files',
+                  value: galleryImages.length,
+                  bg: '#C4A882',
+                  textColor: '#FFFFFF',
+                  labelColor: 'rgba(255,255,255,0.75)',
+                },
+              ]
+
               return (
                 <div>
+                  {/* Welcome banner */}
+                  <div style={{
+                    background: 'linear-gradient(135deg, #C47A8A 0%, #2C1A20 100%)',
+                    borderRadius: 14,
+                    padding: '24px 28px',
+                    marginBottom: 24,
+                    color: 'white',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Good day, Hair By Her</div>
+                      <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
+                        {new Date().toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                      </div>
+                    </div>
+                    <img src="/logo.png" alt="Hair By Her" style={{ height: 52, width: 'auto', mixBlendMode: 'lighten', opacity: 0.6 }} />
+                  </div>
+
                   {/* Stats row */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-                    {[
-                      { label: 'Total Orders', value: totalOrders },
-                      { label: 'Revenue (R)', value: `R ${totalRevenue}` },
-                      { label: 'Sections', value: categories.length },
-                      { label: 'Gallery Files', value: galleryImages.length },
-                    ].map(stat => (
-                      <div key={stat.label} className="stat-card">
-                        <div className="stat-value">{stat.value}</div>
-                        <div className="stat-label">{stat.label}</div>
+                    {statCards.map(stat => (
+                      <div
+                        key={stat.label}
+                        className="stat-card"
+                        style={{
+                          background: stat.bg,
+                        }}
+                      >
+                        <div className="stat-value" style={{ color: stat.textColor }}>
+                          {stat.value}
+                        </div>
+                        <div className="stat-label" style={{ color: stat.labelColor }}>
+                          {stat.label}
+                        </div>
                       </div>
                     ))}
                   </div>
 
                   {/* Revenue chart */}
                   <div className="panel" style={{ marginBottom: 24 }}>
-                    <div className="panel-heading">Monthly Revenue (R)</div>
-                    {revenueData.every(d => d.revenue === 0) ? (
-                      <div style={{ fontSize: 13, color: '#AAAAAA', textAlign: 'center', padding: '32px 0' }}>
-                        No order data yet. Revenue will appear here once orders are placed.
-                      </div>
-                    ) : (
-                      <ResponsiveContainer width="100%" height={220}>
-                        <BarChart data={revenueData} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#F4F4F5" vertical={false} />
-                          <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#AAAAAA' }} axisLine={false} tickLine={false} />
-                          <YAxis tick={{ fontSize: 11, fill: '#AAAAAA' }} axisLine={false} tickLine={false} />
-                          <Tooltip
-                            contentStyle={{ border: '1px solid #E8E8E8', borderRadius: 8, fontSize: 12 }}
-                            formatter={(value) => [`R ${value}`, 'Revenue']}
-                          />
-                          <Bar dataKey="revenue" radius={[4, 4, 0, 0]}>
-                            {revenueData.map((entry, index) => (
-                              <Cell
-                                key={index}
-                                fill={index === today.getMonth() ? '#C47A8A' : '#F2D0D8'}
-                              />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    )}
+                    <div className="panel-heading" style={{ background: '#C47A8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>Monthly Revenue (R)</div>
+                    <div style={{ padding: '0 20px 20px 20px' }}>
+                      {revenueData.every(d => d.revenue === 0) ? (
+                        <div style={{ fontSize: 13, color: '#AAAAAA', textAlign: 'center', padding: '32px 0' }}>
+                          No order data yet. Revenue will appear here once orders are placed.
+                        </div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height={220}>
+                          <BarChart data={revenueData} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#EDD5DB" vertical={false} />
+                            <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#5A4A50', fontWeight: 600 }} axisLine={false} tickLine={false} />
+                            <YAxis tick={{ fontSize: 11, fill: '#5A4A50', fontWeight: 600 }} axisLine={false} tickLine={false} />
+                            <Tooltip
+                              contentStyle={{ border: '1px solid #E8E8E8', borderRadius: 8, fontSize: 12 }}
+                              formatter={(value) => [`R ${Number(value).toLocaleString('en-ZA')}`, 'Revenue']}
+                            />
+                            <Bar dataKey="revenue" radius={[4, 4, 0, 0]}>
+                              {revenueData.map((entry, index) => (
+                                <Cell
+                                  key={index}
+                                  fill={index === today.getMonth() ? '#C47A8A' : '#F2D0D8'}
+                                />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      )}
+                    </div>
                   </div>
 
                   {/* Two column — recent orders + calendar */}
                   <div className="dashboard-grid">
                     {/* Recent orders */}
                     <div className="panel">
-                      <div className="panel-heading">Recent Orders</div>
-                      {recentOrders.length === 0 ? (
-                        <div style={{ fontSize: 13, color: '#AAAAAA', padding: '16px 0' }}>
-                          No orders yet.
-                        </div>
-                      ) : (
-                        <table className="orders-table">
-                          <thead>
-                            <tr>
-                              <th>Customer</th>
-                              <th>Items</th>
-                              <th>Total</th>
-                              <th>Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {recentOrders.map(order => (
-                              <tr
-                                key={order.id}
-                                onClick={() => setActivePage('orders')}
-                                style={{ cursor: 'pointer' }}
-                              >
-                                <td style={{ fontWeight: 600 }}>{order.customerName}</td>
-                                <td style={{ color: '#888888' }}>{order.items?.length || 0} item{order.items?.length !== 1 ? 's' : ''}</td>
-                                <td style={{ fontWeight: 600, color: '#C47A8A' }}>R {order.total}</td>
-                                <td>
-                                  <span className={`status-badge${order.status === 'confirmed' ? ' confirmed' : ''}`}>
-                                    {order.status || 'pending'}
-                                  </span>
-                                </td>
+                      <div className="panel-heading" style={{ background: '#7A9E8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>Recent Orders</div>
+                      <div style={{ padding: '0 20px 20px 20px' }}>
+                        {recentOrders.length === 0 ? (
+                          <div style={{ fontSize: 13, color: '#AAAAAA', padding: '16px 0' }}>
+                            No orders yet.
+                          </div>
+                        ) : (
+                          <table className="orders-table">
+                            <thead>
+                              <tr>
+                                <th>Customer</th>
+                                <th>Items</th>
+                                <th>Total</th>
+                                <th>Status</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
+                            </thead>
+                            <tbody>
+                              {recentOrders.map(order => (
+                                <tr
+                                  key={order.id}
+                                  onClick={() => setActivePage('orders')}
+                                  style={{ cursor: 'pointer' }}
+                                >
+                                  <td style={{ fontWeight: 600 }}>{order.customerName}</td>
+                                  <td style={{ color: '#888888' }}>{order.items?.length || 0} item{order.items?.length !== 1 ? 's' : ''}</td>
+                                  <td style={{ fontWeight: 600, color: '#C47A8A' }}>R {order.total}</td>
+                                  <td>
+                                    <span className={`status-badge${order.status === 'confirmed' ? ' confirmed' : ''}`}>
+                                      {order.status || 'pending'}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
                     </div>
 
                     {/* Calendar */}
                     <div className="panel">
-                      <div className="panel-heading">
+                      <div className="panel-heading" style={{ background: '#8C5A6A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
                         {monthNames[month]} {year}
-                        <span style={{ fontSize: 11, color: '#AAAAAA', fontWeight: 400, marginLeft: 8 }}>
+                        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 400, marginLeft: 8 }}>
                           Setmore bookings — coming soon
                         </span>
                       </div>
-                      <div className="calendar-grid">
-                        {dayNames.map(d => (
-                          <div key={d} className="cal-day-label">{d}</div>
-                        ))}
-                        {calDays.map((d, i) => (
-                          <div
-                            key={i}
-                            className={[
-                              'cal-day',
-                              !d.current ? 'other-month' : '',
-                              d.isToday ? 'today' : '',
-                            ].join(' ').trim()}
-                          >
-                            {d.day}
-                          </div>
-                        ))}
+                      <div style={{ padding: '0 20px 20px 20px' }}>
+                        <div className="calendar-grid">
+                          {dayNames.map(d => (
+                            <div key={d} className="cal-day-label">{d}</div>
+                          ))}
+                          {calDays.map((d, i) => (
+                            <div
+                              key={i}
+                              className={[
+                                'cal-day',
+                                !d.current ? 'other-month' : '',
+                                d.isToday ? 'today' : '',
+                              ].join(' ').trim()}
+                            >
+                              {d.day}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
 
                   {/* Recent notifications preview */}
                   <div className="panel">
-                    <div className="panel-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div className="panel-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#C4A882', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
                       <span>Recent Activity</span>
                       <button
                         onClick={() => setActivePage('notifications')}
-                        style={{ background: 'none', border: 'none', fontSize: 12, color: '#C47A8A', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
+                        style={{ background: 'none', border: 'none', fontSize: 12, color: '#FFFFFF', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
                       >
                         View all
                       </button>
                     </div>
-                    {notifications.slice(0, 4).map(n => (
-                      <div key={n.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
-                        <span className={`notif-dot${n.read ? ' read' : ''}`} style={{ marginTop: 4 }} />
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{n.title}</div>
-                          <div style={{ fontSize: 12, color: '#AAAAAA' }}>{n.message}</div>
+                    <div style={{ padding: '0 20px 20px 20px' }}>
+                      {notifications.slice(0, 4).map(n => (
+                        <div key={n.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
+                          <span className={`notif-dot${n.read ? ' read' : ''}`} style={{ marginTop: 4 }} />
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{n.title}</div>
+                            <div style={{ fontSize: 12, color: '#AAAAAA' }}>{n.message}</div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {notifications.length === 0 && (
-                      <div style={{ fontSize: 13, color: '#AAAAAA', padding: '12px 0' }}>No activity yet.</div>
-                    )}
+                      ))}
+                      {notifications.length === 0 && (
+                        <div style={{ fontSize: 13, color: '#AAAAAA', padding: '12px 0' }}>No activity yet.</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )
@@ -1003,6 +1108,22 @@ function App() {
 
             {activePage === 'products' && (
               <div>
+                <div style={{
+                  background: 'linear-gradient(135deg, #8C5A6A 0%, #C4A882 100%)',
+                  borderRadius: 14,
+                  padding: '24px 28px',
+                  marginBottom: 20,
+                  color: 'white',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Product Sections</div>
+                    <div style={{ fontSize: 13, opacity: 0.8 }}>Organise your products into sections for the shop</div>
+                  </div>
+                  <div style={{ fontSize: 40, fontWeight: 700, opacity: 0.3 }}>{categories.length}</div>
+                </div>
                 <div className="section-heading">Product Sections</div>
                 <p style={{ fontSize: 14, color: '#7A6670', marginBottom: 20, lineHeight: 1.6 }}>
                   Sections group your products on the customer-facing shop. Create a new section below or remove one you no longer need. Products can be assigned to a section from the Products tab.
@@ -1051,7 +1172,17 @@ function App() {
 
             {activePage === 'images' && (
               <div>
-                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #E8E8E8', marginBottom: 24 }}>
+                <div style={{
+                  background: 'linear-gradient(135deg, #C4A882 0%, #8C5A6A 100%)',
+                  borderRadius: 14,
+                  padding: '20px 24px',
+                  marginBottom: 20,
+                  color: 'white',
+                }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Image Management</div>
+                  <div style={{ fontSize: 13, opacity: 0.8 }}>Upload and position images for products, classes and the gallery</div>
+                </div>
+                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #EDD5DB', marginBottom: 24 }}>
                   {[
                     { label: 'Products', value: 'products' },
                     { label: 'Classes', value: 'classes' },
@@ -1067,7 +1198,7 @@ function App() {
                         fontSize: 14,
                         fontFamily: 'inherit',
                         cursor: 'pointer',
-                        color: imageTab === tab.value ? '#C47A8A' : '#888888',
+                        color: imageTab === tab.value ? '#C47A8A' : '#9A8A8E',
                         borderBottom: imageTab === tab.value ? '2px solid #C47A8A' : '2px solid transparent',
                         fontWeight: imageTab === tab.value ? 700 : 500,
                         transition: 'all 0.15s',
@@ -1081,17 +1212,21 @@ function App() {
                 {imageTab === 'products' && (
                   <div>
                     <div className="section-heading">Product Images</div>
-                    {PRODUCTS.map(p => (
-                      <div className="admin-card" key={p.id}>
+                    {PRODUCTS.map((p, index) => (
+                      <div
+                        key={p.id}
+                        className="admin-card"
+                        style={{ background: index % 2 === 0 ? '#F7EEF0' : '#F5F2F8' }}
+                      >
                         <div className="card-img" style={{ overflow: 'hidden' }}>
                           {productImages[p.id] ? (
                             <img
                               src={`${API}${productImages[p.id]}?t=${Date.now()}`}
                               alt={p.name}
                               style={{
-                                width: '80px',
-                                height: '80px',
-                                borderRadius: '8px',
+                                width: '88px',
+                                height: '88px',
+                                borderRadius: '10px',
                                 objectFit: 'cover',
                                 objectPosition: productPositions[p.id]
                                   ? `${productPositions[p.id].x}% ${productPositions[p.id].y}%`
@@ -1102,27 +1237,14 @@ function App() {
                             <span>No image</span>
                           )}
                         </div>
-                        {productImages[p.id] && (
-                          <div className="adjust-controls">
-                            <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'up')}>^</button>
-                            <div className="adjust-row">
-                              <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'left')}>&lt;</button>
-                              <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'right')}>&gt;</button>
-                            </div>
-                            <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'down')}>v</button>
-                            <div className="pos-label">
-                              {productPositions[p.id] ? `${productPositions[p.id].x}% ${productPositions[p.id].y}%` : '50% 50%'}
-                            </div>
-                          </div>
-                        )}
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: '15px', fontWeight: 700, color: '#2C2C2C', marginBottom: '2px' }}>
+                          <div style={{ fontSize: '15px', fontWeight: 700, color: '#1A1A1A', marginBottom: '3px' }}>
                             {p.name}
                           </div>
-                          <div style={{ fontSize: '12px', color: '#9A7A82', marginBottom: '2px' }}>
+                          <div style={{ fontSize: '12px', color: '#AAAAAA', marginBottom: '6px', letterSpacing: '0.2px' }}>
                             {p.detail}
                           </div>
-                          <div style={{ fontSize: '13px', color: '#C47A8A', fontWeight: 600 }}>
+                          <div style={{ fontSize: '14px', fontWeight: 700, color: '#1A1A1A', marginBottom: '8px' }}>
                             R {p.price}
                           </div>
                           {uploadStatus[`products-${p.id}`] === 'uploading' && (
@@ -1135,7 +1257,7 @@ function App() {
                             <div className="error-msg">Upload failed. Please try again.</div>
                           )}
                           <div style={{ marginTop: '8px' }}>
-                            <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            <div className="field-label" style={{ marginBottom: '4px' }}>
                               Section
                             </div>
                             <select
@@ -1150,8 +1272,8 @@ function App() {
                             </select>
                           </div>
                         </div>
-                        <div>
-                          <label htmlFor={`file-product-${p.id}`} className="upload-btn">
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px', flexShrink: 0 }}>
+                          <label htmlFor={`file-product-${p.id}`} className="upload-btn" style={{ whiteSpace: 'nowrap' }}>
                             {productImages[p.id] ? 'Replace Image' : 'Upload Image'}
                           </label>
                           <input
@@ -1160,6 +1282,19 @@ function App() {
                             accept="image/*"
                             onChange={(e) => handleUpload('products', p.id, e.target.files[0])}
                           />
+                          {productImages[p.id] && (
+                            <div className="adjust-controls">
+                              <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'up')}>^</button>
+                              <div className="adjust-row">
+                                <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'left')}>&lt;</button>
+                                <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'right')}>&gt;</button>
+                              </div>
+                              <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'down')}>v</button>
+                              <div className="pos-label">
+                                {productPositions[p.id] ? `${productPositions[p.id].x}% ${productPositions[p.id].y}%` : '50% 50%'}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1169,17 +1304,21 @@ function App() {
                 {imageTab === 'classes' && (
                   <div>
                     <div className="section-heading">Class Images</div>
-                    {CLASSES.map(c => (
-                      <div className="admin-card" key={c.id}>
+                    {CLASSES.map((c, index) => (
+                      <div
+                        key={c.id}
+                        className="admin-card"
+                        style={{ background: index % 2 === 0 ? '#F7EEF0' : '#F5F2F8' }}
+                      >
                         <div className="card-img" style={{ overflow: 'hidden' }}>
                           {classImages[c.id] ? (
                             <img
                               src={`${API}${classImages[c.id]}?t=${Date.now()}`}
                               alt={c.name}
                               style={{
-                                width: '80px',
-                                height: '80px',
-                                borderRadius: '8px',
+                                width: '88px',
+                                height: '88px',
+                                borderRadius: '10px',
                                 objectFit: 'cover',
                                 objectPosition: classPositions[c.id]
                                   ? `${classPositions[c.id].x}% ${classPositions[c.id].y}%`
@@ -1291,55 +1430,90 @@ function App() {
               </div>
             )}
 
-            {activePage === 'training' && (
-              <div style={{ background: '#FFFFFF', borderRadius: '10px', border: '1px solid #E8E8E8', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-                <div style={{ fontSize: '16px', fontWeight: 700, color: '#1A1A1A', marginBottom: '8px' }}>
-                  Lash Training Classes
-                </div>
-                <p style={{ fontSize: '14px', color: '#888888', lineHeight: 1.6 }}>
-                  Class management — including enrolment tracking and payment recording — is coming soon. For now, your three training courses are listed on the customer-facing site.
-                </p>
-                <div style={{ marginTop: '8px' }}>
-                  {CLASSES.map(c => (
+            {activePage === 'training' && (() => {
+              const accentColors = ['#C47A8A', '#8C5A6A', '#C4A882']
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <div style={{
+                    background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
+                    borderRadius: 14,
+                    padding: '28px 32px',
+                    color: 'white',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Lash Training</div>
+                      <div style={{ fontSize: 13, opacity: 0.8 }}>3 courses available on the customer-facing site</div>
+                    </div>
+                    <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.3, lineHeight: 1 }}>3</div>
+                  </div>
+                  {CLASSES.map((c, index) => (
                     <div
                       key={c.id}
                       style={{
+                        background: '#FFFFFF',
+                        borderRadius: 12,
+                        border: 'none',
+                        boxShadow: '0 2px 8px rgba(44,20,28,0.08)',
+                        overflow: 'hidden',
                         display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '12px 0',
-                        borderBottom: '1px solid #F4F4F5',
                       }}
                     >
-                      <div>
-                        <div style={{ fontSize: '14px', fontWeight: 600, color: '#1A1A1A' }}>
-                          {c.name}
+                      <div style={{ width: 4, background: accentColors[index], flexShrink: 0, alignSelf: 'stretch' }} />
+                      <div style={{ padding: '18px 20px', flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
+                            {c.name}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                            {c.duration}
+                          </div>
                         </div>
-                        <div style={{ fontSize: '12px', color: '#AAAAAA', marginTop: '2px' }}>
-                          {c.duration}
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#C47A8A' }}>
+                          R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
                         </div>
-                      </div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#C47A8A' }}>
-                        R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              )
+            })()}
 
             {activePage === 'orders' && (
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <div style={{
+                  background: 'linear-gradient(135deg, #7A9E8A 0%, #4A7A62 100%)',
+                  borderRadius: 14,
+                  padding: '20px 24px',
+                  marginBottom: 20,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}>
                   <div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A' }}>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: 'white', marginBottom: 4 }}>
                       {orders.length} order{orders.length !== 1 ? 's' : ''}
                     </div>
-                    <div style={{ fontSize: 12, color: '#AAAAAA', marginTop: 2 }}>
+                    <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
                       Click an order to expand details
                     </div>
                   </div>
-                  <button className="secondary-btn" onClick={fetchOrders}>
+                  <button
+                    onClick={fetchOrders}
+                    style={{
+                      background: 'rgba(255,255,255,0.15)',
+                      border: '1px solid rgba(255,255,255,0.3)',
+                      color: 'white',
+                      borderRadius: 8,
+                      padding: '8px 16px',
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontWeight: 600,
+                    }}
+                  >
                     Refresh
                   </button>
                 </div>
@@ -1349,96 +1523,153 @@ function App() {
                 )}
 
                 {!ordersLoading && orders.length === 0 && (
-                  <div className="panel" style={{ fontSize: 13, color: '#AAAAAA' }}>
+                  <div className="panel" style={{ fontSize: 13, color: '#AAAAAA', padding: '20px 24px' }}>
                     No orders yet. When customers place orders on the website they will appear here.
                   </div>
                 )}
 
                 {!ordersLoading && orders.map(order => (
-                  <div key={order.id} className="panel" style={{ marginBottom: 12, padding: 0, overflow: 'hidden' }}>
+                  <div
+                    key={order.id}
+                    className="panel"
+                    style={{
+                      background: order.status === 'confirmed' ? '#F0F5F2' : '#FDF0F3',
+                      border: 'none',
+                      marginBottom: 12,
+                      padding: 0,
+                      overflow: 'hidden',
+                      borderRadius: 12,
+                      boxShadow: '0 2px 8px rgba(44,20,28,0.08)',
+                    }}
+                  >
 
                     {/* Order header */}
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '16px 20px',
-                      borderBottom: order.expanded ? '1px solid #F4F4F5' : 'none',
-                      cursor: 'pointer',
-                      background: order.expanded ? '#FAFAFA' : 'white',
-                    }}
+                    <div
+                      className="order-card-header"
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '18px 24px',
+                        borderBottom: order.expanded ? '1px solid #F4F4F5' : 'none',
+                        cursor: 'pointer',
+                        background: order.expanded ? '#FAFAFA' : 'white',
+                        transition: 'background 0.15s',
+                      }}
                       onClick={() => setOrders(prev => prev.map(o =>
                         o.id === order.id ? { ...o, expanded: !o.expanded } : o
                       ))}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                         <div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: '#1A1A1A' }}>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A', marginBottom: 4 }}>
                             {order.customerName}
                           </div>
-                          <div style={{ fontSize: 12, color: '#AAAAAA', marginTop: 2 }}>
-                            {order.customerPhone} · {new Date(order.createdAt).toLocaleDateString('en-ZA', {
-                              day: 'numeric', month: 'short', year: 'numeric',
-                              hour: '2-digit', minute: '2-digit'
-                            })}
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                            <span style={{ fontSize: 12, color: '#AAAAAA' }}>{order.customerPhone}</span>
+                            <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#DDDDDD', display: 'inline-block' }} />
+                            <span style={{ fontSize: 12, color: '#AAAAAA' }}>
+                              {new Date(order.createdAt).toLocaleDateString('en-ZA', {
+                                day: 'numeric', month: 'short', year: 'numeric',
+                                hour: '2-digit', minute: '2-digit'
+                              })}
+                            </span>
                           </div>
                         </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: '#C47A8A' }}>R {order.total}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#1A1A1A' }}>R {order.total}</div>
                         <span className={`status-badge${order.status === 'confirmed' ? ' confirmed' : ''}`}>
                           {order.status || 'pending'}
                         </span>
-                        <div style={{ fontSize: 12, color: '#CCCCCC' }}>{order.expanded ? 'v' : '>'}</div>
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{
+                            transition: 'transform 0.2s ease',
+                            transform: order.expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                            color: '#AAAAAA',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <polyline points="9 18 15 12 9 6" />
+                        </svg>
                       </div>
                     </div>
 
                     {/* Expanded order details */}
                     {order.expanded && (
-                      <div style={{ padding: '16px 20px' }}>
+                      <div style={{
+                        padding: '20px 24px',
+                        background: order.status === 'confirmed' ? '#E8F2EC' : '#F7EEF0',
+                        borderTop: `1px solid ${order.status === 'confirmed' ? '#C8E0D0' : '#EDD5DB'}`,
+                      }}>
 
                         {/* Items list */}
                         <div style={{ marginBottom: 16 }}>
-                          <div className="field-label" style={{ marginBottom: 8 }}>Items Ordered</div>
+                          <div className="field-label" style={{ marginBottom: 10 }}>Items Ordered</div>
                           {order.items?.map((item, i) => (
                             <div key={i} style={{
                               display: 'flex',
                               justifyContent: 'space-between',
                               alignItems: 'center',
-                              padding: '8px 0',
-                              borderBottom: '1px solid #F9F9F9',
-                              fontSize: 13,
+                              padding: '10px 0',
+                              borderBottom: '1px solid #F0F0F0',
                             }}>
                               <div>
-                                <span style={{ fontWeight: 600, color: '#1A1A1A' }}>{item.name}</span>
-                                <span style={{ color: '#AAAAAA', marginLeft: 8 }}>x{item.qty}</span>
+                                <span style={{ fontSize: 14, fontWeight: 600, color: '#1A1A1A' }}>{item.name}</span>
+                                <span style={{
+                                  display: 'inline-block',
+                                  marginLeft: 8,
+                                  background: '#F0F0F0',
+                                  color: '#888888',
+                                  borderRadius: 10,
+                                  padding: '2px 8px',
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                }}>
+                                  x{item.qty}
+                                </span>
                               </div>
-                              <span style={{ color: '#C47A8A', fontWeight: 600 }}>R {item.price * item.qty}</span>
+                              <span style={{ fontSize: 14, fontWeight: 600, color: '#1A1A1A' }}>R {item.price * item.qty}</span>
                             </div>
                           ))}
                           <div style={{
                             display: 'flex',
                             justifyContent: 'space-between',
-                            padding: '10px 0 0 0',
-                            fontSize: 14,
-                            fontWeight: 700,
+                            alignItems: 'center',
+                            padding: '14px 0 0 0',
+                            borderTop: '2px solid #E8E8E8',
+                            marginTop: 4,
                           }}>
-                            <span>Total</span>
-                            <span style={{ color: '#C47A8A' }}>R {order.total}</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: '#1A1A1A', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                              Order Total
+                            </span>
+                            <span style={{ fontSize: 18, fontWeight: 700, color: '#1A1A1A' }}>R {order.total}</span>
                           </div>
                         </div>
 
                         {/* Customer details */}
-                        <div style={{ marginBottom: 16 }}>
-                          <div className="field-label" style={{ marginBottom: 8 }}>Customer Details</div>
-                          <div style={{ fontSize: 13, color: '#444444', lineHeight: 1.8 }}>
-                            <div>Name: <strong>{order.customerName}</strong></div>
-                            <div>WhatsApp: <strong>{order.customerPhone}</strong></div>
+                        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #F0F0F0' }}>
+                          <div className="field-label" style={{ marginBottom: 10 }}>Customer</div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Name</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{order.customerName}</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>WhatsApp</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{order.customerPhone}</span>
                           </div>
                         </div>
 
                         {/* Actions */}
-                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #F0F0F0', display: 'flex', gap: 10, alignItems: 'center' }}>
                           {order.status !== 'confirmed' && (
                             <button
                               className="upload-btn"
@@ -1465,7 +1696,19 @@ function App() {
                             WhatsApp Customer
                           </a>
                           {order.status === 'confirmed' && (
-                            <div style={{ fontSize: 13, color: '#4CAF50', fontWeight: 600 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#4CAF50', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="#4CAF50"
+                                strokeWidth="2.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <polyline points="20 6 9 12 4 16" />
+                              </svg>
                               Payment confirmed
                             </div>
                           )}
@@ -1496,17 +1739,38 @@ function App() {
               return (
                 <div>
                   {/* Header row */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                  <div style={{
+                    background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
+                    borderRadius: 14,
+                    padding: '20px 24px',
+                    marginBottom: 20,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}>
                     <div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A' }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: 'white', marginBottom: 4 }}>
                         {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
                       </div>
-                      <div style={{ fontSize: 12, color: '#AAAAAA', marginTop: 2 }}>
+                      <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
                         Notifications auto-archive after 7 days
                       </div>
                     </div>
                     {unreadCount > 0 && notifTab !== 'archive' && (
-                      <button className="secondary-btn" onClick={markAllRead}>
+                      <button
+                        onClick={markAllRead}
+                        style={{
+                          background: 'rgba(255,255,255,0.15)',
+                          border: '1px solid rgba(255,255,255,0.3)',
+                          color: 'white',
+                          borderRadius: 8,
+                          padding: '8px 16px',
+                          fontSize: 13,
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                          fontWeight: 600,
+                        }}
+                      >
                         Mark all as read
                       </button>
                     )}
