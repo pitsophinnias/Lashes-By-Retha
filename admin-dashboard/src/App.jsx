@@ -4,16 +4,40 @@ import {
 } from 'recharts'
 
 const PRODUCTS = [
-  { id: 1, name: 'Classic Lash Trays', detail: 'Diameter: 0.15 | Curl: D', price: 130 },
-  { id: 2, name: 'YY Lash Trays', detail: 'Diameter: 0.07 | Curl: D', price: 150 },
-  { id: 3, name: 'Volume Lash Trays', detail: 'Diameter: 0.05 | Curl: Cc & D', price: 150 },
-  { id: 4, name: 'Lash Shampoo and Cleansing Brush Combo', detail: 'Recommended for daily use', price: 100 },
+  { id: 1, name: 'Classic Lash Trays', detail: 'Diameter: 0.15 | Curl: D', price: 130, description: 'Professional classic lash trays for individual lash extensions. Perfect for creating a natural, elegant look.' },
+  { id: 2, name: 'YY Lash Trays', detail: 'Diameter: 0.07 | Curl: D', price: 150, description: 'YY lash trays designed for a wispy, textured finish. Ideal for creating that effortlessly full look.' },
+  { id: 3, name: 'Volume Lash Trays', detail: 'Diameter: 0.05 | Curl: Cc & D', price: 150, description: 'Ultra-fine volume lash trays for handmade fans and Russian volume sets. Available in two curl options.' },
+  { id: 4, name: 'Lash Shampoo and Cleansing Brush Combo', detail: 'Recommended for daily use', price: 100, description: 'Keep your lash extensions clean and fresh with our gentle foaming lash shampoo paired with a soft cleansing brush.' },
 ]
 
 const CLASSES = [
-  { id: 1, name: 'Classic Individual Lash Training', duration: '1-day course', price: 2500 },
-  { id: 2, name: 'Classic Individual Lash Training', duration: '2-day course', price: 4000 },
-  { id: 3, name: 'Advanced Individual Lash Training', duration: '4-day intensive course', price: 6000 },
+  {
+    id: 1,
+    name: 'Classic Individual Lash Training',
+    duration: '1-day course',
+    price: 2500,
+    description: 'Unlock the art of effortless elegance with our Classic Lash training. A comprehensive 1-day course designed to give you everything you need to start your lash journey.',
+    learns: ['Classic lash training', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
+  },
+  {
+    id: 2,
+    name: 'Classic Individual Lash Training',
+    duration: '2-day course',
+    price: 4000,
+    description: 'Our comprehensive 2-day Classic Lash course gives you more time to practise and perfect your technique before you start working with clients.',
+    learns: ['Classic lash training', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
+  },
+  {
+    id: 3,
+    name: 'Advanced Individual Lash Training',
+    duration: '4-day intensive course',
+    price: 6000,
+    description: 'Take your lash skills to the next level with our intensive 4-day Advanced course. Covering classic, hybrid and volume techniques, this course is designed to make you a well-rounded lash professional.',
+    learns: ['Classic, hybrid and volume lash', 'Fan making', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
+  },
 ]
 
 const API = 'http://localhost:3002'
@@ -39,6 +63,22 @@ function App() {
   const [notifTab, setNotifTab] = useState('all')
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(false)
+
+  const [selectedSection, setSelectedSection] = useState(null)
+  // selectedSection shape: { id, name } or null
+
+  const [selectedClass, setSelectedClass] = useState(null)
+  // selectedClass shape: the full class object from CLASSES or null
+
+  const [classStudents, setClassStudents] = useState([])
+  const [studentsLoading, setStudentsLoading] = useState(false)
+  const [showAddStudent, setShowAddStudent] = useState(false)
+  const [newStudent, setNewStudent] = useState({ name: '', whatsapp: '', payment_status: 'unpaid', notes: '' })
+  const [studentSaving, setStudentSaving] = useState(false)
+
+  const [productOverrides, setProductOverrides] = useState({})
+  const [editingProduct, setEditingProduct] = useState(null)
+  // editingProduct shape: { id, name, price, description } or null
 
   const fetchOrders = async () => {
     setOrdersLoading(true)
@@ -118,6 +158,11 @@ function App() {
     fetch(`${API}/api/notifications/archived`)
       .then(r => r.json())
       .then(data => setArchivedNotifications(data))
+      .catch(() => {})
+    // Fetch product overrides
+    fetch(`${API}/api/products/overrides`)
+      .then(r => r.json())
+      .then(data => setProductOverrides(data))
       .catch(() => {})
     fetchOrders()
   }, [])
@@ -253,6 +298,88 @@ function App() {
     try {
       await fetch(`${API}/api/orders/${id}/confirm`, { method: 'PATCH' })
       setOrders(prev => prev.map(o => o.id === id ? { ...o, status: 'confirmed' } : o))
+    } catch {}
+  }
+
+  const openClass = async (cls) => {
+    setSelectedClass(cls)
+    setStudentsLoading(true)
+    setClassStudents([])
+    setShowAddStudent(false)
+    try {
+      const res = await fetch(`${API}/api/classes/${cls.id}/students`)
+      const data = await res.json()
+      setClassStudents(data)
+    } catch {}
+    finally { setStudentsLoading(false) }
+  }
+
+  const addStudent = async () => {
+    if (!newStudent.name.trim() || !newStudent.whatsapp.trim()) return
+    setStudentSaving(true)
+    try {
+      const res = await fetch(`${API}/api/classes/${selectedClass.id}/students`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newStudent),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setClassStudents(prev => [data, ...prev])
+        setNewStudent({ name: '', whatsapp: '', payment_status: 'unpaid', notes: '' })
+        setShowAddStudent(false)
+      }
+    } catch {}
+    finally { setStudentSaving(false) }
+  }
+
+  const updateStudentPayment = async (studentId, payment_status) => {
+    try {
+      const res = await fetch(`${API}/api/classes/${selectedClass.id}/students/${studentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_status }),
+      })
+      if (res.ok) {
+        setClassStudents(prev => prev.map(s =>
+          s.id === studentId ? { ...s, payment_status } : s
+        ))
+      }
+    } catch {}
+  }
+
+  const removeStudent = async (studentId) => {
+    if (!window.confirm('Remove this student from the class?')) return
+    try {
+      await fetch(`${API}/api/classes/${selectedClass.id}/students/${studentId}`, {
+        method: 'DELETE'
+      })
+      setClassStudents(prev => prev.filter(s => s.id !== studentId))
+    } catch {}
+  }
+
+  const saveProductEdit = async () => {
+    if (!editingProduct) return
+    try {
+      await fetch(`${API}/api/products/${editingProduct.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editingProduct.name,
+          price: parseFloat(editingProduct.price),
+          description: editingProduct.description,
+        }),
+      })
+      setProductOverrides(prev => ({
+        ...prev,
+        [editingProduct.id]: {
+          product_id: editingProduct.id,
+          name: editingProduct.name,
+          price: editingProduct.price,
+          description: editingProduct.description,
+        }
+      }))
+      setEditingProduct(null)
     } catch {}
   }
 
@@ -764,6 +891,101 @@ function App() {
           margin-top: 3px;
         }
 
+        .back-btn {
+          background: none;
+          border: none;
+          color: #C47A8A;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          font-family: inherit;
+          padding: 0;
+          margin-bottom: 20px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          letter-spacing: 0.3px;
+        }
+
+        .back-btn:hover { color: #A0566A; }
+
+        .student-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 14px 0;
+          border-bottom: 1px solid #F7EEF0;
+          gap: 12px;
+        }
+
+        .student-row:last-child { border-bottom: none; }
+
+        .payment-badge {
+          display: inline-block;
+          padding: 3px 10px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .payment-paid { background: #E8F5E9; color: #2E7D32; }
+        .payment-partial { background: #FFF3E0; color: #E65100; }
+        .payment-unpaid { background: #FDE8EC; color: #C47A8A; }
+
+        .edit-input {
+          width: 100%;
+          padding: 9px 12px;
+          border-radius: 8px;
+          border: 1px solid #EDD5DB;
+          font-size: 13px;
+          font-family: inherit;
+          color: #2C1A20;
+          background: white;
+          outline: none;
+          margin-bottom: 10px;
+        }
+
+        .edit-input:focus { border-color: #C47A8A; }
+
+        .scope-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          margin-bottom: 20px;
+        }
+
+        .scope-card {
+          background: #F7EEF0;
+          border-radius: 10px;
+          padding: 16px;
+        }
+
+        .scope-card-title {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 1.5px;
+          color: #C47A8A;
+          text-transform: uppercase;
+          margin-bottom: 10px;
+        }
+
+        .scope-item {
+          font-size: 13px;
+          color: #5A4A50;
+          line-height: 1.8;
+          padding-left: 10px;
+          position: relative;
+        }
+
+        .scope-item::before {
+          content: '-';
+          position: absolute;
+          left: 0;
+          color: #C47A8A;
+        }
+
       `}</style>
       <div style={{ display: 'flex', minHeight: '100vh', background: '#FAF6F4', fontFamily: "'Lato', sans-serif" }}>
 
@@ -1108,65 +1330,194 @@ function App() {
 
             {activePage === 'products' && (
               <div>
-                <div style={{
-                  background: 'linear-gradient(135deg, #8C5A6A 0%, #C4A882 100%)',
-                  borderRadius: 14,
-                  padding: '24px 28px',
-                  marginBottom: 20,
-                  color: 'white',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}>
-                  <div>
-                    <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Product Sections</div>
-                    <div style={{ fontSize: 13, opacity: 0.8 }}>Organise your products into sections for the shop</div>
-                  </div>
-                  <div style={{ fontSize: 40, fontWeight: 700, opacity: 0.3 }}>{categories.length}</div>
-                </div>
-                <div className="section-heading">Product Sections</div>
-                <p style={{ fontSize: 14, color: '#7A6670', marginBottom: 20, lineHeight: 1.6 }}>
-                  Sections group your products on the customer-facing shop. Create a new section below or remove one you no longer need. Products can be assigned to a section from the Products tab.
-                </p>
-
-                <div className="category-input-row">
-                  <input
-                    className="category-input"
-                    type="text"
-                    placeholder="New section name, e.g. Wigs"
-                    value={newCategoryName}
-                    onChange={e => setNewCategoryName(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && createCategory()}
-                  />
-                  <button className="upload-btn" onClick={createCategory}>Add Section</button>
-                </div>
-
-                {categoryStatus && (
-                  <div className={categoryStatus.type === 'success' ? 'success-msg' : 'error-msg'}
-                       style={{ marginBottom: 16 }}>
-                    {categoryStatus.message}
-                  </div>
-                )}
-
-                <div className="category-list">
-                  {categories.length === 0 && (
-                    <p style={{ fontSize: 14, color: '#9A7A82' }}>No sections yet. Add one above.</p>
-                  )}
-                  {categories.map(c => {
-                    const count = Object.values(productCategories).filter(id => id === c.id).length
-                    return (
-                      <div key={c.id} className="category-item">
-                        <div>
-                          <div className="category-name">{c.name}</div>
-                          <div className="category-count">{count} product{count !== 1 ? 's' : ''}</div>
-                        </div>
-                        <button className="delete-btn" onClick={() => deleteCategory(c.id, c.name)}>
-                          Remove
-                        </button>
+                {selectedSection === null ? (
+                  <>
+                    <div style={{
+                      background: 'linear-gradient(135deg, #8C5A6A 0%, #C4A882 100%)',
+                      borderRadius: 14,
+                      padding: '24px 28px',
+                      marginBottom: 20,
+                      color: 'white',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Product Sections</div>
+                        <div style={{ fontSize: 13, opacity: 0.8 }}>Organise your products into sections for the shop</div>
                       </div>
-                    )
-                  })}
-                </div>
+                      <div style={{ fontSize: 40, fontWeight: 700, opacity: 0.3 }}>{categories.length}</div>
+                    </div>
+                    <div className="section-heading">Product Sections</div>
+                    <p style={{ fontSize: 14, color: '#7A6670', marginBottom: 20, lineHeight: 1.6 }}>
+                      Sections group your products on the customer-facing shop. Create a new section below or remove one you no longer need. Products can be assigned to a section from the Products tab.
+                    </p>
+
+                    <div className="category-input-row">
+                      <input
+                        className="category-input"
+                        type="text"
+                        placeholder="New section name, e.g. Wigs"
+                        value={newCategoryName}
+                        onChange={e => setNewCategoryName(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && createCategory()}
+                      />
+                      <button className="upload-btn" onClick={createCategory}>Add Section</button>
+                    </div>
+
+                    {categoryStatus && (
+                      <div className={categoryStatus.type === 'success' ? 'success-msg' : 'error-msg'}
+                           style={{ marginBottom: 16 }}>
+                        {categoryStatus.message}
+                      </div>
+                    )}
+
+                    <div className="category-list">
+                      {categories.length === 0 && (
+                        <p style={{ fontSize: 14, color: '#9A7A82' }}>No sections yet. Add one above.</p>
+                      )}
+                      {categories.map(c => {
+                        const count = Object.values(productCategories).filter(id => id === c.id).length
+                        return (
+                          <div
+                            key={c.id}
+                            className="category-item"
+                            onClick={() => setSelectedSection({ id: c.id, name: c.name })}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <div>
+                              <div className="category-name">{c.name}</div>
+                              <div className="category-count">{count} product{count !== 1 ? 's' : ''}</div>
+                            </div>
+                            <button
+                              className="delete-btn"
+                              onClick={(e) => { e.stopPropagation(); deleteCategory(c.id, c.name) }}
+                            >
+                              Remove
+                            </button>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C4A0A8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 8, flexShrink: 0 }}>
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </>
+                ) : (() => {
+                  const sectionProducts = PRODUCTS.filter(p => productCategories[p.id] === selectedSection.id)
+                  return (
+                    <>
+                      <button className="back-btn" onClick={() => setSelectedSection(null)}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                        Back to Sections
+                      </button>
+
+                      <div style={{
+                        background: 'linear-gradient(135deg, #8C5A6A 0%, #C4A882 100%)',
+                        borderRadius: 14,
+                        padding: '24px 28px',
+                        marginBottom: 20,
+                        color: 'white',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}>
+                        <div>
+                          <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.7, textTransform: 'uppercase', marginBottom: 6 }}>Section</div>
+                          <div style={{ fontSize: 22, fontWeight: 700 }}>{selectedSection.name}</div>
+                        </div>
+                        <div style={{ fontSize: 40, fontWeight: 700, opacity: 0.2 }}>{selectedSection.name}</div>
+                      </div>
+
+                      {sectionProducts.length === 0 ? (
+                        <div className="panel" style={{ fontSize: 13, color: '#9A8A8E', padding: 24 }}>
+                          No products in this section yet. Assign products from the Image Management tab.
+                        </div>
+                      ) : (
+                        sectionProducts.map(p => (
+                          <div key={p.id} className="admin-card" style={{ background: '#FFFFFF' }}>
+                            <div className="card-img" style={{ overflow: 'hidden' }}>
+                              {productImages[p.id] ? (
+                                <img
+                                  src={`${API}${productImages[p.id]}?t=${Date.now()}`}
+                                  alt={p.name}
+                                  style={{
+                                    width: '88px',
+                                    height: '88px',
+                                    borderRadius: '10px',
+                                    objectFit: 'cover',
+                                    objectPosition: productPositions[p.id]
+                                      ? `${productPositions[p.id].x}% ${productPositions[p.id].y}%`
+                                      : '50% 50%',
+                                  }}
+                                />
+                              ) : (
+                                <span>No image</span>
+                              )}
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              {editingProduct?.id !== p.id ? (
+                                <>
+                                  <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
+                                    {productOverrides[p.id]?.name || p.name}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: '#7A6670', lineHeight: 1.5, marginBottom: 6 }}>
+                                    {productOverrides[p.id]?.description || p.description}
+                                  </div>
+                                  <div style={{ fontSize: 14, fontWeight: 700, color: '#C47A8A' }}>
+                                    R {productOverrides[p.id]?.price || p.price}
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <input
+                                    className="edit-input"
+                                    value={editingProduct.name}
+                                    onChange={e => setEditingProduct(prev => ({ ...prev, name: e.target.value }))}
+                                  />
+                                  <textarea
+                                    className="edit-input"
+                                    value={editingProduct.description}
+                                    onChange={e => setEditingProduct(prev => ({ ...prev, description: e.target.value }))}
+                                    rows={3}
+                                    style={{ resize: 'vertical' }}
+                                  />
+                                  <input
+                                    className="edit-input"
+                                    type="number"
+                                    value={editingProduct.price}
+                                    onChange={e => setEditingProduct(prev => ({ ...prev, price: e.target.value }))}
+                                    placeholder="Price (R)"
+                                  />
+                                </>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+                              {editingProduct?.id !== p.id ? (
+                                <button
+                                  className="secondary-btn"
+                                  onClick={() => setEditingProduct({
+                                    id: p.id,
+                                    name: productOverrides[p.id]?.name || p.name,
+                                    price: productOverrides[p.id]?.price || p.price,
+                                    description: productOverrides[p.id]?.description || p.description,
+                                  })}
+                                >
+                                  Edit
+                                </button>
+                              ) : (
+                                <>
+                                  <button className="upload-btn" onClick={saveProductEdit}>Save</button>
+                                  <button className="secondary-btn" onClick={() => setEditingProduct(null)}>Cancel</button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             )}
 
@@ -1431,52 +1782,209 @@ function App() {
             )}
 
             {activePage === 'training' && (() => {
-              const accentColors = ['#C47A8A', '#8C5A6A', '#C4A882']
+              if (selectedClass === null) {
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div style={{
+                      background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
+                      borderRadius: 14,
+                      padding: '28px 32px',
+                      color: 'white',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Lash Training</div>
+                        <div style={{ fontSize: 13, opacity: 0.8 }}>3 courses available on the customer-facing site</div>
+                      </div>
+                      <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.3, lineHeight: 1 }}>3</div>
+                    </div>
+                    {CLASSES.map((c) => (
+                      <div
+                        key={c.id}
+                        onClick={() => openClass(c)}
+                        style={{
+                          background: '#FFFFFF',
+                          borderRadius: 12,
+                          border: 'none',
+                          boxShadow: '0 2px 8px rgba(44,20,28,0.08)',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ padding: '18px 20px', flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
+                              {c.name}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                              {c.duration}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: '#C47A8A' }}>
+                              R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
+                            </div>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C4A0A8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 8, flexShrink: 0 }}>
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              }
+
               return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div>
+                  <button className="back-btn" onClick={() => { setSelectedClass(null); setClassStudents([]) }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                    Back to Classes
+                  </button>
+
                   <div style={{
                     background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
                     borderRadius: 14,
-                    padding: '28px 32px',
+                    padding: '24px 28px',
+                    marginBottom: 20,
                     color: 'white',
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
                   }}>
                     <div>
-                      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Lash Training</div>
-                      <div style={{ fontSize: 13, opacity: 0.8 }}>3 courses available on the customer-facing site</div>
+                      <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.7, textTransform: 'uppercase', marginBottom: 6 }}>{selectedClass.duration}</div>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{selectedClass.name}</div>
+                      <div style={{ fontSize: 15, opacity: 0.8, marginTop: 4 }}>R {selectedClass.price}</div>
                     </div>
-                    <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.3, lineHeight: 1 }}>3</div>
+                    <div style={{ fontSize: 40, fontWeight: 700, opacity: 0.2 }}>R{selectedClass.price}</div>
                   </div>
-                  {CLASSES.map((c, index) => (
-                    <div
-                      key={c.id}
-                      style={{
-                        background: '#FFFFFF',
-                        borderRadius: 12,
-                        border: 'none',
-                        boxShadow: '0 2px 8px rgba(44,20,28,0.08)',
-                        overflow: 'hidden',
-                        display: 'flex',
-                      }}
-                    >
-                      <div style={{ width: 4, background: accentColors[index], flexShrink: 0, alignSelf: 'stretch' }} />
-                      <div style={{ padding: '18px 20px', flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
-                            {c.name}
-                          </div>
-                          <div style={{ fontSize: 12, color: '#9A8A8E' }}>
-                            {c.duration}
-                          </div>
-                        </div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: '#C47A8A' }}>
-                          R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
-                        </div>
+
+                  <div className="panel" style={{ marginBottom: 20, padding: 20 }}>
+                    <div className="panel-heading" style={{ background: '#EDD5DB', color: '#2C1A20', borderRadius: '10px 10px 0 0', padding: '12px 20px', margin: '-20px -20px 16px -20px' }}>
+                      Course Scope
+                    </div>
+
+                    <div className="scope-grid">
+                      <div className="scope-card">
+                        <div className="scope-card-title">What You Will Learn</div>
+                        {selectedClass.learns.map((item, i) => (
+                          <div key={i} className="scope-item">{item}</div>
+                        ))}
+                      </div>
+                      <div className="scope-card">
+                        <div className="scope-card-title">What Is Included</div>
+                        {selectedClass.includes.map((item, i) => (
+                          <div key={i} className="scope-item">{item}</div>
+                        ))}
                       </div>
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#EDD5DB', padding: '12px 20px', color: '#2C1A20' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>Students</div>
+                      <div style={{ fontSize: 11, color: '#8C5A6A', fontWeight: 600 }}>{classStudents.length} enrolled</div>
+                    </div>
+
+                    <div style={{ padding: '16px 20px', borderBottom: '1px solid #F7EEF0' }}>
+                      <button className="upload-btn" onClick={() => setShowAddStudent(prev => !prev)}>
+                        {showAddStudent ? 'Cancel' : 'Add Student'}
+                      </button>
+                    </div>
+
+                    {showAddStudent && (
+                      <div style={{ padding: '16px 20px', background: '#FAF6F4', borderBottom: '1px solid #F7EEF0' }}>
+                        <input
+                          className="edit-input"
+                          placeholder="Student name"
+                          value={newStudent.name}
+                          onChange={e => setNewStudent(prev => ({ ...prev, name: e.target.value }))}
+                        />
+                        <input
+                          className="edit-input"
+                          placeholder="WhatsApp number"
+                          value={newStudent.whatsapp}
+                          onChange={e => setNewStudent(prev => ({ ...prev, whatsapp: e.target.value }))}
+                        />
+                        <select
+                          className="category-select"
+                          style={{ width: '100%', marginBottom: 10, padding: '9px 12px' }}
+                          value={newStudent.payment_status}
+                          onChange={e => setNewStudent(prev => ({ ...prev, payment_status: e.target.value }))}
+                        >
+                          <option value="unpaid">Unpaid</option>
+                          <option value="partial">Partially Paid</option>
+                          <option value="paid">Paid</option>
+                        </select>
+                        <input
+                          className="edit-input"
+                          placeholder="Notes (optional)"
+                          value={newStudent.notes}
+                          onChange={e => setNewStudent(prev => ({ ...prev, notes: e.target.value }))}
+                        />
+                        <button className="upload-btn" onClick={addStudent} disabled={studentSaving}>
+                          {studentSaving ? 'Saving...' : 'Save Student'}
+                        </button>
+                      </div>
+                    )}
+
+                    <div style={{ padding: '0 20px' }}>
+                      {studentsLoading && (
+                        <div style={{ padding: 20, fontSize: 13, color: '#9A8A8E' }}>Loading students...</div>
+                      )}
+                      {!studentsLoading && classStudents.length === 0 && (
+                        <div style={{ padding: '24px 0', fontSize: 13, color: '#9A8A8E', textAlign: 'center' }}>
+                          No students enrolled yet.
+                        </div>
+                      )}
+                      {!studentsLoading && classStudents.map(student => (
+                        <div key={student.id} className="student-row">
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
+                              {student.name}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                              {student.whatsapp}
+                            </div>
+                            {student.notes && (
+                              <div style={{ fontSize: 11, color: '#C4A0A8', fontStyle: 'italic', marginTop: 2 }}>
+                                {student.notes}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <select
+                              className="category-select"
+                              value={student.payment_status}
+                              onChange={e => updateStudentPayment(student.id, e.target.value)}
+                            >
+                              <option value="unpaid">Unpaid</option>
+                              <option value="partial">Partially Paid</option>
+                              <option value="paid">Paid</option>
+                            </select>
+                            <span className={`payment-badge payment-${student.payment_status === 'partial' ? 'partial' : student.payment_status === 'paid' ? 'paid' : 'unpaid'}`}>
+                              {student.payment_status === 'paid' ? 'Paid' : student.payment_status === 'partial' ? 'Partial' : 'Unpaid'}
+                            </span>
+                            <a
+                              href={`https://wa.me/${student.whatsapp.replace(/\D/g,'')}?text=${encodeURIComponent(`Hi ${student.name}, this is a message from Hair By Her regarding your enrolment.`)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 6, background: '#25D366', color: 'white', textDecoration: 'none', fontSize: 13, fontWeight: 700 }}
+                            >
+                              W
+                            </a>
+                            <button className="delete-btn" onClick={() => removeStudent(student.id)}>
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )
             })()}
