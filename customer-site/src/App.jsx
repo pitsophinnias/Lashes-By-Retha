@@ -120,6 +120,7 @@ function App() {
   const [galleryImages, setGalleryImages] = useState([])
   const [categories, setCategories] = useState([])
   const [productCategories, setProductCategories] = useState({})
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const bookingUrl = 'https://lashesbyretha.setmore.com'
 
   useEffect(() => {
@@ -328,7 +329,7 @@ function App() {
           width: 100%;
           background: radial-gradient(ellipse at 60% 40%, #FADADD 0%, #FFFAF8 70%);
           padding-top: 6rem;
-          padding-bottom: 60px;
+          padding-bottom: 48px;
           padding-left: 2rem;
           padding-right: 2rem;
           text-align: center;
@@ -746,122 +747,257 @@ function App() {
         }
 
         @media (max-width: 640px) {
-          .nav {
-            flex-direction: column;
-            gap: 1rem;
-          }
-
-          .nav-links {
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 1rem;
-          }
-
           .hero-headline {
             font-size: 2rem;
           }
+        }
+
+        /* ── Mobile base ── */
+        @media (max-width: 768px) {
+
+          /* Nav */
+          .mobile-nav { padding: 0 16px !important; }
+          .mobile-logo { height: 60px !important; }
+
+          /* Hero */
+          .hero-section { padding: 48px 20px 40px 20px !important; }
+          .hero-heading { font-size: 34px !important; line-height: 1.2 !important; }
+          .hero-buttons { flex-direction: column !important; align-items: center !important; gap: 12px !important; }
+          .hero-btn { width: 100% !important; max-width: 280px !important; }
+
+          /* Products */
+          .product-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 12px !important; }
+          .products-section { padding: 60px 16px !important; }
+
+          /* Classes */
+          .classes-grid { grid-template-columns: 1fr !important; }
+          .classes-section { padding: 60px 16px !important; }
+          .scope-grid-customer { grid-template-columns: 1fr !important; }
+
+          /* Gallery */
+          .gallery-section { padding: 60px 16px !important; }
+          .gallery-grid { flex-direction: column !important; }
+
+          /* Contact */
+          .contact-section { padding: 60px 16px !important; }
+          .contact-card { padding: 24px 20px !important; max-width: 100% !important; }
+
+          /* Cart drawer */
+          .cart-drawer { width: 100vw !important; }
+
+          /* Footer */
+          .site-footer { padding: 24px 16px !important; }
+
+        }
+
+        .desktop-nav-links {
+          display: flex;
+          align-items: center;
+          gap: 32px;
+        }
+
+        .hamburger-btn {
+          display: none;
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 4px;
+          color: #2C2C2C;
+          line-height: 1;
+        }
+
+        @media (max-width: 768px) {
+          .desktop-nav-links { display: none !important; }
+          .hamburger-btn { display: block !important; }
+        }
+
+        @media (max-width: 480px) {
+          .product-grid { grid-template-columns: 1fr !important; }
+          .hero-heading { font-size: 28px !important; }
+
+          .policies-nav { padding: 0 16px !important; height: auto !important; min-height: 60px !important; flex-wrap: wrap !important; gap: 8px !important; padding-top: 10px !important; padding-bottom: 10px !important; }
+          .policies-content { padding: 40px 16px !important; }
         }
       `}</style>
 
       {!showPolicies && (
       <>
-      <nav className="nav">
+      <nav className="nav mobile-nav" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
         <img
           src="/logo.png"
           alt="Lashes By Retha"
+          className="mobile-logo"
           style={{ height: '90px', width: 'auto', objectFit: 'contain', display: 'block' }}
         />
-        <ul className="nav-links">
-          <li><a href="#home">Home</a></li>
-          <li><a href="#shop">Shop</a></li>
-          <li><a href="#classes">Lash Training</a></li>
-          <li>
-            <a
-              className="book-now-link"
-              href={bookingUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Book Now
-            </a>
-          </li>
-          <li>
-            <button
-              onClick={() => setCartOpen(true)}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative',
-                padding: '6px',
-                marginLeft: '12px',
-                color: '#2C2C2C',
-              }}
-            >
-              <svg
-                width="22"
-                height="22"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
-                <line x1="3" y1="6" x2="21" y2="6" />
-                <path d="M16 10a4 4 0 0 1-8 0" />
-              </svg>
-              {cartCount > 0 && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    right: 0,
-                    background: '#C47A8A',
-                    color: 'white',
-                    borderRadius: '50%',
-                    width: '16px',
-                    height: '16px',
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  {cartCount}
-                </span>
-              )}
-            </button>
-          </li>
-        </ul>
-      </nav>
-
-      <section id="home" className="hero">
-        <h1 className="hero-headline">Beautiful Lashes. Effortless Booking.</h1>
-        <p className="hero-subtext">
-          Extension sets, refills, brow lamination and beauty classes in Vanderbijlpark.
-        </p>
-        <div className="hero-buttons">
+        <div className="nav-links desktop-nav-links" style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
+          <a href="#home">Home</a>
+          <a href="#shop">Shop</a>
+          <a href="#classes">Lash Training</a>
           <a
-            className="btn btn-primary"
+            className="book-now-link"
             href={bookingUrl}
             target="_blank"
             rel="noopener noreferrer"
           >
             Book Now
           </a>
-          <button className="btn btn-secondary" onClick={scrollToShop}>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
+          <button
+            onClick={() => setCartOpen(true)}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              position: 'relative',
+              padding: '6px',
+              marginLeft: '12px',
+              color: '#2C2C2C',
+            }}
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <path d="M16 10a4 4 0 0 1-8 0" />
+            </svg>
+            {cartCount > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  right: 0,
+                  background: '#C47A8A',
+                  color: 'white',
+                  borderRadius: '50%',
+                  width: '16px',
+                  height: '16px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {cartCount}
+              </span>
+            )}
+          </button>
+          <button
+            className="hamburger-btn"
+            onClick={() => setMobileMenuOpen(prev => !prev)}
+            style={{
+              display: 'none',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px',
+              color: '#2C2C2C',
+            }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {mobileMenuOpen
+                ? <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>
+                : <><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></>
+              }
+            </svg>
+          </button>
+        </div>
+      </nav>
+
+      {mobileMenuOpen && (
+        <div style={{
+          position: 'fixed',
+          top: '100px',
+          left: 0,
+          right: 0,
+          background: '#FDF0F3',
+          borderBottom: '1px solid #F5DDE2',
+          zIndex: 999,
+          padding: '16px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '4px',
+          boxShadow: '0 4px 16px rgba(196,122,138,0.15)',
+        }}>
+          {[
+            { label: 'Home', href: '#home' },
+            { label: 'Shop', href: '#shop' },
+            { label: 'Lash Training', href: '#classes' },
+          ].map(link => (
+            <a
+              key={link.label}
+              href={link.href}
+              onClick={() => setMobileMenuOpen(false)}
+              style={{
+                display: 'block',
+                padding: '12px 8px',
+                fontSize: '15px',
+                fontWeight: '600',
+                color: '#2C2C2C',
+                textDecoration: 'none',
+                borderBottom: '1px solid #F5DDE2',
+              }}
+            >
+              {link.label}
+            </a>
+          ))}
+          <a
+            href="https://lashesbyretha.setmore.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setMobileMenuOpen(false)}
+            style={{
+              display: 'block',
+              marginTop: '8px',
+              padding: '12px',
+              background: '#C47A8A',
+              color: 'white',
+              borderRadius: '10px',
+              textAlign: 'center',
+              fontWeight: '700',
+              fontSize: '14px',
+              textDecoration: 'none',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Book Now
+          </a>
+        </div>
+      )}
+
+      <section id="home" className="hero hero-section">
+        <h1 className="hero-headline hero-heading">Beautiful Lashes. Effortless Booking.</h1>
+        <p className="hero-subtext">
+          Extension sets, refills, brow lamination and beauty classes in Vanderbijlpark.
+        </p>
+        <div className="hero-buttons">
+          <a
+            className="btn btn-primary hero-btn"
+            href={bookingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Book Now
+          </a>
+          <button className="btn btn-secondary hero-btn" onClick={scrollToShop}>
             Shop Products
           </button>
         </div>
       </section>
 
-      <section id="shop" className="section">
+      <section id="shop" className="section products-section">
         <h2 className="section-heading">Our Products</h2>
         {(() => {
           const grouped = []
@@ -916,7 +1052,7 @@ function App() {
         })()}
       </section>
 
-      <section id="classes" className="section section-alt">
+      <section id="classes" className="section section-alt classes-section">
         <h2 className="section-heading">Lash Training</h2>
         <div className="classes-grid">
           {CLASSES.map((cls) => (
@@ -982,7 +1118,7 @@ function App() {
         </div>
       </section>
 
-      <section id="gallery" className="section section-alt">
+      <section id="gallery" className="section section-alt gallery-section">
         <h2 className="section-heading">Our Work</h2>
         <p className="section-text gallery-subheading">A glimpse of the sets we create</p>
         <div className="gallery-grid">
@@ -1056,7 +1192,7 @@ function App() {
         </div>
       </section>
 
-      <section id="contact" className="section">
+      <section id="contact" className="section contact-section">
         <div style={{ maxWidth: '900px', margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: '48px' }}>
             <h2 style={{
@@ -1071,7 +1207,7 @@ function App() {
             <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '8px auto 0 auto' }} />
           </div>
 
-          <div style={{ background: '#FFFFFF', borderRadius: '16px', padding: '32px', boxShadow: '0 2px 16px rgba(196,122,138,0.10)', border: '1px solid #F5DDE2', maxWidth: '560px', margin: '0 auto' }}>
+          <div className="contact-card" style={{ background: '#FFFFFF', borderRadius: '16px', padding: '32px', boxShadow: '0 2px 16px rgba(196,122,138,0.10)', border: '1px solid #F5DDE2', maxWidth: '560px', margin: '0 auto' }}>
             <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '20px', display: 'block' }}>
               Get in Touch
             </span>
@@ -1101,7 +1237,7 @@ function App() {
         </div>
       </section>
 
-      <footer className="footer">
+      <footer className="footer site-footer">
         <div style={{ maxWidth: '860px', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
         <div style={{ display: 'flex', gap: '16px', alignItems: 'center', justifyContent: 'center' }}>
           <a
@@ -1203,6 +1339,7 @@ function App() {
       {showPolicies && (
         <div style={{ minHeight: '100vh', background: '#FFFAF8', fontFamily: "'Lato', sans-serif" }}>
           <div
+            className="policies-nav"
             style={{
               background: '#FDF0F3',
               borderBottom: '1px solid #F5DDE2',
@@ -1240,7 +1377,7 @@ function App() {
             </button>
           </div>
 
-          <div style={{ maxWidth: '720px', margin: '0 auto', padding: '60px 24px' }}>
+          <div className="policies-content" style={{ maxWidth: '720px', margin: '0 auto', padding: '60px 24px' }}>
             <h1
               style={{
                 fontFamily: "'Cormorant Garamond', serif",

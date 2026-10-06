@@ -860,12 +860,14 @@ export default function App({ user, onLogout }) {
           {/* Nav */}
           <nav style={{ padding: '16px 12px', flex: 1 }}>
             {[
-              { label: 'Dashboard', value: 'dashboard', icon: 'D' },
-              { label: 'Products', value: 'products', icon: 'P' },
-              { label: 'Image Management', value: 'images', icon: 'I' },
-              { label: 'Lash Training', value: 'training', icon: 'T' },
-              { label: 'Orders', value: 'orders', icon: 'O' },
-              { label: 'Notifications', value: 'notifications', icon: 'N' },
+              { label: 'Dashboard', value: 'dashboard' },
+              ...(user?.role !== 'staff' ? [
+                { label: 'Products', value: 'products' },
+                { label: 'Image Management', value: 'images' },
+                { label: 'Lash Training', value: 'training' },
+              ] : []),
+              { label: 'Orders', value: 'orders' },
+              { label: 'Notifications', value: 'notifications' },
               { label: 'Settings', value: 'settings' },
             ].map(item => (
               <button
@@ -956,15 +958,9 @@ export default function App({ user, onLogout }) {
               {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications', settings: 'Settings' }[activePage]}
             </div>
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 20, fontWeight: 600 }}>
-              {activePage === 'dashboard' && 'Overview'}
-              {activePage === 'products' && `${categories.length} sections`}
-              {activePage === 'images' && imageTab === 'products' && '4 products'}
-              {activePage === 'images' && imageTab === 'classes' && '3 classes'}
-              {activePage === 'images' && imageTab === 'gallery' && `${galleryImages.length} files`}
-              {activePage === 'training' && '3 classes'}
-              {activePage === 'orders' && `${orders.length} order${orders.length !== 1 ? 's' : ''}`}
-              {activePage === 'notifications' && `${unreadCount} unread`}
-              {activePage === 'settings' && 'Account'}
+              {user?.role === 'staff' ? 'Staff View' : (
+                { dashboard: 'Overview', products: `${categories.length} sections`, images: imageTab === 'products' ? '4 products' : imageTab === 'classes' ? '3 classes' : `${galleryImages.length} files`, training: '3 classes', orders: `${orders.length} order${orders.length !== 1 ? 's' : ''}`, notifications: `${unreadCount} unread`, settings: 'Account' }[activePage]
+              )}
             </div>
           </div>
 
@@ -1209,7 +1205,7 @@ export default function App({ user, onLogout }) {
               )
             })()}
 
-            {activePage === 'products' && (
+            {activePage === 'products' && user?.role !== 'staff' && (
               <div>
                 <div style={{
                   background: 'linear-gradient(135deg, #8C5A6A 0%, #C4A882 100%)',
@@ -1273,7 +1269,7 @@ export default function App({ user, onLogout }) {
               </div>
             )}
 
-            {activePage === 'images' && (
+            {activePage === 'images' && user?.role !== 'staff' && (
               <div>
                 <div style={{
                   background: 'linear-gradient(135deg, #C4A882 0%, #8C5A6A 100%)',
@@ -1533,7 +1529,7 @@ export default function App({ user, onLogout }) {
               </div>
             )}
 
-            {activePage === 'training' && (() => {
+            {activePage === 'training' && user?.role !== 'staff' && (() => {
               const accentColors = ['#C47A8A', '#8C5A6A', '#C4A882']
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
