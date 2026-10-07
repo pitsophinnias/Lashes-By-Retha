@@ -1,44 +1,5 @@
 import React, { useState, useEffect } from 'react'
 
-const PRODUCTS = [
-  {
-    id: 1,
-    name: 'Classic Lash Trays',
-    description: 'Professional classic lash trays for individual lash extensions. Perfect for creating a natural, elegant look.',
-    detail: 'Diameter: 0.15 | Curl: D',
-    price: 130,
-    badge: null,
-    image: '/images/classic-lash-trays.jpg',
-  },
-  {
-    id: 2,
-    name: 'YY Lash Trays',
-    description: 'YY lash trays designed for a wispy, textured finish. Ideal for creating that effortlessly full look.',
-    detail: 'Diameter: 0.07 | Curl: D',
-    price: 150,
-    badge: 'Popular',
-    image: '/images/yy-lash-trays.jpg',
-  },
-  {
-    id: 3,
-    name: 'Volume Lash Trays',
-    description: 'Ultra-fine volume lash trays for handmade fans and Russian volume sets. Available in two curl options.',
-    detail: 'Diameter: 0.05 | Curl: Cc & D',
-    price: 150,
-    badge: 'Pro Pick',
-    image: '/images/volume-lash-trays.jpg',
-  },
-  {
-    id: 4,
-    name: 'Lash Shampoo and Cleansing Brush Combo',
-    description: 'Keep your lash extensions clean and fresh with our gentle foaming lash shampoo paired with a soft cleansing brush.',
-    detail: 'Recommended for daily use',
-    price: 100,
-    badge: 'Best Seller',
-    image: '/images/lash-shampoo-combo.jpg',
-  },
-]
-
 const CLASSES = [
   {
     id: 1,
@@ -116,6 +77,7 @@ function App() {
   const [orderError, setOrderError] = useState('')
   const [copied, setCopied] = useState(false)
   const [policyTab, setPolicyTab] = useState('booking')
+  const [products, setProducts] = useState([])
   const [productImages, setProductImages] = useState({})
   const [productPositions, setProductPositions] = useState({})
   const [galleryImages, setGalleryImages] = useState([])
@@ -125,18 +87,13 @@ function App() {
   const bookingUrl = 'https://lashesbyretha.setmore.com'
 
   useEffect(() => {
-    PRODUCTS.forEach(async p => {
-      try {
-        const res = await fetch(`${API}/api/upload/products/${p.id}`)
-        const data = await res.json()
-        if (data && data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
-      } catch {}
-      try {
-        const posRes = await fetch(`${API}/api/position/products/${p.id}`)
-        const posData = await posRes.json()
-        if (posData && posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
-      } catch {}
-    })
+    fetch(`${API}/api/products`)
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) setProducts(data)
+        else setProducts([])
+      })
+      .catch(() => setProducts([]))
     fetch(`${API}/api/gallery`)
       .then(r => r.json())
       .then(data => {
@@ -160,13 +117,32 @@ function App() {
       .catch(() => setProductCategories({}))
   }, [])
 
+  // Product images and positions depend on the product list having loaded.
+  useEffect(() => {
+    products.forEach(async p => {
+      try {
+        const res = await fetch(`${API}/api/upload/products/${p.id}`)
+        const data = await res.json()
+        if (data && data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
+      } catch {}
+      try {
+        const posRes = await fetch(`${API}/api/position/products/${p.id}`)
+        const posData = await posRes.json()
+        if (posData && posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
+      } catch {}
+    })
+  }, [products])
+
   const scrollToShop = () => {
     document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })
   }
 
   const addToCart = (product) => {
+    if (product.stockQuantity <= 0) return
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id)
+      const currentQty = existing ? existing.qty : 0
+      if (currentQty >= product.stockQuantity) return prev // already at the most we have
       if (existing) {
         return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item)
       }
@@ -181,7 +157,7 @@ function App() {
 
   const updateQty = (id, delta) => {
     setCart(prev => prev.map(item =>
-      item.id === id ? { ...item, qty: Math.max(1, item.qty + delta) } : item
+      item.id === id ? { ...item, qty: Math.max(1, Math.min(item.stockQuantity, item.qty + delta)) } : item
     ).filter(item => item.qty > 0))
   }
 
@@ -251,7 +227,23 @@ function App() {
           {product.detail}
         </div>
         <p className="product-price">R {product.price}</p>
-        <button className="btn-add-cart add-to-cart-btn" onClick={() => addToCart(product)}>Add to Cart</button>
+        <div style={{ fontSize: '12px', marginBottom: '10px', fontWeight: 600 }}>
+          {product.stockQuantity <= 0 ? (
+            <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>Sold out for now</span>
+          ) : product.stockQuantity <= product.lowStockThreshold ? (
+            <span style={{ color: '#C47A8A' }}>Only {product.stockQuantity} left</span>
+          ) : (
+            <span style={{ color: '#9A7A82', fontWeight: 400 }}>In stock</span>
+          )}
+        </div>
+        <button
+          className="btn-add-cart add-to-cart-btn"
+          onClick={() => addToCart(product)}
+          disabled={product.stockQuantity <= 0}
+          style={product.stockQuantity <= 0 ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+        >
+          {product.stockQuantity <= 0 ? 'Sold Out' : 'Add to Cart'}
+        </button>
       </div>
     </div>
   )
@@ -1011,14 +1003,14 @@ function App() {
 
           // Add categorised groups in order
           categories.forEach(cat => {
-            const catProducts = PRODUCTS.filter(p => productCategories[p.id] === cat.id)
+            const catProducts = products.filter(p => productCategories[p.id] === cat.id)
             if (catProducts.length > 0) {
               grouped.push({ id: cat.id, name: cat.name, products: catProducts })
             }
           })
 
           // Add uncategorised products at the end
-          const uncategorised = PRODUCTS.filter(p => !productCategories[p.id])
+          const uncategorised = products.filter(p => !productCategories[p.id])
           if (uncategorised.length > 0) {
             grouped.push({ id: 'uncategorised', name: null, products: uncategorised })
           }
@@ -1027,7 +1019,7 @@ function App() {
           if (grouped.length === 0) {
             return (
               <div className="product-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px', textAlign: 'left' }}>
-                {PRODUCTS.map(product => renderProductCard(product))}
+                {products.map(product => renderProductCard(product))}
               </div>
             )
           }
@@ -1771,13 +1763,15 @@ function App() {
                           </span>
                           <button
                             onClick={() => addToCart(item)}
+                            disabled={item.qty >= item.stockQuantity}
                             style={{
                               width: '28px',
                               height: '28px',
                               borderRadius: '50%',
                               border: '1px solid #F5DDE2',
                               background: 'white',
-                              cursor: 'pointer',
+                              cursor: item.qty >= item.stockQuantity ? 'not-allowed' : 'pointer',
+                              opacity: item.qty >= item.stockQuantity ? 0.4 : 1,
                               fontSize: '16px',
                               display: 'flex',
                               alignItems: 'center',
