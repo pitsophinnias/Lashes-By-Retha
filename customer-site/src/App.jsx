@@ -113,6 +113,7 @@ function App() {
   const [orderName, setOrderName] = useState('')
   const [orderPhone, setOrderPhone] = useState('')
   const [orderSubmitted, setOrderSubmitted] = useState(false)
+  const [orderError, setOrderError] = useState('')
   const [copied, setCopied] = useState(false)
   const [policyTab, setPolicyTab] = useState('booking')
   const [productImages, setProductImages] = useState({})
@@ -195,8 +196,9 @@ function App() {
 
   const submitOrder = async () => {
     if (!orderName.trim() || !orderPhone.trim()) return
+    setOrderError('')
     try {
-      await fetch('http://localhost:3002/api/orders', {
+      const res = await fetch(`${API}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -206,10 +208,15 @@ function App() {
           total: cartTotal,
         }),
       })
-      setOrderSubmitted(true)
-      setCart([])
+      if (res.ok) {
+        setOrderSubmitted(true)
+        setCart([])
+      } else {
+        setOrderError("I couldn't get your order through just now, but don't worry, your cart is still here. Please try again in a moment, or message me on WhatsApp and I'll sort it out for you.")
+      }
     } catch (err) {
       console.error('Order submission failed:', err)
+      setOrderError("I couldn't reach the shop just now, but your cart is safe. Please check your connection and try again, or message me on WhatsApp and I'll help right away.")
     }
   }
 
@@ -1638,6 +1645,7 @@ function App() {
                 setCartOpen(false)
                 setCheckoutStep(false)
                 setOrderSubmitted(false)
+                setOrderError('')
               }}
             />
           )}
@@ -1676,6 +1684,7 @@ function App() {
                   setCartOpen(false)
                   setCheckoutStep(false)
                   setOrderSubmitted(false)
+                  setOrderError('')
                 }}
                 style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
               >
@@ -1697,6 +1706,7 @@ function App() {
                       setCartOpen(false)
                       setOrderSubmitted(false)
                       setCheckoutStep(false)
+                      setOrderError('')
                     }}
                     style={{
                       background: '#C47A8A',
@@ -1922,6 +1932,21 @@ function App() {
                   <p style={{ fontSize: '13px', color: '#7A6670', marginBottom: '16px' }}>
                     Order total: R {cartTotal}
                   </p>
+
+                  {orderError && (
+                    <div style={{
+                      background: '#FDF0F3',
+                      border: '1px solid #F5C0CC',
+                      borderRadius: '10px',
+                      padding: '12px 14px',
+                      marginBottom: '16px',
+                      fontSize: '13px',
+                      color: '#A0566A',
+                      lineHeight: 1.6,
+                    }}>
+                      {orderError}
+                    </div>
+                  )}
 
                   <button
                     onClick={submitOrder}

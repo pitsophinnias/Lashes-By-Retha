@@ -312,7 +312,8 @@ app.get('/api/audit-logs', authenticate, requireRole('sysadmin'), async (req, re
 })
 
 // ── Orders ────────────────────────────────────────────────────────────────────
-app.post('/api/orders', authenticate, async (req, res) => {
+// Public: the customer site has no login and must be able to place orders.
+app.post('/api/orders', async (req, res) => {
   const { customerName, customerPhone, items, total } = req.body
   if (!customerName || !customerPhone || !items || !Array.isArray(items)) {
     return res.status(400).json({ error: 'Missing required fields' })
@@ -386,7 +387,7 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
 })
 
 // ── Image uploads ─────────────────────────────────────────────────────────────
-app.post('/api/upload/:type/:id', authenticate, upload.single('image'), async (req, res) => {
+app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const url = `/uploads/${req.params.type}/${req.file.filename}`
   await addNotification('image', 'Image uploaded',
@@ -394,7 +395,7 @@ app.post('/api/upload/:type/:id', authenticate, upload.single('image'), async (r
   res.json({ success: true, url })
 })
 
-app.post('/api/upload/gallery', authenticate, upload.single('image'), async (req, res) => {
+app.post('/api/upload/gallery', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const ext = path.extname(req.file.filename).toLowerCase()
   const videoExts = ['.mp4', '.mov', '.webm']
@@ -438,7 +439,7 @@ app.get('/api/upload/:type/:id', (req, res) => {
 })
 
 // ── Image positions ───────────────────────────────────────────────────────────
-app.post('/api/position/:type/:id', authenticate, async (req, res) => {
+app.post('/api/position/:type/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const { type, id } = req.params
   const { position } = req.body
   if (!position || typeof position.x !== 'number' || typeof position.y !== 'number') {

@@ -47,12 +47,30 @@ export default function App({ user, onLogout }) {
   const [newStaffUser, setNewStaffUser] = useState({ username: '', password: '' })
   const [staffCreateMsg, setStaffCreateMsg] = useState('')
 
+  // Attaches the auth token to every request and logs the user out on a 401.
+  // Never sets Content-Type for FormData bodies (file uploads) - the browser
+  // must set its own multipart boundary.
+  const apiFetch = async (path, options = {}) => {
+    const token = localStorage.getItem('hbh_token')
+    const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
+    const headers = {
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    }
+    const res = await fetch(`${API}${path}`, { ...options, headers })
+    if (res.status === 401) {
+      onLogout()
+    }
+    return res
+  }
+
   const fetchOrders = async () => {
     setOrdersLoading(true)
     try {
-      const res = await fetch(`${API}/api/orders`)
+      const res = await apiFetch('/api/orders')
       const data = await res.json()
-      if (Array.isArray(data)) setOrders(data.reverse()) // newest first
+      if (res.ok && Array.isArray(data)) setOrders(data.reverse()) // newest first
       else setOrders([])
     } catch {
       // silent fail
@@ -66,28 +84,28 @@ export default function App({ user, onLogout }) {
     if (!token) return
     // Fetch product images
     PRODUCTS.forEach(async p => {
-      const res = await fetch(`${API}/api/upload/products/${p.id}`)
+      const res = await apiFetch(`/api/upload/products/${p.id}`)
       const data = await res.json()
       if (data && data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
       try {
-        const posRes = await fetch(`${API}/api/position/products/${p.id}`)
+        const posRes = await apiFetch(`/api/position/products/${p.id}`)
         const posData = await posRes.json()
         if (posData && posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
       } catch {}
     })
     // Fetch class images
     CLASSES.forEach(async c => {
-      const res = await fetch(`${API}/api/upload/classes/${c.id}`)
+      const res = await apiFetch(`/api/upload/classes/${c.id}`)
       const data = await res.json()
       if (data && data.url) setClassImages(prev => ({ ...prev, [c.id]: data.url }))
       try {
-        const posRes = await fetch(`${API}/api/position/classes/${c.id}`)
+        const posRes = await apiFetch(`/api/position/classes/${c.id}`)
         const posData = await posRes.json()
         if (posData && posData.position) setClassPositions(prev => ({ ...prev, [c.id]: posData.position }))
       } catch {}
     })
     // Fetch gallery
-    fetch(`${API}/api/gallery`)
+    apiFetch('/api/gallery')
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) setGalleryImages(data)
@@ -95,7 +113,7 @@ export default function App({ user, onLogout }) {
       })
       .catch(() => {})
     // Fetch categories
-    fetch(`${API}/api/categories`)
+    apiFetch('/api/categories')
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) setCategories(data)
@@ -103,7 +121,7 @@ export default function App({ user, onLogout }) {
       })
       .catch(() => {})
     // Fetch product category assignments
-    fetch(`${API}/api/categories/products/all`)
+    apiFetch('/api/categories/products/all')
       .then(r => r.json())
       .then(data => {
         if (data && typeof data === 'object' && !Array.isArray(data)) setProductCategories(data)
@@ -111,7 +129,7 @@ export default function App({ user, onLogout }) {
       })
       .catch(() => {})
     // Fetch notifications
-    fetch(`${API}/api/notifications`)
+    apiFetch('/api/notifications')
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -122,16 +140,15 @@ export default function App({ user, onLogout }) {
         }
       })
       .catch(() => {})
-    // Fetch orders for dashboard
-    fetch(`${API}/api/orders`)
+    // Fetch orders for the dashboard's monthly revenue chart (confirmed only)
+    apiFetch('/api/orders')
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
           setRecentOrders(data.slice(0, 5))
-          // Build monthly revenue data from orders
           const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
           const monthlyTotals = Array(12).fill(0)
-          data.forEach(order => {
+          data.filter(order => order.status === 'confirmed').forEach(order => {
             const month = new Date(order.createdAt).getMonth()
             monthlyTotals[month] += order.total || 0
           })
@@ -142,7 +159,7 @@ export default function App({ user, onLogout }) {
       })
       .catch(() => {})
     // Fetch archived notifications
-    fetch(`${API}/api/notifications/archived`)
+    apiFetch('/api/notifications/archived')
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) setArchivedNotifications(data)
@@ -159,17 +176,19 @@ export default function App({ user, onLogout }) {
     const formData = new FormData()
     formData.append('image', file)
     try {
-      const endpoint = type === 'gallery'
-        ? `${API}/api/upload/gallery`
-        : `${API}/api/upload/${type}/${id}`
-      const res = await fetch(endpoint, { method: 'POST', body: formData })
+      const path = type === 'gallery'
+        ? `/api/upload/gallery`
+        : `/api/upload/${type}/${id}`
+      const res = await apiFetch(path, { method: 'POST', body: formData })
       const data = await res.json()
-      if (data.url) {
+      if (res.ok && data.url) {
         if (type === 'products') setProductImages(prev => ({ ...prev, [id]: data.url }))
         if (type === 'classes') setClassImages(prev => ({ ...prev, [id]: data.url }))
         if (type === 'gallery') setGalleryImages(prev => [...prev, { url: data.url, filename: data.url.split('/').pop() }])
         setUploadStatus(prev => ({ ...prev, [key]: 'success' }))
         setTimeout(() => setUploadStatus(prev => ({ ...prev, [key]: null })), 3000)
+      } else {
+        setUploadStatus(prev => ({ ...prev, [key]: 'error' }))
       }
     } catch {
       setUploadStatus(prev => ({ ...prev, [key]: 'error' }))
@@ -191,23 +210,20 @@ export default function App({ user, onLogout }) {
          : current.y,
     }
 
-    setPositions(prev => ({ ...prev, [id]: next }))
-
     try {
-      await fetch(`${API}/api/position/${type}/${id}`, {
+      const res = await apiFetch(`/api/position/${type}/${id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ position: next }),
       })
+      if (res.ok) setPositions(prev => ({ ...prev, [id]: next }))
     } catch {}
   }
 
   const createCategory = async () => {
     if (!newCategoryName.trim()) return
     try {
-      const res = await fetch(`${API}/api/categories`, {
+      const res = await apiFetch('/api/categories', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newCategoryName.trim() }),
       })
       const data = await res.json()
@@ -229,7 +245,7 @@ export default function App({ user, onLogout }) {
   const deleteCategory = async (id, name) => {
     if (!window.confirm(`Remove the "${name}" section? Products in this section will become uncategorised.`)) return
     try {
-      const res = await fetch(`${API}/api/categories/${id}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/categories/${id}`, { method: 'DELETE' })
       if (res.ok) {
         setCategories(prev => prev.filter(c => c.id !== id))
         setProductCategories(prev => {
@@ -241,6 +257,9 @@ export default function App({ user, onLogout }) {
         })
         setCategoryStatus({ type: 'success', message: `"${name}" section removed.` })
         setTimeout(() => setCategoryStatus(null), 3000)
+      } else {
+        setCategoryStatus({ type: 'error', message: 'Failed to remove section.' })
+        setTimeout(() => setCategoryStatus(null), 3000)
       }
     } catch {
       setCategoryStatus({ type: 'error', message: 'Failed to remove section.' })
@@ -249,9 +268,8 @@ export default function App({ user, onLogout }) {
 
   const assignCategory = async (productId, categoryId) => {
     try {
-      const res = await fetch(`${API}/api/categories/product/${productId}`, {
+      const res = await apiFetch(`/api/categories/product/${productId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ categoryId: categoryId ? parseInt(categoryId) : null }),
       })
       if (res.ok) {
@@ -265,40 +283,40 @@ export default function App({ user, onLogout }) {
 
   const markAllRead = async () => {
     try {
-      await fetch(`${API}/api/notifications/read-all`, { method: 'PATCH' })
-      setNotifications(prev => prev.map(n => ({ ...n, read: true })))
-      setUnreadCount(0)
+      const res = await apiFetch('/api/notifications/read-all', { method: 'PATCH' })
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => ({ ...n, read: true })))
+        setUnreadCount(0)
+      }
     } catch {}
   }
 
   const markOneRead = async (id) => {
     try {
-      await fetch(`${API}/api/notifications/${id}/read`, { method: 'PATCH' })
-      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
-      setUnreadCount(prev => Math.max(0, prev - 1))
+      const res = await apiFetch(`/api/notifications/${id}/read`, { method: 'PATCH' })
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
+        setUnreadCount(prev => Math.max(0, prev - 1))
+      }
     } catch {}
   }
 
   const confirmOrder = async (id) => {
     try {
-      await fetch(`${API}/api/orders/${id}/confirm`, { method: 'PATCH' })
-      setOrders(prev => prev.map(o => o.id === id ? { ...o, status: 'confirmed' } : o))
+      const res = await apiFetch(`/api/orders/${id}/confirm`, { method: 'PATCH' })
+      if (res.ok) {
+        setOrders(prev => prev.map(o => o.id === id ? { ...o, status: 'confirmed' } : o))
+      }
     } catch {}
   }
-
-  const getAuthHeaders = () => ({
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
-  })
 
   const changeBusinessPassword = async () => {
     setBPwMsg('')
     if (bPwNew !== bPwConfirm) { setBPwMsg('Passwords do not match.'); return }
     if (bPwNew.length < 6) { setBPwMsg('Password must be at least 6 characters.'); return }
     try {
-      const res = await fetch(`${API}/api/auth/change-password`, {
+      const res = await apiFetch('/api/auth/change-password', {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ current_password: bPwCurrent, new_password: bPwNew }),
       })
       const data = await res.json()
@@ -318,9 +336,8 @@ export default function App({ user, onLogout }) {
       return
     }
     try {
-      const res = await fetch(`${API}/api/users`, {
+      const res = await apiFetch('/api/users', {
         method: 'POST',
-        headers: getAuthHeaders(),
         body: JSON.stringify({
           username: newStaffUser.username.trim(),
           password: newStaffUser.password,
@@ -994,8 +1011,10 @@ export default function App({ user, onLogout }) {
                 calDays.push({ day: i, current: false })
               }
 
-              const totalRevenue = recentOrders.reduce((sum, o) => sum + (o.total || 0), 0)
-              const totalOrders = recentOrders.length
+              const totalRevenue = orders
+                .filter(o => o.status === 'confirmed')
+                .reduce((sum, o) => sum + (o.total || 0), 0)
+              const totalOrders = orders.length
 
               const statCards = [
                 {
