@@ -28,14 +28,22 @@ const GALLERY_DIR = path.join(UPLOAD_DIR, 'gallery')
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
 })
 
+const TYPE_DIRS = { products: PRODUCT_DIR, classes: CLASS_DIR, gallery: GALLERY_DIR }
+
+// Matches only the exact type-id with any extension (e.g. "products-2.jpg"),
+// never a prefix collision like "products-1" matching "products-10.jpg".
+const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const findFilesForId = (dir, type, id) => {
+  const pattern = new RegExp(`^${escapeRegExp(type)}-${escapeRegExp(id)}\\.[a-zA-Z0-9]+$`)
+  return fs.readdirSync(dir).filter(f => pattern.test(f))
+}
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 // ── Multer ────────────────────────────────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const type = req.params.type
-    const dirs = { products: PRODUCT_DIR, classes: CLASS_DIR, gallery: GALLERY_DIR }
-    cb(null, dirs[type] || UPLOAD_DIR)
+    cb(null, TYPE_DIRS[req.params.type] || UPLOAD_DIR)
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
@@ -693,9 +701,18 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
 // ── Image uploads ─────────────────────────────────────────────────────────────
 app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
-  const url = `/uploads/${req.params.type}/${req.file.filename}`
+  const { type, id } = req.params
+  const dir = TYPE_DIRS[type]
+  if (dir) {
+    // Remove any previous file(s) for this id so a replacement upload with a
+    // different extension can't leave the old image as the one still served.
+    findFilesForId(dir, type, id)
+      .filter(f => f !== req.file.filename)
+      .forEach(f => { try { fs.unlinkSync(path.join(dir, f)) } catch {} })
+  }
+  const url = `/uploads/${type}/${req.file.filename}`
   await addNotification('image', 'Image uploaded',
-    `A new image was uploaded for ${req.params.type} (id: ${req.params.id}).`)
+    `A new image was uploaded for ${type} (id: ${id}).`)
   res.json({ success: true, url })
 })
 
@@ -729,12 +746,10 @@ app.get('/api/gallery', async (req, res) => {
 
 app.get('/api/upload/:type/:id', (req, res) => {
   const { type, id } = req.params
-  const dirs = { products: PRODUCT_DIR, classes: CLASS_DIR }
-  const dir = dirs[type]
+  const dir = type === 'products' ? PRODUCT_DIR : type === 'classes' ? CLASS_DIR : null
   if (!dir) return res.status(400).json({ error: 'Invalid type' })
   try {
-    const files = fs.readdirSync(dir)
-    const match = files.find(f => f.startsWith(`${type}-${id}`))
+    const [match] = findFilesForId(dir, type, id)
     if (match) res.json({ url: `/uploads/${type}/${match}` })
     else res.json({ url: null })
   } catch {
