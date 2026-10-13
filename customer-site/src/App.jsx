@@ -122,7 +122,17 @@ function App() {
   const [categories, setCategories] = useState([])
   const [productCategories, setProductCategories] = useState({})
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+  const [expandedClassId, setExpandedClassId] = useState(null)
   const bookingUrl = 'https://lashesbyretha.setmore.com'
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)')
+    setIsMobile(mq.matches)
+    const handler = (e) => setIsMobile(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
 
   useEffect(() => {
     PRODUCTS.forEach(async p => {
@@ -656,17 +666,10 @@ function App() {
         }
 
         .gallery-grid {
-          display: flex;
-          gap: 12px;
-          align-items: flex-start;
+          column-count: 3;
+          column-gap: 12px;
           max-width: 1100px;
           margin: 0 auto;
-        }
-
-        @media (max-width: 768px) {
-          .gallery-grid {
-            flex-direction: column;
-          }
         }
 
         @media (max-width: 768px) {
@@ -675,21 +678,13 @@ function App() {
           }
 
           .classes-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        @media (max-width: 480px) {
-          .products-grid {
-            grid-template-columns: 1fr;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
           }
         }
 
         @media (max-width: 768px) {
           .product-grid { grid-template-columns: repeat(2, 1fr) !important; }
-        }
-        @media (max-width: 480px) {
-          .product-grid { grid-template-columns: 1fr !important; }
         }
 
         /* Contact */
@@ -764,7 +759,13 @@ function App() {
 
           /* Nav */
           .mobile-nav { padding: 0 16px !important; }
-          .mobile-logo { height: 60px !important; }
+          .mobile-logo {
+            height: 60px !important;
+            position: absolute !important;
+            top: 50% !important;
+            left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+          }
 
           /* Hero */
           .hero-section { padding: 48px 20px 40px 20px !important; }
@@ -777,13 +778,29 @@ function App() {
           .products-section { padding: 60px 16px !important; }
 
           /* Classes */
-          .classes-grid { grid-template-columns: 1fr !important; }
+          .classes-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 12px !important; }
+          .classes-grid > *:last-child:nth-child(odd) {
+            grid-column: 1 / -1 !important;
+            max-width: calc(50% - 6px) !important;
+            margin: 0 auto !important;
+          }
           .classes-section { padding: 60px 16px !important; }
           .scope-grid-customer { grid-template-columns: 1fr !important; }
+          .scope-grid-customer > div > div:first-child { font-size: 9px !important; letter-spacing: 1px !important; margin-bottom: 6px !important; }
+          .class-card { padding: 16px !important; }
+          .class-name { font-size: 15px !important; margin-bottom: 2px !important; }
+          .class-level-badge { font-size: 9px !important; padding: 3px 8px !important; }
+          .class-duration { font-size: 11px !important; margin-bottom: 10px !important; }
+          .class-description { font-size: 12px !important; line-height: 1.5 !important; margin-bottom: 12px !important; }
+          .class-item { font-size: 11px !important; line-height: 1.5 !important; }
+          .class-price { font-size: 18px !important; }
+          .class-seats { font-size: 10px !important; margin-bottom: 12px !important; }
+          .class-certification { font-size: 11px !important; margin-bottom: 12px !important; }
+          .btn-enquire { font-size: 11px !important; padding: 10px !important; }
 
           /* Gallery */
           .gallery-section { padding: 60px 16px !important; }
-          .gallery-grid { flex-direction: column !important; }
+          .gallery-grid { column-count: 2 !important; column-gap: 8px !important; }
 
           /* Contact */
           .contact-section { padding: 60px 16px !important; }
@@ -819,7 +836,6 @@ function App() {
         }
 
         @media (max-width: 480px) {
-          .product-grid { grid-template-columns: 1fr !important; }
           .hero-heading { font-size: 28px !important; }
 
           .policies-nav { padding: 0 16px !important; height: auto !important; min-height: 60px !important; flex-wrap: wrap !important; gap: 8px !important; padding-top: 10px !important; padding-bottom: 10px !important; }
@@ -830,6 +846,25 @@ function App() {
       {!showPolicies && (
       <>
       <nav className="nav mobile-nav" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+        <button
+          className="hamburger-btn"
+          onClick={() => setMobileMenuOpen(prev => !prev)}
+          style={{
+            display: 'none',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '4px',
+            color: '#2C2C2C',
+          }}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            {mobileMenuOpen
+              ? <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>
+              : <><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></>
+            }
+          </svg>
+        </button>
         <img
           src="/logo.png"
           alt="Lashes By Retha"
@@ -900,25 +935,6 @@ function App() {
                 {cartCount}
               </span>
             )}
-          </button>
-          <button
-            className="hamburger-btn"
-            onClick={() => setMobileMenuOpen(prev => !prev)}
-            style={{
-              display: 'none',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '4px',
-              color: '#2C2C2C',
-            }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              {mobileMenuOpen
-                ? <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>
-                : <><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></>
-              }
-            </svg>
           </button>
         </div>
       </nav>
@@ -1063,7 +1079,12 @@ function App() {
         <h2 className="section-heading">Lash Training</h2>
         <div className="classes-grid">
           {CLASSES.map((cls) => (
-            <div className="class-card" key={cls.id}>
+            <div
+              className="class-card"
+              key={cls.id}
+              onClick={() => { if (isMobile) setExpandedClassId(cls.id) }}
+              style={{ cursor: isMobile ? 'pointer' : 'default' }}
+            >
               <div style={{
                 position: 'absolute',
                 top: 0,
@@ -1077,9 +1098,110 @@ function App() {
                 <span className="class-name">{cls.name}</span>
                 <span className="class-level-badge">{cls.level}</span>
               </div>
+              {!isMobile && <p className="class-duration">{cls.duration}</p>}
+              <p className="class-description">{cls.description}</p>
+              {!isMobile && (
+                <div className="scope-grid-customer" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                      What you will learn
+                    </div>
+                    {cls.learns.map((item) => (
+                      <div
+                        className="class-item"
+                        key={item}
+                        style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
+                      >
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                      What is included
+                    </div>
+                    {cls.includes.map((item) => (
+                      <div
+                        className="class-item"
+                        key={item}
+                        style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
+                      >
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="class-price">R {cls.price}</p>
+              {!isMobile && <p className="class-seats">Non-refundable deposit of R{cls.deposit} to secure your spot</p>}
+              {isMobile && (
+                <p style={{ fontSize: '11px', color: '#C47A8A', fontWeight: 600, textAlign: 'center', marginTop: '4px' }}>
+                  Tap to view full details
+                </p>
+              )}
+              {!isMobile && (
+                <a
+                  className="btn-enquire enquire-btn"
+                  href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}
+                >
+                  Enquire Now
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {expandedClassId && isMobile && (() => {
+        const cls = CLASSES.find((c) => c.id === expandedClassId)
+        if (!cls) return null
+        return (
+          <>
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                background: 'rgba(44,44,44,0.4)',
+                zIndex: 800,
+              }}
+              onClick={() => setExpandedClassId(null)}
+            />
+            <div
+              style={{
+                position: 'fixed',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: '90%',
+                maxWidth: '380px',
+                maxHeight: '85vh',
+                overflowY: 'auto',
+                background: '#FFFAF8',
+                borderRadius: '16px',
+                zIndex: 900,
+                padding: '40px 24px 24px 24px',
+                boxShadow: '0 12px 40px rgba(44,44,44,0.25)',
+              }}
+            >
+              <button
+                onClick={() => setExpandedClassId(null)}
+                style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
+              >
+                x
+              </button>
+              <div className="class-card-top">
+                <span className="class-name">{cls.name}</span>
+                <span className="class-level-badge">{cls.level}</span>
+              </div>
               <p className="class-duration">{cls.duration}</p>
               <p className="class-description">{cls.description}</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div className="scope-grid-customer" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
                   <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
                     What you will learn
@@ -1121,80 +1243,68 @@ function App() {
                 Enquire Now
               </a>
             </div>
-          ))}
-        </div>
-      </section>
+          </>
+        )
+      })()}
 
       <section id="gallery" className="section section-alt gallery-section">
         <h2 className="section-heading">Our Work</h2>
         <p className="section-text gallery-subheading">A glimpse of the sets we create</p>
         <div className="gallery-grid">
           {galleryImages.length > 0 ? (
-            [0, 1, 2].map((colIndex) => (
-              <div key={colIndex} style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-                {galleryImages
-                  .filter((_, i) => i % 3 === colIndex)
-                  .map((img) => (
-                    <div
-                      key={img.filename}
-                      style={{ borderRadius: '10px', overflow: 'hidden', marginBottom: '12px', breakInside: 'avoid' }}
-                    >
-                      {img.type === 'video' ? (
-                        <video
-                          src={`${API}${img.url}`}
-                          autoPlay
-                          muted
-                          loop
-                          playsInline
-                          style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block', borderRadius: '8px' }}
-                        />
-                      ) : (
-                        <img
-                          src={`${API}${img.url}`}
-                          alt="Lash work"
-                          style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block' }}
-                        />
-                      )}
-                    </div>
-                  ))}
+            galleryImages.map((img) => (
+              <div
+                key={img.filename}
+                style={{ borderRadius: '10px', overflow: 'hidden', marginBottom: '12px', breakInside: 'avoid' }}
+              >
+                {img.type === 'video' ? (
+                  <video
+                    src={`${API}${img.url}`}
+                    autoPlay
+                    muted
+                    loop
+                    playsInline
+                    style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block', borderRadius: '8px' }}
+                  />
+                ) : (
+                  <img
+                    src={`${API}${img.url}`}
+                    alt="Lash work"
+                    style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block' }}
+                  />
+                )}
               </div>
             ))
           ) : (
-            <>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-                <div style={{ height: '220px', background: '#F7EEF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '260px', background: '#EDD5DB', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '210px', background: '#F2E4E8', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
+            [
+              { height: 220, background: '#F7EEF0' },
+              { height: 280, background: '#EDD5DB' },
+              { height: 200, background: '#F2E4E8' },
+              { height: 260, background: '#EDD5DB' },
+              { height: 240, background: '#F7EEF0' },
+              { height: 300, background: '#F7EEF0' },
+              { height: 210, background: '#F2E4E8' },
+              { height: 270, background: '#F5EDF0' },
+              { height: 230, background: '#EDD5DB' },
+            ].map((tile, i) => (
+              <div
+                key={i}
+                style={{
+                  height: `${tile.height}px`,
+                  background: tile.background,
+                  borderRadius: '10px',
+                  overflow: 'hidden',
+                  marginBottom: '12px',
+                  breakInside: 'avoid',
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  justifyContent: 'center',
+                  paddingBottom: '12px',
+                }}
+              >
+                <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-                <div style={{ height: '280px', background: '#EDD5DB', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '240px', background: '#F7EEF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '270px', background: '#F5EDF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1 }}>
-                <div style={{ height: '200px', background: '#F2E4E8', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '300px', background: '#F7EEF0', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-                <div style={{ height: '230px', background: '#EDD5DB', borderRadius: '10px', overflow: 'hidden', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: '12px' }}>
-                  <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
-                </div>
-              </div>
-            </>
+            ))
           )}
         </div>
       </section>
