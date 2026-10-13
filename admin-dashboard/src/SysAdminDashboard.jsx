@@ -6,6 +6,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [activePage, setActivePage] = useState('overview')
   const [users, setUsers] = useState([])
   const [roles, setRoles] = useState([])
+  const [systemNotifications, setSystemNotifications] = useState([])
   const [auditLogs, setAuditLogs] = useState([])
   const [auditPage, setAuditPage] = useState(1)
   const [auditTotal, setAuditTotal] = useState(0)
@@ -30,6 +31,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
   useEffect(() => {
     fetchUsers()
     fetchRoles()
+    fetchSystemNotifications()
   }, [])
 
   useEffect(() => {
@@ -51,6 +53,15 @@ export default function SysAdminDashboard({ user, onLogout }) {
       const data = await res.json()
       if (Array.isArray(data)) setRoles(data)
       else setRoles([])
+    } catch {}
+  }
+
+  const fetchSystemNotifications = async () => {
+    try {
+      const res = await fetch(`${API}/api/notifications`, { headers: getHeaders() })
+      const data = await res.json()
+      if (Array.isArray(data)) setSystemNotifications(data.filter(n => n.type === 'system'))
+      else setSystemNotifications([])
     } catch {}
   }
 
@@ -285,6 +296,22 @@ export default function SysAdminDashboard({ user, onLogout }) {
                     </tbody>
                   </table>
                 </div>
+
+                <div className="sa-panel">
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid #F0E8EA' }}>System Notifications</div>
+                  {systemNotifications.length === 0 && (
+                    <div style={{ fontSize: 13, color: '#AAAAAA' }}>No system notifications.</div>
+                  )}
+                  {systemNotifications.map((n, i) => (
+                    <div key={n.id} style={{ padding: '10px 0', borderBottom: i === systemNotifications.length - 1 ? 'none' : '1px solid #F7F0F2' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20' }}>{n.title}</div>
+                      <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>{n.message}</div>
+                      <div style={{ fontSize: 11, color: '#C4A0A8', marginTop: 4 }}>
+                        {new Date(n.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -474,18 +501,36 @@ export default function SysAdminDashboard({ user, onLogout }) {
 
             {/* Settings */}
             {activePage === 'settings' && (
-              <div className="sa-panel" style={{ maxWidth: 480 }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }}>Change Password</div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Current Password</label>
-                <input className="sa-input" type="password" placeholder="Current password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} />
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>New Password</label>
-                <input className="sa-input" type="password" placeholder="New password (min 6 characters)" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Confirm New Password</label>
-                <input className="sa-input" type="password" placeholder="Confirm new password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
-                {pwMsg && (
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: pwMsg.includes('successfully') ? '#2E7D32' : '#C47A8A' }}>{pwMsg}</div>
-                )}
-                <button className="sa-btn" onClick={changeOwnPassword}>Change Password</button>
+              <div>
+                <div className="sa-panel" style={{ maxWidth: 480 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }}>Change Password</div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Current Password</label>
+                  <input className="sa-input" type="password" placeholder="Current password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} />
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>New Password</label>
+                  <input className="sa-input" type="password" placeholder="New password (min 6 characters)" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Confirm New Password</label>
+                  <input className="sa-input" type="password" placeholder="Confirm new password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
+                  {pwMsg && (
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: pwMsg.includes('successfully') ? '#2E7D32' : '#C47A8A' }}>{pwMsg}</div>
+                  )}
+                  <button className="sa-btn" onClick={changeOwnPassword}>Change Password</button>
+                </div>
+
+                <div className="sa-panel" style={{ maxWidth: 480, marginTop: 20 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 16 }}>System Notifications</div>
+                  {systemNotifications.length === 0 && (
+                    <div style={{ fontSize: 13, color: '#AAAAAA' }}>No system notifications.</div>
+                  )}
+                  {systemNotifications.map((n, i) => (
+                    <div key={n.id} style={{ padding: '10px 0', borderBottom: i === systemNotifications.length - 1 ? 'none' : '1px solid #F7F0F2' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20' }}>{n.title}</div>
+                      <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>{n.message}</div>
+                      <div style={{ fontSize: 11, color: '#C4A0A8', marginTop: 4 }}>
+                        {new Date(n.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
