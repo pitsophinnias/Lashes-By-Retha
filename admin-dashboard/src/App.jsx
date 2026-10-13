@@ -1201,6 +1201,8 @@ export default function App({ user, onLogout }) {
 
             {activePage === 'dashboard' && (() => {
               const today = new Date()
+              const hour = today.getHours()
+              const timeGreeting = hour < 12 ? 'Good Morning' : hour < 18 ? 'Good Afternoon' : 'Good Evening'
               const year = today.getFullYear()
               const month = today.getMonth()
               const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -1276,7 +1278,7 @@ export default function App({ user, onLogout }) {
                     alignItems: 'center',
                   }}>
                     <div>
-                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Good day, Hair By Her</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>{timeGreeting}, {user?.username || 'there'}</div>
                       <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
                         {new Date().toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                       </div>
@@ -2051,7 +2053,6 @@ export default function App({ user, onLogout }) {
             )}
 
             {activePage === 'training' && user?.role !== 'staff' && (() => {
-              const accentColors = ['#C47A8A', '#8C5A6A', '#C4A882']
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <div style={{
@@ -2069,7 +2070,7 @@ export default function App({ user, onLogout }) {
                     </div>
                     <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.3, lineHeight: 1 }}>3</div>
                   </div>
-                  {CLASSES.map((c, index) => (
+                  {CLASSES.map((c) => (
                     <div
                       key={c.id}
                       style={{
@@ -2078,22 +2079,22 @@ export default function App({ user, onLogout }) {
                         border: 'none',
                         boxShadow: '0 2px 8px rgba(44,20,28,0.08)',
                         overflow: 'hidden',
+                        padding: '18px 20px',
                         display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
                       }}
                     >
-                      <div style={{ width: 4, background: accentColors[index], flexShrink: 0, alignSelf: 'stretch' }} />
-                      <div style={{ padding: '18px 20px', flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
-                            {c.name}
-                          </div>
-                          <div style={{ fontSize: 12, color: '#9A8A8E' }}>
-                            {c.duration}
-                          </div>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
+                          {c.name}
                         </div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: '#C47A8A' }}>
-                          R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
+                        <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                          {c.duration}
                         </div>
+                      </div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: '#C47A8A' }}>
+                        R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
                       </div>
                     </div>
                   ))}
