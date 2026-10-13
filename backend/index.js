@@ -311,27 +311,206 @@ app.get('/api/audit-logs', authenticate, requireRole('sysadmin'), async (req, re
   }
 })
 
+// ── Products ──────────────────────────────────────────────────────────────────
+// Public: active products only, for the customer site.
+app.get('/api/products', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, description, detail, price, badge, stock_quantity, low_stock_threshold
+       FROM products WHERE is_active = TRUE ORDER BY id ASC`
+    )
+    res.json(result.rows.map(p => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      detail: p.detail,
+      price: parseFloat(p.price),
+      badge: p.badge,
+      stockQuantity: p.stock_quantity,
+      lowStockThreshold: p.low_stock_threshold,
+    })))
+  } catch (err) {
+    console.error(err)
+    res.json([])
+  }
+})
+
+// Admin: every product, active or not, for the management screen.
+app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM products ORDER BY id ASC')
+    res.json(result.rows.map(p => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      detail: p.detail,
+      price: parseFloat(p.price),
+      badge: p.badge,
+      stockQuantity: p.stock_quantity,
+      lowStockThreshold: p.low_stock_threshold,
+      isActive: p.is_active,
+    })))
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch products' })
+  }
+})
+
+app.post('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { name, description, detail, price, badge, stockQuantity, lowStockThreshold } = req.body
+  if (!name || !name.trim() || price === undefined || price === null || price === '') {
+    return res.status(400).json({ error: 'Name and price are required' })
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO products (name, description, detail, price, badge, stock_quantity, low_stock_threshold)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        name.trim(),
+        description || '',
+        detail || '',
+        parseFloat(price),
+        badge || null,
+        parseInt(stockQuantity) || 0,
+        parseInt(lowStockThreshold) || 3,
+      ]
+    )
+    const p = result.rows[0]
+    await addNotification('section', 'Product added', `"${p.name}" was added to the shop.`)
+    res.status(201).json({
+      id: p.id, name: p.name, description: p.description, detail: p.detail,
+      price: parseFloat(p.price), badge: p.badge, stockQuantity: p.stock_quantity,
+      lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to create product' })
+  }
+})
+
+// Edit a product. Never deletes - is_active is the only way to remove one
+// from the shop, because old orders still refer to this id.
+app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const id = parseInt(req.params.id)
+  try {
+    const existingResult = await pool.query('SELECT * FROM products WHERE id = $1', [id])
+    if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
+    const existing = existingResult.rows[0]
+    const { name, description, detail, price, badge, lowStockThreshold, isActive } = req.body
+
+    const merged = {
+      name: name !== undefined ? name : existing.name,
+      description: description !== undefined ? description : existing.description,
+      detail: detail !== undefined ? detail : existing.detail,
+      price: price !== undefined && price !== '' ? parseFloat(price) : existing.price,
+      badge: badge !== undefined ? (badge || null) : existing.badge,
+      low_stock_threshold: lowStockThreshold !== undefined && lowStockThreshold !== ''
+        ? parseInt(lowStockThreshold) : existing.low_stock_threshold,
+      is_active: isActive !== undefined ? !!isActive : existing.is_active,
+    }
+
+    const result = await pool.query(
+      `UPDATE products SET name=$1, description=$2, detail=$3, price=$4, badge=$5,
+        low_stock_threshold=$6, is_active=$7, updated_at = NOW() WHERE id = $8 RETURNING *`,
+      [merged.name, merged.description, merged.detail, merged.price, merged.badge,
+       merged.low_stock_threshold, merged.is_active, id]
+    )
+    const p = result.rows[0]
+    if (existing.is_active && !p.is_active) {
+      await addNotification('section', 'Product deactivated', `"${p.name}" was deactivated and removed from the shop.`)
+    }
+    res.json({
+      id: p.id, name: p.name, description: p.description, detail: p.detail,
+      price: parseFloat(p.price), badge: p.badge, stockQuantity: p.stock_quantity,
+      lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update product' })
+  }
+})
+
+// Adjust stock outside of a sale (restock or a manual correction). Every
+// change is recorded in stock_movements for a full history.
+app.post('/api/admin/products/:id/stock', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { change, reason, note } = req.body
+  const delta = parseInt(change)
+  if (!delta || isNaN(delta)) {
+    return res.status(400).json({ error: 'A non-zero stock change is required' })
+  }
+  if (!['restock', 'adjustment'].includes(reason)) {
+    return res.status(400).json({ error: 'Reason must be "restock" or "adjustment"' })
+  }
+  try {
+    const existingResult = await pool.query('SELECT * FROM products WHERE id = $1', [id])
+    if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
+    const existing = existingResult.rows[0]
+    const newStock = Math.max(0, existing.stock_quantity + delta)
+    const result = await pool.query(
+      'UPDATE products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [newStock, id]
+    )
+    await pool.query(
+      'INSERT INTO stock_movements (product_id, change, reason, user_id, note) VALUES ($1, $2, $3, $4, $5)',
+      [id, newStock - existing.stock_quantity, reason, req.user.id, note || null]
+    )
+    const p = result.rows[0]
+    res.json({ id: p.id, stockQuantity: p.stock_quantity })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to adjust stock' })
+  }
+})
+
 // ── Orders ────────────────────────────────────────────────────────────────────
 // Public: the customer site has no login and must be able to place orders.
 app.post('/api/orders', async (req, res) => {
-  const { customerName, customerPhone, items, total } = req.body
-  if (!customerName || !customerPhone || !items || !Array.isArray(items)) {
+  const { customerName, customerPhone, items } = req.body
+  if (!customerName || !customerPhone || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Missing required fields' })
   }
   try {
+    // Look up every product server-side - price and total are never trusted
+    // from the browser, and unknown or inactive products are rejected.
+    const productIds = items.map(i => parseInt(i.id)).filter(n => !isNaN(n))
+    const productResult = productIds.length
+      ? await pool.query('SELECT * FROM products WHERE id = ANY($1)', [productIds])
+      : { rows: [] }
+    const productsById = {}
+    productResult.rows.forEach(p => { productsById[p.id] = p })
+
+    const orderItems = []
+    let total = 0
+    for (const item of items) {
+      const product = productsById[parseInt(item.id)]
+      if (!product || !product.is_active) {
+        return res.status(400).json({
+          error: `"${item.name || 'One of the items in your cart'}" is no longer available. Please remove it and try again.`
+        })
+      }
+      const qty = parseInt(item.qty)
+      if (!qty || qty <= 0) {
+        return res.status(400).json({ error: 'Invalid quantity' })
+      }
+      const price = parseFloat(product.price)
+      total += price * qty
+      orderItems.push({ productId: product.id, name: product.name, qty, price })
+    }
+
     const orderResult = await pool.query(
       'INSERT INTO orders (customer_name, customer_phone, total) VALUES ($1, $2, $3) RETURNING *',
       [customerName, customerPhone, total]
     )
     const order = orderResult.rows[0]
-    for (const item of items) {
+    for (const item of orderItems) {
       await pool.query(
         'INSERT INTO order_items (order_id, product_id, product_name, qty, price) VALUES ($1, $2, $3, $4, $5)',
-        [order.id, item.id, item.name, item.qty, item.price]
+        [order.id, item.productId, item.name, item.qty, item.price]
       )
     }
     await addNotification('order', 'New order received',
-      `${customerName} placed an order for ${items.length} item${items.length !== 1 ? 's' : ''} totalling R${total}.`)
+      `${customerName} placed an order for ${orderItems.length} item${orderItems.length !== 1 ? 's' : ''} totalling R${total}.`)
     console.log('New order:', order.id)
     res.status(201).json({ success: true, orderId: order.id })
   } catch (err) {
@@ -368,21 +547,69 @@ app.get('/api/orders', authenticate, async (req, res) => {
   }
 })
 
+// Confirming an order is when stock actually leaves the shelf. Done inside
+// one transaction: every item's stock is locked and checked before any of
+// it is touched, so a short-on-stock item refuses the whole confirmation
+// rather than leaving some products deducted and others not.
 app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
   const id = parseInt(req.params.id)
+  const client = await pool.connect()
   try {
-    const result = await pool.query(
-      "UPDATE orders SET status = 'confirmed' WHERE id = $1 RETURNING *",
-      [id]
-    )
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Order not found' })
-    const order = result.rows[0]
+    await client.query('BEGIN')
+
+    const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [id])
+    if (orderResult.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Order not found' })
+    }
+    const order = orderResult.rows[0]
+    if (order.status === 'confirmed') {
+      await client.query('ROLLBACK')
+      return res.json({ success: true })
+    }
+
+    const itemsResult = await client.query('SELECT * FROM order_items WHERE order_id = $1', [id])
+    const lowStockCrossed = []
+
+    for (const item of itemsResult.rows) {
+      const productResult = await client.query('SELECT * FROM products WHERE id = $1 FOR UPDATE', [item.product_id])
+      const product = productResult.rows[0]
+      if (!product) continue // product no longer exists; nothing to deduct
+
+      if (product.stock_quantity < item.qty) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({
+          error: `Not enough stock for "${product.name}" - only ${product.stock_quantity} left, but this order needs ${item.qty}. Restock before confirming.`
+        })
+      }
+
+      const newStock = product.stock_quantity - item.qty
+      await client.query('UPDATE products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2', [newStock, product.id])
+      await client.query(
+        'INSERT INTO stock_movements (product_id, change, reason, order_id, user_id) VALUES ($1, $2, $3, $4, $5)',
+        [product.id, -item.qty, 'sale', id, req.user.id]
+      )
+      if (product.stock_quantity > product.low_stock_threshold && newStock <= product.low_stock_threshold) {
+        lowStockCrossed.push({ name: product.name, stock: newStock })
+      }
+    }
+
+    await client.query("UPDATE orders SET status = 'confirmed' WHERE id = $1", [id])
+    await client.query('COMMIT')
+
     await addNotification('order', 'Order confirmed',
       `Order #${id} for ${order.customer_name} has been marked as confirmed.`)
+    for (const p of lowStockCrossed) {
+      await addNotification('stock', 'Low stock',
+        `"${p.name}" is running low - only ${p.stock} left.`)
+    }
     res.json({ success: true })
   } catch (err) {
+    await client.query('ROLLBACK')
     console.error(err)
     res.status(500).json({ error: 'Failed to confirm order' })
+  } finally {
+    client.release()
   }
 })
 

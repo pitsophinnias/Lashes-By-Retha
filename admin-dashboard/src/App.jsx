@@ -3,13 +3,6 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
 
-const PRODUCTS = [
-  { id: 1, name: 'Classic Lash Trays', detail: 'Diameter: 0.15 | Curl: D', price: 130 },
-  { id: 2, name: 'YY Lash Trays', detail: 'Diameter: 0.07 | Curl: D', price: 150 },
-  { id: 3, name: 'Volume Lash Trays', detail: 'Diameter: 0.05 | Curl: Cc & D', price: 150 },
-  { id: 4, name: 'Lash Shampoo and Cleansing Brush Combo', detail: 'Recommended for daily use', price: 100 },
-]
-
 const CLASSES = [
   { id: 1, name: 'Classic Individual Lash Training', duration: '1-day course', price: 2500 },
   { id: 2, name: 'Classic Individual Lash Training', duration: '2-day course', price: 4000 },
@@ -47,6 +40,19 @@ export default function App({ user, onLogout }) {
   const [newStaffUser, setNewStaffUser] = useState({ username: '', password: '' })
   const [staffCreateMsg, setStaffCreateMsg] = useState('')
 
+  const [products, setProducts] = useState([])
+  const [editingProduct, setEditingProduct] = useState(null)
+  // editingProduct shape: { id, name, description, detail, price, badge, lowStockThreshold } or null
+  const [showAddProduct, setShowAddProduct] = useState(false)
+  const [newProduct, setNewProduct] = useState({ name: '', description: '', detail: '', price: '', badge: '', stockQuantity: '', lowStockThreshold: '' })
+  const [productFormStatus, setProductFormStatus] = useState(null)
+  const [stockAdjustTarget, setStockAdjustTarget] = useState(null)
+  const [stockAdjustAmount, setStockAdjustAmount] = useState('')
+  const [stockAdjustReason, setStockAdjustReason] = useState('restock')
+  const [stockAdjustNote, setStockAdjustNote] = useState('')
+
+  const [orderConfirmError, setOrderConfirmError] = useState('')
+
   // Attaches the auth token to every request and logs the user out on a 401.
   // Never sets Content-Type for FormData bodies (file uploads) - the browser
   // must set its own multipart boundary.
@@ -82,17 +88,15 @@ export default function App({ user, onLogout }) {
   useEffect(() => {
     const token = localStorage.getItem('hbh_token')
     if (!token) return
-    // Fetch product images
-    PRODUCTS.forEach(async p => {
-      const res = await apiFetch(`/api/upload/products/${p.id}`)
-      const data = await res.json()
-      if (data && data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
-      try {
-        const posRes = await apiFetch(`/api/position/products/${p.id}`)
-        const posData = await posRes.json()
-        if (posData && posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
-      } catch {}
-    })
+    // Fetch the product catalog (used by both Image Management and the
+    // Products page's catalog panel)
+    apiFetch('/api/admin/products')
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) setProducts(data)
+        else setProducts([])
+      })
+      .catch(() => {})
     // Fetch class images
     CLASSES.forEach(async c => {
       const res = await apiFetch(`/api/upload/classes/${c.id}`)
@@ -168,6 +172,20 @@ export default function App({ user, onLogout }) {
       .catch(() => {})
     fetchOrders()
   }, [])
+
+  // Product images and positions depend on the product catalog having loaded.
+  useEffect(() => {
+    products.forEach(async p => {
+      const res = await apiFetch(`/api/upload/products/${p.id}`)
+      const data = await res.json()
+      if (data && data.url) setProductImages(prev => ({ ...prev, [p.id]: data.url }))
+      try {
+        const posRes = await apiFetch(`/api/position/products/${p.id}`)
+        const posData = await posRes.json()
+        if (posData && posData.position) setProductPositions(prev => ({ ...prev, [p.id]: posData.position }))
+      } catch {}
+    })
+  }, [products])
 
   const handleUpload = async (type, id, file) => {
     if (!file) return
@@ -302,12 +320,113 @@ export default function App({ user, onLogout }) {
   }
 
   const confirmOrder = async (id) => {
+    setOrderConfirmError('')
     try {
       const res = await apiFetch(`/api/orders/${id}/confirm`, { method: 'PATCH' })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         setOrders(prev => prev.map(o => o.id === id ? { ...o, status: 'confirmed' } : o))
+      } else {
+        setOrderConfirmError(data.error || 'Failed to confirm order.')
+      }
+    } catch {
+      setOrderConfirmError('Failed to confirm order.')
+    }
+  }
+
+  const fetchProducts = async () => {
+    try {
+      const res = await apiFetch('/api/admin/products')
+      const data = await res.json()
+      if (res.ok && Array.isArray(data)) setProducts(data)
+    } catch {}
+  }
+
+  const createProduct = async () => {
+    setProductFormStatus(null)
+    if (!newProduct.name.trim() || newProduct.price === '') {
+      setProductFormStatus({ type: 'error', message: 'Name and price are required.' })
+      return
+    }
+    try {
+      const res = await apiFetch('/api/admin/products', {
+        method: 'POST',
+        body: JSON.stringify(newProduct),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        await fetchProducts()
+        setNewProduct({ name: '', description: '', detail: '', price: '', badge: '', stockQuantity: '', lowStockThreshold: '' })
+        setShowAddProduct(false)
+        setProductFormStatus({ type: 'success', message: `"${data.name}" was added.` })
+        setTimeout(() => setProductFormStatus(null), 3000)
+      } else {
+        setProductFormStatus({ type: 'error', message: data.error || 'Failed to add product.' })
+      }
+    } catch {
+      setProductFormStatus({ type: 'error', message: 'Failed to add product.' })
+    }
+  }
+
+  const saveProductEdit = async () => {
+    if (!editingProduct) return
+    try {
+      const res = await apiFetch(`/api/admin/products/${editingProduct.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(editingProduct),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setProducts(prev => prev.map(p => p.id === data.id ? data : p))
+        setEditingProduct(null)
+      } else {
+        setProductFormStatus({ type: 'error', message: data.error || 'Failed to update product.' })
+      }
+    } catch {
+      setProductFormStatus({ type: 'error', message: 'Failed to update product.' })
+    }
+  }
+
+  const toggleProductActive = async (product) => {
+    const action = product.isActive ? 'deactivate' : 'reactivate'
+    if (!window.confirm(`Are you sure you want to ${action} "${product.name}"?`)) return
+    try {
+      const res = await apiFetch(`/api/admin/products/${product.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isActive: !product.isActive }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setProducts(prev => prev.map(p => p.id === data.id ? data : p))
       }
     } catch {}
+  }
+
+  const adjustStock = async () => {
+    if (!stockAdjustTarget) return
+    const amount = parseInt(stockAdjustAmount)
+    if (!amount || isNaN(amount)) {
+      setProductFormStatus({ type: 'error', message: 'Enter a non-zero amount.' })
+      return
+    }
+    try {
+      const res = await apiFetch(`/api/admin/products/${stockAdjustTarget.id}/stock`, {
+        method: 'POST',
+        body: JSON.stringify({ change: amount, reason: stockAdjustReason, note: stockAdjustNote }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setProducts(prev => prev.map(p => p.id === data.id ? { ...p, stockQuantity: data.stockQuantity } : p))
+        setStockAdjustTarget(null)
+        setStockAdjustAmount('')
+        setStockAdjustNote('')
+        setStockAdjustReason('restock')
+      } else {
+        setProductFormStatus({ type: 'error', message: data.error || 'Failed to adjust stock.' })
+      }
+    } catch {
+      setProductFormStatus({ type: 'error', message: 'Failed to adjust stock.' })
+    }
   }
 
   const changeBusinessPassword = async () => {
@@ -842,6 +961,7 @@ export default function App({ user, onLogout }) {
         .notif-type-image    { background: #E3F2FD; color: #1565C0; }
         .notif-type-section  { background: #F3E5F5; color: #6A1B9A; }
         .notif-type-system   { background: #E8F5E9; color: #2E7D32; }
+        .notif-type-stock    { background: #FDE8EC; color: #A23F51; }
 
         .notif-title {
           font-size: 13px;
@@ -1194,6 +1314,29 @@ export default function App({ user, onLogout }) {
                     </div>
                   </div>
 
+                  {/* Low stock */}
+                  {(() => {
+                    const lowStockProducts = products.filter(p => p.isActive && p.stockQuantity <= p.lowStockThreshold)
+                    if (lowStockProducts.length === 0) return null
+                    return (
+                      <div className="panel" style={{ marginBottom: 24 }}>
+                        <div className="panel-heading" style={{ background: '#C47A8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
+                          Low Stock
+                        </div>
+                        <div style={{ padding: '0 20px 20px 20px' }}>
+                          {lowStockProducts.map(p => (
+                            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{p.name}</div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: p.stockQuantity === 0 ? '#C47A8A' : '#8C5A6A' }}>
+                                {p.stockQuantity === 0 ? 'Sold out' : `${p.stockQuantity} left`}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   {/* Recent notifications preview */}
                   <div className="panel">
                     <div className="panel-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#C4A882', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
@@ -1285,6 +1428,270 @@ export default function App({ user, onLogout }) {
                     )
                   })}
                 </div>
+
+                <div className="section-heading" style={{ marginTop: 32 }}>Product Catalog</div>
+                <p style={{ fontSize: 14, color: '#7A6670', marginBottom: 20, lineHeight: 1.6 }}>
+                  Manage what is for sale, its price and how much stock you have. Deactivating a product takes it off the shop without losing its order history.
+                </p>
+
+                <button
+                  className="upload-btn"
+                  onClick={() => { setShowAddProduct(prev => !prev); setProductFormStatus(null) }}
+                  style={{ marginBottom: 16 }}
+                >
+                  {showAddProduct ? 'Cancel' : 'Add Product'}
+                </button>
+
+                {productFormStatus && (
+                  <div className={productFormStatus.type === 'success' ? 'success-msg' : 'error-msg'} style={{ marginBottom: 16 }}>
+                    {productFormStatus.message}
+                  </div>
+                )}
+
+                {showAddProduct && (
+                  <div className="category-item" style={{ display: 'block', marginBottom: 16 }}>
+                    <div className="field-label" style={{ marginBottom: 4 }}>Name</div>
+                    <input
+                      className="category-input"
+                      style={{ width: '100%', marginBottom: 10 }}
+                      value={newProduct.name}
+                      onChange={e => setNewProduct(p => ({ ...p, name: e.target.value }))}
+                      placeholder="Product name"
+                    />
+                    <div className="field-label" style={{ marginBottom: 4 }}>Description</div>
+                    <textarea
+                      className="category-input"
+                      style={{ width: '100%', marginBottom: 10, resize: 'vertical' }}
+                      rows={2}
+                      value={newProduct.description}
+                      onChange={e => setNewProduct(p => ({ ...p, description: e.target.value }))}
+                      placeholder="Shown to customers on the shop"
+                    />
+                    <div className="field-label" style={{ marginBottom: 4 }}>Detail</div>
+                    <input
+                      className="category-input"
+                      style={{ width: '100%', marginBottom: 10 }}
+                      value={newProduct.detail}
+                      onChange={e => setNewProduct(p => ({ ...p, detail: e.target.value }))}
+                      placeholder="e.g. Diameter: 0.15 | Curl: D"
+                    />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Price (R)</div>
+                        <input
+                          className="category-input"
+                          style={{ width: '100%' }}
+                          type="number"
+                          value={newProduct.price}
+                          onChange={e => setNewProduct(p => ({ ...p, price: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Badge (optional)</div>
+                        <input
+                          className="category-input"
+                          style={{ width: '100%' }}
+                          value={newProduct.badge}
+                          onChange={e => setNewProduct(p => ({ ...p, badge: e.target.value }))}
+                          placeholder="e.g. Popular"
+                        />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Starting Stock</div>
+                        <input
+                          className="category-input"
+                          style={{ width: '100%' }}
+                          type="number"
+                          value={newProduct.stockQuantity}
+                          onChange={e => setNewProduct(p => ({ ...p, stockQuantity: e.target.value }))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Low Stock Warning At</div>
+                        <input
+                          className="category-input"
+                          style={{ width: '100%' }}
+                          type="number"
+                          value={newProduct.lowStockThreshold}
+                          onChange={e => setNewProduct(p => ({ ...p, lowStockThreshold: e.target.value }))}
+                          placeholder="3"
+                        />
+                      </div>
+                    </div>
+                    <button className="upload-btn" onClick={createProduct}>Save Product</button>
+                  </div>
+                )}
+
+                <div className="category-list">
+                  {products.length === 0 && (
+                    <p style={{ fontSize: 14, color: '#9A7A82' }}>No products yet. Add one above.</p>
+                  )}
+                  {products.map(p => (
+                    <div
+                      key={p.id}
+                      className="admin-card"
+                      style={{ background: p.isActive ? '#FFFFFF' : '#F5F2F2', opacity: p.isActive ? 1 : 0.65 }}
+                    >
+                      <div className="card-img" style={{ overflow: 'hidden' }}>
+                        {productImages[p.id] ? (
+                          <img
+                            src={`${API}${productImages[p.id]}?t=${Date.now()}`}
+                            alt={p.name}
+                            style={{ width: '88px', height: '88px', borderRadius: '10px', objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <span>No image</span>
+                        )}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        {editingProduct?.id !== p.id ? (
+                          <>
+                            <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
+                              {p.name}
+                              {!p.isActive && (
+                                <span style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', marginLeft: 8 }}>
+                                  Inactive
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#7A6670', lineHeight: 1.5, marginBottom: 6 }}>
+                              {p.description}
+                            </div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#C47A8A', marginBottom: 4 }}>
+                              R {p.price}
+                            </div>
+                            <div style={{ fontSize: 12, color: p.stockQuantity <= p.lowStockThreshold ? '#C47A8A' : '#9A8A8E' }}>
+                              Stock: {p.stockQuantity}{p.stockQuantity <= p.lowStockThreshold ? ' (low)' : ''}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <input
+                              className="category-input"
+                              style={{ width: '100%', marginBottom: 8 }}
+                              value={editingProduct.name}
+                              onChange={e => setEditingProduct(prev => ({ ...prev, name: e.target.value }))}
+                            />
+                            <textarea
+                              className="category-input"
+                              style={{ width: '100%', marginBottom: 8, resize: 'vertical' }}
+                              rows={2}
+                              value={editingProduct.description}
+                              onChange={e => setEditingProduct(prev => ({ ...prev, description: e.target.value }))}
+                            />
+                            <input
+                              className="category-input"
+                              style={{ width: '100%', marginBottom: 8 }}
+                              value={editingProduct.detail}
+                              onChange={e => setEditingProduct(prev => ({ ...prev, detail: e.target.value }))}
+                              placeholder="Detail"
+                            />
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <input
+                                className="category-input"
+                                type="number"
+                                value={editingProduct.price}
+                                onChange={e => setEditingProduct(prev => ({ ...prev, price: e.target.value }))}
+                                placeholder="Price (R)"
+                              />
+                              <input
+                                className="category-input"
+                                value={editingProduct.badge || ''}
+                                onChange={e => setEditingProduct(prev => ({ ...prev, badge: e.target.value }))}
+                                placeholder="Badge"
+                              />
+                              <input
+                                className="category-input"
+                                type="number"
+                                value={editingProduct.lowStockThreshold}
+                                onChange={e => setEditingProduct(prev => ({ ...prev, lowStockThreshold: e.target.value }))}
+                                placeholder="Low stock at"
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', flexShrink: 0 }}>
+                        {editingProduct?.id !== p.id ? (
+                          <>
+                            <button
+                              className="secondary-btn"
+                              onClick={() => setEditingProduct({
+                                id: p.id, name: p.name, description: p.description, detail: p.detail,
+                                price: p.price, badge: p.badge || '', lowStockThreshold: p.lowStockThreshold,
+                              })}
+                            >
+                              Edit
+                            </button>
+                            <button className="secondary-btn" onClick={() => { setStockAdjustTarget(p); setProductFormStatus(null) }}>
+                              Adjust Stock
+                            </button>
+                            <button className="delete-btn" onClick={() => toggleProductActive(p)}>
+                              {p.isActive ? 'Deactivate' : 'Reactivate'}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button className="upload-btn" onClick={saveProductEdit}>Save</button>
+                            <button className="secondary-btn" onClick={() => setEditingProduct(null)}>Cancel</button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {stockAdjustTarget && (
+                  <div
+                    style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(44,26,32,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    onClick={() => setStockAdjustTarget(null)}
+                  >
+                    <div
+                      style={{ background: 'white', borderRadius: 16, padding: 32, maxWidth: 400, width: '100%', boxShadow: '0 8px 40px rgba(44,26,32,0.2)' }}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <div style={{ fontSize: 17, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Adjust Stock</div>
+                      <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
+                        "{stockAdjustTarget.name}" currently has {stockAdjustTarget.stockQuantity} in stock.
+                      </div>
+                      <div className="field-label" style={{ marginBottom: 4 }}>Change (use a negative number to reduce)</div>
+                      <input
+                        className="category-input"
+                        style={{ width: '100%', marginBottom: 10 }}
+                        type="number"
+                        value={stockAdjustAmount}
+                        onChange={e => setStockAdjustAmount(e.target.value)}
+                        placeholder="e.g. 20 or -5"
+                      />
+                      <div className="field-label" style={{ marginBottom: 4 }}>Reason</div>
+                      <select
+                        className="category-select"
+                        style={{ width: '100%', marginBottom: 10 }}
+                        value={stockAdjustReason}
+                        onChange={e => setStockAdjustReason(e.target.value)}
+                      >
+                        <option value="restock">Restock</option>
+                        <option value="adjustment">Correction</option>
+                      </select>
+                      <div className="field-label" style={{ marginBottom: 4 }}>Note (optional)</div>
+                      <input
+                        className="category-input"
+                        style={{ width: '100%', marginBottom: 16 }}
+                        value={stockAdjustNote}
+                        onChange={e => setStockAdjustNote(e.target.value)}
+                        placeholder="e.g. New supplier delivery"
+                      />
+                      {productFormStatus && productFormStatus.type === 'error' && (
+                        <div className="error-msg" style={{ marginBottom: 12 }}>{productFormStatus.message}</div>
+                      )}
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <button className="upload-btn" onClick={adjustStock}>Save</button>
+                        <button className="secondary-btn" onClick={() => setStockAdjustTarget(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1330,7 +1737,7 @@ export default function App({ user, onLogout }) {
                 {imageTab === 'products' && (
                   <div>
                     <div className="section-heading">Product Images</div>
-                    {PRODUCTS.map((p, index) => (
+                    {products.map((p, index) => (
                       <div
                         key={p.id}
                         className="admin-card"
@@ -1635,6 +2042,12 @@ export default function App({ user, onLogout }) {
                     Refresh
                   </button>
                 </div>
+
+                {orderConfirmError && (
+                  <div className="error-msg" style={{ marginBottom: 16 }}>
+                    {orderConfirmError}
+                  </div>
+                )}
 
                 {ordersLoading && (
                   <div style={{ fontSize: 13, color: '#AAAAAA', padding: '20px 0' }}>Loading orders...</div>
