@@ -4,9 +4,33 @@ import {
 } from 'recharts'
 
 const CLASSES = [
-  { id: 1, name: 'Classic Individual Lash Training', duration: '1-day course', price: 2500 },
-  { id: 2, name: 'Classic Individual Lash Training', duration: '2-day course', price: 4000 },
-  { id: 3, name: 'Advanced Individual Lash Training', duration: '4-day intensive course', price: 6000 },
+  {
+    id: 1,
+    name: 'Classic Individual Lash Training',
+    duration: '1-day course',
+    price: 2500,
+    description: 'Unlock the art of effortless elegance with our Classic Lash training. A comprehensive 1-day course designed to give you everything you need to start your lash journey.',
+    learns: ['Classic lash training', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
+  },
+  {
+    id: 2,
+    name: 'Classic Individual Lash Training',
+    duration: '2-day course',
+    price: 4000,
+    description: 'Our comprehensive 2-day Classic Lash course gives you more time to practise and perfect your technique before you start working with clients.',
+    learns: ['Classic lash training', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
+  },
+  {
+    id: 3,
+    name: 'Advanced Individual Lash Training',
+    duration: '4-day intensive course',
+    price: 6000,
+    description: 'Take your lash skills to the next level with our intensive 4-day Advanced course. Covering classic, hybrid and volume techniques, this course is designed to make you a well-rounded lash professional.',
+    learns: ['Classic, hybrid and volume lash', 'Fan making', 'Lash theory and anatomy', 'Lash isolation and placement', 'Lash design and mapping', 'Lash prepping and removal', 'Sanitation and safety protocols'],
+    includes: ['Lunch and refreshments', 'Training manual', 'Certificate of attendance', 'Lash kit', 'Lash removal kit', 'Ongoing support'],
+  },
 ]
 
 const API = 'http://localhost:3002'
@@ -53,6 +77,14 @@ export default function App({ user, onLogout }) {
   const [stockAdjustNote, setStockAdjustNote] = useState('')
 
   const [orderConfirmError, setOrderConfirmError] = useState('')
+
+  const [selectedClass, setSelectedClass] = useState(null)
+  const [classStudents, setClassStudents] = useState([])
+  const [studentsLoading, setStudentsLoading] = useState(false)
+  const [showAddStudent, setShowAddStudent] = useState(false)
+  const [newStudent, setNewStudent] = useState({ name: '', whatsapp: '', paymentStatus: 'unpaid', notes: '' })
+  const [studentSaving, setStudentSaving] = useState(false)
+  const [studentFormError, setStudentFormError] = useState('')
 
   // Attaches the auth token to every request and logs the user out on a 401.
   // Never sets Content-Type for FormData bodies (file uploads) - the browser
@@ -431,6 +463,74 @@ export default function App({ user, onLogout }) {
     }
   }
 
+  const openClass = async (cls) => {
+    setSelectedClass(cls)
+    setStudentsLoading(true)
+    setClassStudents([])
+    setShowAddStudent(false)
+    setStudentFormError('')
+    try {
+      const res = await apiFetch(`/api/classes/${cls.id}/students`)
+      const data = await res.json()
+      if (res.ok && Array.isArray(data)) setClassStudents(data)
+    } catch {
+      // silent fail
+    } finally {
+      setStudentsLoading(false)
+    }
+  }
+
+  const addStudent = async () => {
+    if (!newStudent.name.trim() || !newStudent.whatsapp.trim()) {
+      setStudentFormError('Name and WhatsApp number are required.')
+      return
+    }
+    setStudentFormError('')
+    setStudentSaving(true)
+    try {
+      const res = await apiFetch(`/api/classes/${selectedClass.id}/students`, {
+        method: 'POST',
+        body: JSON.stringify(newStudent),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setClassStudents(prev => [data, ...prev])
+        setNewStudent({ name: '', whatsapp: '', paymentStatus: 'unpaid', notes: '' })
+        setShowAddStudent(false)
+      } else {
+        setStudentFormError(data.error || 'Failed to add student.')
+      }
+    } catch {
+      setStudentFormError('Failed to add student.')
+    } finally {
+      setStudentSaving(false)
+    }
+  }
+
+  const updateStudentPayment = async (studentId, paymentStatus) => {
+    try {
+      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ paymentStatus }),
+      })
+      if (res.ok) {
+        setClassStudents(prev => prev.map(s => s.id === studentId ? { ...s, paymentStatus } : s))
+      }
+    } catch {
+      // silent fail
+    }
+  }
+
+  const removeStudent = async (studentId, studentName) => {
+    if (!window.confirm(`Remove ${studentName} from this class?`)) return
+    try {
+      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}`, { method: 'DELETE' })
+      if (res.ok) setClassStudents(prev => prev.filter(s => s.id !== studentId))
+    } catch {
+      // silent fail
+    }
+  }
+
   const changeBusinessPassword = async () => {
     setBPwMsg('')
     if (bPwNew !== bPwConfirm) { setBPwMsg('Passwords do not match.'); return }
@@ -724,6 +824,88 @@ export default function App({ user, onLogout }) {
         }
 
         .category-select:focus { border-color: #C47A8A; }
+
+        /* Class detail / students */
+        .back-btn {
+          background: none;
+          border: none;
+          color: #C47A8A;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          font-family: inherit;
+          padding: 0;
+          margin-bottom: 20px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          letter-spacing: 0.3px;
+        }
+
+        .back-btn:hover { color: #A0566A; }
+
+        .scope-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          margin-bottom: 20px;
+        }
+
+        .scope-card {
+          background: #F7EEF0;
+          border-radius: 10px;
+          padding: 16px;
+        }
+
+        .scope-card-title {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 1.5px;
+          color: #C47A8A;
+          text-transform: uppercase;
+          margin-bottom: 10px;
+        }
+
+        .scope-item {
+          font-size: 13px;
+          color: #5A4A50;
+          line-height: 1.8;
+          padding-left: 10px;
+          position: relative;
+        }
+
+        .scope-item::before {
+          content: '-';
+          position: absolute;
+          left: 0;
+          color: #C47A8A;
+        }
+
+        .student-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 14px 0;
+          border-bottom: 1px solid #F7EEF0;
+          gap: 12px;
+        }
+
+        .student-row:last-child { border-bottom: none; }
+
+        .payment-badge {
+          display: inline-block;
+          padding: 3px 10px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          white-space: nowrap;
+        }
+
+        .payment-paid    { background: #E8F5E9; color: #2E7D32; }
+        .payment-partial { background: #FFF3E0; color: #E65100; }
+        .payment-unpaid  { background: #FDE8EC; color: #C47A8A; }
 
         /* Gallery grid */
         .gallery-grid-admin {
@@ -1045,6 +1227,17 @@ export default function App({ user, onLogout }) {
           .order-card-header {
             flex-wrap: wrap !important;
             gap: 10px !important;
+          }
+
+          .scope-grid { grid-template-columns: 1fr !important; }
+
+          .student-row {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+          }
+          .student-row > div:last-child {
+            flex-wrap: wrap !important;
+            width: 100% !important;
           }
         }
 
@@ -2053,51 +2246,215 @@ export default function App({ user, onLogout }) {
             )}
 
             {activePage === 'training' && user?.role !== 'staff' && (() => {
+              if (selectedClass === null) {
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div style={{
+                      background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
+                      borderRadius: 14,
+                      padding: '28px 32px',
+                      color: 'white',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Lash Training</div>
+                        <div style={{ fontSize: 13, opacity: 0.8 }}>3 courses available on the customer-facing site</div>
+                      </div>
+                      <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.3, lineHeight: 1 }}>3</div>
+                    </div>
+                    {CLASSES.map((c) => (
+                      <div
+                        key={c.id}
+                        onClick={() => openClass(c)}
+                        style={{
+                          background: '#FFFFFF',
+                          borderRadius: 12,
+                          border: 'none',
+                          boxShadow: '0 2px 8px rgba(44,20,28,0.08)',
+                          overflow: 'hidden',
+                          padding: '18px 20px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
+                            {c.name}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                            {c.duration}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: '#C47A8A' }}>
+                            R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
+                          </div>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C4A0A8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              }
+
               return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div>
+                  <button className="back-btn" onClick={() => { setSelectedClass(null); setClassStudents([]) }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+                    Back to Classes
+                  </button>
+
                   <div style={{
                     background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
                     borderRadius: 14,
-                    padding: '28px 32px',
+                    padding: '24px 28px',
+                    marginBottom: 20,
                     color: 'white',
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
                   }}>
                     <div>
-                      <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Lash Training</div>
-                      <div style={{ fontSize: 13, opacity: 0.8 }}>3 courses available on the customer-facing site</div>
+                      <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.7, textTransform: 'uppercase', marginBottom: 6 }}>{selectedClass.duration}</div>
+                      <div style={{ fontSize: 22, fontWeight: 700 }}>{selectedClass.name}</div>
+                      <div style={{ fontSize: 15, opacity: 0.8, marginTop: 4 }}>R {selectedClass.price}</div>
                     </div>
-                    <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.3, lineHeight: 1 }}>3</div>
+                    <div style={{ fontSize: 40, fontWeight: 700, opacity: 0.2 }}>R{selectedClass.price}</div>
                   </div>
-                  {CLASSES.map((c) => (
-                    <div
-                      key={c.id}
-                      style={{
-                        background: '#FFFFFF',
-                        borderRadius: 12,
-                        border: 'none',
-                        boxShadow: '0 2px 8px rgba(44,20,28,0.08)',
-                        overflow: 'hidden',
-                        padding: '18px 20px',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 3 }}>
-                          {c.name}
-                        </div>
-                        <div style={{ fontSize: 12, color: '#9A8A8E' }}>
-                          {c.duration}
-                        </div>
+
+                  <div className="panel" style={{ marginBottom: 20, padding: 20 }}>
+                    <div style={{ background: '#EDD5DB', color: '#2C1A20', borderRadius: '10px 10px 0 0', padding: '12px 20px', margin: '-20px -20px 16px -20px', fontSize: 13, fontWeight: 700 }}>
+                      Course Scope
+                    </div>
+                    <div className="scope-grid">
+                      <div className="scope-card">
+                        <div className="scope-card-title">What You Will Learn</div>
+                        {selectedClass.learns.map((item, i) => (
+                          <div key={i} className="scope-item">{item}</div>
+                        ))}
                       </div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: '#C47A8A' }}>
-                        R{c.price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}
+                      <div className="scope-card">
+                        <div className="scope-card-title">What Is Included</div>
+                        {selectedClass.includes.map((item, i) => (
+                          <div key={i} className="scope-item">{item}</div>
+                        ))}
                       </div>
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#EDD5DB', padding: '12px 20px', color: '#2C1A20' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>Students</div>
+                      <div style={{ fontSize: 11, color: '#8C5A6A', fontWeight: 600 }}>{classStudents.length} enrolled</div>
+                    </div>
+
+                    <div style={{ padding: '16px 20px', borderBottom: '1px solid #F7EEF0' }}>
+                      <button className="upload-btn" onClick={() => { setShowAddStudent(prev => !prev); setStudentFormError('') }}>
+                        {showAddStudent ? 'Cancel' : 'Add Student'}
+                      </button>
+                    </div>
+
+                    {showAddStudent && (
+                      <div style={{ padding: '16px 20px', background: '#FAF6F4', borderBottom: '1px solid #F7EEF0' }}>
+                        <input
+                          className="category-input"
+                          style={{ width: '100%', marginBottom: 10 }}
+                          placeholder="Student name"
+                          value={newStudent.name}
+                          onChange={e => setNewStudent(prev => ({ ...prev, name: e.target.value }))}
+                        />
+                        <input
+                          className="category-input"
+                          style={{ width: '100%', marginBottom: 10 }}
+                          placeholder="WhatsApp number"
+                          value={newStudent.whatsapp}
+                          onChange={e => setNewStudent(prev => ({ ...prev, whatsapp: e.target.value }))}
+                        />
+                        <select
+                          className="category-select"
+                          style={{ width: '100%', marginBottom: 10, padding: '9px 12px' }}
+                          value={newStudent.paymentStatus}
+                          onChange={e => setNewStudent(prev => ({ ...prev, paymentStatus: e.target.value }))}
+                        >
+                          <option value="unpaid">Unpaid</option>
+                          <option value="partial">Partially Paid</option>
+                          <option value="paid">Paid</option>
+                        </select>
+                        <input
+                          className="category-input"
+                          style={{ width: '100%', marginBottom: 10 }}
+                          placeholder="Notes (optional)"
+                          value={newStudent.notes}
+                          onChange={e => setNewStudent(prev => ({ ...prev, notes: e.target.value }))}
+                        />
+                        {studentFormError && (
+                          <div className="error-msg" style={{ marginBottom: 10 }}>{studentFormError}</div>
+                        )}
+                        <button className="upload-btn" onClick={addStudent} disabled={studentSaving}>
+                          {studentSaving ? 'Saving...' : 'Save Student'}
+                        </button>
+                      </div>
+                    )}
+
+                    <div style={{ padding: '0 20px' }}>
+                      {studentsLoading && (
+                        <div style={{ padding: 20, fontSize: 13, color: '#9A8A8E' }}>Loading students...</div>
+                      )}
+                      {!studentsLoading && classStudents.length === 0 && (
+                        <div style={{ padding: '24px 0', fontSize: 13, color: '#9A8A8E', textAlign: 'center' }}>
+                          No students enrolled yet.
+                        </div>
+                      )}
+                      {!studentsLoading && classStudents.map(student => (
+                        <div key={student.id} className="student-row">
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
+                              {student.name}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                              {student.whatsapp}
+                            </div>
+                            {student.notes && (
+                              <div style={{ fontSize: 11, color: '#C4A0A8', fontStyle: 'italic', marginTop: 2 }}>
+                                {student.notes}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <select
+                              className="category-select"
+                              value={student.paymentStatus}
+                              onChange={e => updateStudentPayment(student.id, e.target.value)}
+                            >
+                              <option value="unpaid">Unpaid</option>
+                              <option value="partial">Partially Paid</option>
+                              <option value="paid">Paid</option>
+                            </select>
+                            <span className={`payment-badge payment-${student.paymentStatus === 'partial' ? 'partial' : student.paymentStatus === 'paid' ? 'paid' : 'unpaid'}`}>
+                              {student.paymentStatus === 'paid' ? 'Paid' : student.paymentStatus === 'partial' ? 'Partial' : 'Unpaid'}
+                            </span>
+                            <a
+                              href={`https://wa.me/${student.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(`Hi ${student.name}, this is a message from Hair By Her regarding your enrolment.`)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 6, background: '#25D366', color: 'white', textDecoration: 'none', fontSize: 13, fontWeight: 700 }}
+                            >
+                              W
+                            </a>
+                            <button className="delete-btn" onClick={() => removeStudent(student.id, student.name)}>
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )
             })()}

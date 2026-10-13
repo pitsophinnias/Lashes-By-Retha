@@ -62,6 +62,16 @@ const createTables = async () => {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS students (
+      id SERIAL PRIMARY KEY,
+      class_id INTEGER NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      whatsapp VARCHAR(50) NOT NULL,
+      payment_status VARCHAR(50) NOT NULL DEFAULT 'unpaid',
+      notes TEXT DEFAULT '',
+      enrolled_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS roles (
       id SERIAL PRIMARY KEY,
       name VARCHAR(50) NOT NULL UNIQUE,
