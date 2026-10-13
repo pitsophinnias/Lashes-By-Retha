@@ -37,6 +37,7 @@ const API = 'http://localhost:3002'
 
 export default function App({ user, onLogout }) {
   const [activePage, setActivePage] = useState('dashboard')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [imageTab, setImageTab] = useState('products')
   const [productImages, setProductImages] = useState({})
   const [classImages, setClassImages] = useState({})
@@ -1165,16 +1166,108 @@ export default function App({ user, onLogout }) {
           margin-top: 3px;
         }
 
+        /* ── Mobile ── */
+        @media (max-width: 768px) {
+          .admin-hamburger { display: flex !important; }
+          .admin-nav-close { display: block !important; }
+
+          .admin-nav-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(44,20,28,0.5);
+            z-index: 99;
+          }
+
+          .admin-sidebar {
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            z-index: 200 !important;
+            box-shadow: 4px 0 24px rgba(44,20,28,0.25);
+          }
+
+          .admin-sidebar.open {
+            transform: translateX(0);
+          }
+
+          .admin-main { margin-left: 0 !important; }
+          .admin-topbar { padding: 0 16px !important; }
+          .admin-content { padding: 16px !important; }
+
+          .admin-stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
+          .dashboard-grid { grid-template-columns: 1fr !important; }
+          .admin-form-grid { grid-template-columns: 1fr !important; }
+
+          .admin-card {
+            flex-direction: column !important;
+            align-items: stretch !important;
+          }
+          .admin-card .card-img {
+            width: 100% !important;
+            height: 160px !important;
+          }
+          .admin-card .card-img img {
+            width: 100% !important;
+            height: 160px !important;
+          }
+          .admin-card > div:last-child {
+            flex-direction: row !important;
+            flex-wrap: wrap !important;
+            align-items: center !important;
+            width: 100% !important;
+          }
+
+          .category-input-row {
+            flex-direction: column !important;
+            align-items: stretch !important;
+          }
+
+          .order-card-header {
+            flex-wrap: wrap !important;
+            gap: 10px !important;
+          }
+
+          .scope-grid { grid-template-columns: 1fr !important; }
+
+          .student-row {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+          }
+          .student-row > div:last-child {
+            flex-wrap: wrap !important;
+            width: 100% !important;
+          }
+        }
+
       `}</style>
       <div style={{ display: 'flex', minHeight: '100vh', background: '#FAF6F4', fontFamily: "'Lato', sans-serif" }}>
 
+        {/* MOBILE NAV OVERLAY */}
+        {mobileNavOpen && (
+          <div
+            className="admin-nav-overlay"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        )}
+
         {/* SIDEBAR */}
-        <div style={{ position: 'fixed', top: 0, left: 0, width: 240, height: '100vh', background: '#2C1A20', display: 'flex', flexDirection: 'column', zIndex: 100, overflowY: 'auto' }}>
+        <div className={`admin-sidebar${mobileNavOpen ? ' open' : ''}`} style={{ position: 'fixed', top: 0, left: 0, width: 240, height: '100vh', background: '#2C1A20', display: 'flex', flexDirection: 'column', zIndex: 100, overflowY: 'auto' }}>
 
           {/* Logo */}
-          <div style={{ padding: '24px 20px', borderBottom: '1px solid #3E2A30' }}>
-            <img src="/logo.png" alt="Hair By Her" style={{ height: 48, width: 'auto', objectFit: 'contain', display: 'block', mixBlendMode: 'lighten' }} />
-            <div style={{ fontSize: 11, color: '#888888', letterSpacing: '1.5px', textTransform: 'uppercase', marginTop: 8 }}>Admin Dashboard</div>
+          <div style={{ padding: '24px 20px', borderBottom: '1px solid #3E2A30', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <img src="/logo.png" alt="Hair By Her" style={{ height: 48, width: 'auto', objectFit: 'contain', display: 'block', mixBlendMode: 'lighten' }} />
+              <div style={{ fontSize: 11, color: '#888888', letterSpacing: '1.5px', textTransform: 'uppercase', marginTop: 8 }}>Admin Dashboard</div>
+            </div>
+            <button
+              className="admin-nav-close"
+              onClick={() => setMobileNavOpen(false)}
+              style={{ background: 'none', border: 'none', color: '#C4A0A8', fontSize: 22, cursor: 'pointer', display: 'none', lineHeight: 1 }}
+            >
+              x
+            </button>
           </div>
 
           {/* Nav */}
@@ -1192,7 +1285,7 @@ export default function App({ user, onLogout }) {
             ].map(item => (
               <button
                 key={item.value}
-                onClick={() => setActivePage(item.value)}
+                onClick={() => { setActivePage(item.value); setMobileNavOpen(false) }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -1270,14 +1363,26 @@ export default function App({ user, onLogout }) {
         </div>
 
         {/* MAIN CONTENT */}
-        <div style={{ marginLeft: 240, flex: 1, minHeight: '100vh', background: '#FAF6F4' }}>
+        <div className="admin-main" style={{ marginLeft: 240, flex: 1, minHeight: '100vh', background: '#FAF6F4' }}>
 
           {/* Top bar */}
-          <div style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF', letterSpacing: '0.3px' }}>
-              {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications', settings: 'Settings' }[activePage]}
+          <div className="admin-topbar" style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <button
+                className="admin-hamburger"
+                onClick={() => setMobileNavOpen(true)}
+                aria-label="Open menu"
+                style={{ display: 'none', background: 'none', border: 'none', cursor: 'pointer', padding: 0, flexDirection: 'column', gap: 4 }}
+              >
+                <span style={{ width: 20, height: 2, background: '#FFFFFF', borderRadius: 2 }} />
+                <span style={{ width: 20, height: 2, background: '#FFFFFF', borderRadius: 2 }} />
+                <span style={{ width: 20, height: 2, background: '#FFFFFF', borderRadius: 2 }} />
+              </button>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF', letterSpacing: '0.3px' }}>
+                {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications', settings: 'Settings' }[activePage]}
+              </div>
             </div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 20, fontWeight: 600 }}>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 20, fontWeight: 600, whiteSpace: 'nowrap' }}>
               {user?.role === 'staff' ? 'Staff View' : (
                 { dashboard: 'Overview', products: `${categories.length} sections`, images: imageTab === 'products' ? '4 products' : imageTab === 'classes' ? '3 classes' : `${galleryImages.length} files`, training: '3 classes', orders: `${orders.length} order${orders.length !== 1 ? 's' : ''}`, notifications: `${unreadCount} unread`, settings: 'Account' }[activePage]
               )}
@@ -1285,10 +1390,12 @@ export default function App({ user, onLogout }) {
           </div>
 
           {/* Content */}
-          <div style={{ padding: 32, maxWidth: 1200 }}>
+          <div className="admin-content" style={{ padding: 32, maxWidth: 1200 }}>
 
             {activePage === 'dashboard' && (() => {
               const today = new Date()
+              const hour = today.getHours()
+              const timeGreeting = hour < 12 ? 'Good Morning' : hour < 18 ? 'Good Afternoon' : 'Good Evening'
               const year = today.getFullYear()
               const month = today.getMonth()
               const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -1364,7 +1471,7 @@ export default function App({ user, onLogout }) {
                     alignItems: 'center',
                   }}>
                     <div>
-                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Good day, Hair By Her</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>{timeGreeting}, {user?.username || 'there'}</div>
                       <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
                         {new Date().toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                       </div>
@@ -1373,7 +1480,7 @@ export default function App({ user, onLogout }) {
                   </div>
 
                   {/* Stats row */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+                  <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
                     {statCards.map(stat => (
                       <div
                         key={stat.label}
@@ -1429,7 +1536,7 @@ export default function App({ user, onLogout }) {
                     {/* Recent orders */}
                     <div className="panel">
                       <div className="panel-heading" style={{ background: '#7A9E8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>Recent Orders</div>
-                      <div style={{ padding: '0 20px 20px 20px' }}>
+                      <div style={{ padding: '0 20px 20px 20px', overflowX: 'auto' }}>
                         {recentOrders.length === 0 ? (
                           <div style={{ fontSize: 13, color: '#AAAAAA', padding: '16px 0' }}>
                             No orders yet.
@@ -1658,7 +1765,7 @@ export default function App({ user, onLogout }) {
                       onChange={e => setNewProduct(p => ({ ...p, detail: e.target.value }))}
                       placeholder="e.g. Diameter: 0.15 | Curl: D"
                     />
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                    <div className="admin-form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
                       <div>
                         <div className="field-label" style={{ marginBottom: 4 }}>Price (R)</div>
                         <input
