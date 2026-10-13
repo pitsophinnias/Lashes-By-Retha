@@ -463,6 +463,83 @@ app.post('/api/admin/products/:id/stock', authenticate, requireRole('sysadmin', 
   }
 })
 
+// ── Students ──────────────────────────────────────────────────────────────────
+// Classes are a static list on the frontend (CLASSES), so class_id is just
+// the matching id from that list, not a foreign key.
+app.get('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM students WHERE class_id = $1 ORDER BY enrolled_at DESC',
+      [req.params.classId]
+    )
+    res.json(result.rows.map(s => ({
+      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
+      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+    })))
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch students' })
+  }
+})
+
+app.post('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { name, whatsapp, paymentStatus, notes } = req.body
+  if (!name || !name.trim() || !whatsapp || !whatsapp.trim()) {
+    return res.status(400).json({ error: 'Name and WhatsApp number are required' })
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO students (class_id, name, whatsapp, payment_status, notes)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [req.params.classId, name.trim(), whatsapp.trim(), paymentStatus || 'unpaid', notes || '']
+    )
+    const s = result.rows[0]
+    await addNotification('section', 'New student enrolled', `${s.name} was added to a Lash Training class.`)
+    res.status(201).json({
+      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
+      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to add student' })
+  }
+})
+
+app.patch('/api/classes/:classId/students/:studentId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { paymentStatus, notes } = req.body
+  try {
+    const result = await pool.query(
+      `UPDATE students SET payment_status = COALESCE($1, payment_status),
+       notes = COALESCE($2, notes)
+       WHERE id = $3 AND class_id = $4 RETURNING *`,
+      [paymentStatus, notes, req.params.studentId, req.params.classId]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    const s = result.rows[0]
+    res.json({
+      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
+      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update student' })
+  }
+})
+
+app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM students WHERE id = $1 AND class_id = $2 RETURNING id',
+      [req.params.studentId, req.params.classId]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    res.json({ success: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to remove student' })
+  }
+})
+
 // ── Orders ────────────────────────────────────────────────────────────────────
 // Public: the customer site has no login and must be able to place orders.
 app.post('/api/orders', async (req, res) => {
