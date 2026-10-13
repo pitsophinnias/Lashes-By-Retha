@@ -132,13 +132,14 @@ export default function App({ user, onLogout }) {
         else setProductCategories({})
       })
       .catch(() => {})
-    // Fetch notifications
+    // Fetch notifications (system notifications are sysadmin-only, never shown here)
     apiFetch('/api/notifications')
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
-          setNotifications(data)
-          setUnreadCount(data.filter(n => !n.read).length)
+          const visible = data.filter(n => n.type !== 'system')
+          setNotifications(visible)
+          setUnreadCount(visible.filter(n => !n.read).length)
         } else {
           setNotifications([])
         }
@@ -162,11 +163,11 @@ export default function App({ user, onLogout }) {
         }
       })
       .catch(() => {})
-    // Fetch archived notifications
+    // Fetch archived notifications (system notifications are sysadmin-only, never shown here)
     apiFetch('/api/notifications/archived')
       .then(r => r.json())
       .then(data => {
-        if (Array.isArray(data)) setArchivedNotifications(data)
+        if (Array.isArray(data)) setArchivedNotifications(data.filter(n => n.type !== 'system'))
         else setArchivedNotifications([])
       })
       .catch(() => {})
@@ -2257,7 +2258,6 @@ export default function App({ user, onLogout }) {
                 { label: 'Orders',   value: 'order' },
                 { label: 'Images',   value: 'image' },
                 { label: 'Sections', value: 'section' },
-                { label: 'System',   value: 'system' },
                 { label: 'Archive',  value: 'archive' },
               ]
 
