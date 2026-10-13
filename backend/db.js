@@ -90,6 +90,31 @@ const createTables = async () => {
       ip_address VARCHAR(50),
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      detail VARCHAR(255) NOT NULL DEFAULT '',
+      price NUMERIC(10,2) NOT NULL DEFAULT 0,
+      badge VARCHAR(100),
+      stock_quantity INTEGER NOT NULL DEFAULT 0,
+      low_stock_threshold INTEGER NOT NULL DEFAULT 3,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS stock_movements (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      change INTEGER NOT NULL,
+      reason VARCHAR(50) NOT NULL,
+      order_id INTEGER REFERENCES orders(id),
+      user_id INTEGER REFERENCES users(id),
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
   `)
 
   // Seed default categories if none exist
@@ -132,6 +157,25 @@ const createTables = async () => {
       ['Pitso', 'pitso@hairbyher.co.za', hash, roleResult.rows[0].id]
     )
     console.log('Sysadmin user seeded: Pitso')
+  }
+
+  // Seed products if none exist. Ids 1-4 are kept exactly as the old
+  // hard-coded list used them, because uploaded images, image positions
+  // and section assignments are all keyed by these same ids.
+  const { rows: productRows } = await pool.query('SELECT COUNT(*) FROM products')
+  if (parseInt(productRows[0].count) === 0) {
+    await pool.query(`
+      INSERT INTO products (id, name, description, detail, price, badge, stock_quantity, low_stock_threshold, is_active) VALUES
+        (1, 'Classic Lash Trays', 'Professional classic lash trays for individual lash extensions. Perfect for creating a natural, elegant look.', 'Diameter: 0.15 | Curl: D', 130, NULL, 10, 3, TRUE),
+        (2, 'YY Lash Trays', 'YY lash trays designed for a wispy, textured finish. Ideal for creating that effortlessly full look.', 'Diameter: 0.07 | Curl: D', 150, 'Popular', 10, 3, TRUE),
+        (3, 'Volume Lash Trays', 'Ultra-fine volume lash trays for handmade fans and Russian volume sets. Available in two curl options.', 'Diameter: 0.05 | Curl: Cc & D', 150, 'Pro Pick', 10, 3, TRUE),
+        (4, 'Lash Shampoo and Cleansing Brush Combo', 'Keep your lash extensions clean and fresh with our gentle foaming lash shampoo paired with a soft cleansing brush.', 'Recommended for daily use', 100, 'Best Seller', 10, 3, TRUE)
+      ON CONFLICT (id) DO NOTHING;
+    `)
+    // Keep the id sequence ahead of the explicit ids above, so the next
+    // product created through the admin dashboard gets id 5, not a clash.
+    await pool.query(`SELECT setval('products_id_seq', (SELECT MAX(id) FROM products))`)
+    console.log('Products seeded')
   }
 
   console.log('Database tables ready')
