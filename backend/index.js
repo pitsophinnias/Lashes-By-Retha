@@ -854,6 +854,7 @@ app.patch('/api/notifications/:id/read', authenticate, async (req, res) => {
 // ── Start server ──────────────────────────────────────────────────────────────
 const start = async () => {
   await createTables()
+  await archiveOldNotifications()
   await addNotification('system', 'Dashboard ready', 'Hair By Her admin dashboard is live and running.')
   app.listen(PORT, () => {
     console.log(`Lashes By Retha backend listening on port ${PORT}`)
