@@ -4,6 +4,7 @@ const API = 'http://localhost:3002'
 
 export default function SysAdminDashboard({ user, onLogout }) {
   const [activePage, setActivePage] = useState('overview')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [users, setUsers] = useState([])
   const [roles, setRoles] = useState([])
   const [systemNotifications, setSystemNotifications] = useState([])
@@ -193,22 +194,73 @@ export default function SysAdminDashboard({ user, onLogout }) {
         .sa-btn-danger:hover { background: #C47A8A; color: white; }
         .sa-panel { background: white; border-radius: 12px; border: none; padding: 24px; box-shadow: 0 2px 8px rgba(44,20,28,0.08); margin-bottom: 16px; }
         .sa-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+
+        /* ── Mobile ── */
+        @media (max-width: 768px) {
+          .admin-hamburger { display: flex !important; }
+          .admin-nav-close { display: block !important; }
+
+          .admin-nav-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(44,20,28,0.5);
+            z-index: 99;
+          }
+
+          .admin-sidebar {
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            z-index: 200 !important;
+            box-shadow: 4px 0 24px rgba(44,20,28,0.25);
+          }
+
+          .admin-sidebar.open {
+            transform: translateX(0);
+          }
+
+          .admin-main { margin-left: 0 !important; }
+          .admin-topbar { padding: 0 16px !important; }
+          .admin-content { padding: 16px !important; }
+
+          .admin-stat-grid { grid-template-columns: 1fr !important; }
+          .admin-form-grid { grid-template-columns: 1fr !important; }
+        }
       `}</style>
 
       <div style={{ display: 'flex', minHeight: '100vh', background: '#FAF6F4', fontFamily: "'Lato', sans-serif" }}>
 
+        {/* Mobile nav overlay */}
+        {mobileNavOpen && (
+          <div
+            className="admin-nav-overlay"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        )}
+
         {/* Sidebar */}
-        <div style={{ position: 'fixed', top: 0, left: 0, width: 240, height: '100vh', background: '#2C1A20', display: 'flex', flexDirection: 'column', zIndex: 100 }}>
-          <div style={{ padding: '24px 20px', borderBottom: '1px solid #3E2A30' }}>
-            <img src="/logo.png" alt="Hair By Her" style={{ height: 48, width: 'auto', objectFit: 'contain', display: 'block', mixBlendMode: 'lighten' }} />
-            <div style={{ fontSize: 10, color: '#C4A0A8', letterSpacing: 2, textTransform: 'uppercase', marginTop: 8 }}>System Admin</div>
+        <div className={`admin-sidebar${mobileNavOpen ? ' open' : ''}`} style={{ position: 'fixed', top: 0, left: 0, width: 240, height: '100vh', background: '#2C1A20', display: 'flex', flexDirection: 'column', zIndex: 100 }}>
+          <div style={{ padding: '24px 20px', borderBottom: '1px solid #3E2A30', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <img src="/logo.png" alt="Hair By Her" style={{ height: 48, width: 'auto', objectFit: 'contain', display: 'block', mixBlendMode: 'lighten' }} />
+              <div style={{ fontSize: 10, color: '#C4A0A8', letterSpacing: 2, textTransform: 'uppercase', marginTop: 8 }}>System Admin</div>
+            </div>
+            <button
+              className="admin-nav-close"
+              onClick={() => setMobileNavOpen(false)}
+              style={{ background: 'none', border: 'none', color: '#C4A0A8', fontSize: 22, cursor: 'pointer', display: 'none', lineHeight: 1 }}
+            >
+              x
+            </button>
           </div>
 
           <nav style={{ padding: '16px 12px', flex: 1 }}>
             {navItems.map(item => (
               <button
                 key={item.value}
-                onClick={() => setActivePage(item.value)}
+                onClick={() => { setActivePage(item.value); setMobileNavOpen(false) }}
                 style={{
                   display: 'flex', alignItems: 'center', width: '100%',
                   padding: '10px 14px', borderRadius: 8, border: 'none',
@@ -241,20 +293,32 @@ export default function SysAdminDashboard({ user, onLogout }) {
         </div>
 
         {/* Main content */}
-        <div style={{ marginLeft: 240, flex: 1, minHeight: '100vh' }}>
+        <div className="admin-main" style={{ marginLeft: 240, flex: 1, minHeight: '100vh' }}>
 
           {/* Top bar */}
-          <div style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF' }}>{pageTitles[activePage]}</div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', background: 'rgba(255,255,255,0.08)', padding: '4px 12px', borderRadius: 20 }}>System Admin Portal</div>
+          <div className="admin-topbar" style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <button
+                className="admin-hamburger"
+                onClick={() => setMobileNavOpen(true)}
+                aria-label="Open menu"
+                style={{ display: 'none', background: 'none', border: 'none', cursor: 'pointer', padding: 0, flexDirection: 'column', gap: 4 }}
+              >
+                <span style={{ width: 20, height: 2, background: '#FFFFFF', borderRadius: 2 }} />
+                <span style={{ width: 20, height: 2, background: '#FFFFFF', borderRadius: 2 }} />
+                <span style={{ width: 20, height: 2, background: '#FFFFFF', borderRadius: 2 }} />
+              </button>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF' }}>{pageTitles[activePage]}</div>
+            </div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', background: 'rgba(255,255,255,0.08)', padding: '4px 12px', borderRadius: 20, whiteSpace: 'nowrap' }}>System Admin Portal</div>
           </div>
 
-          <div style={{ padding: 32, maxWidth: 1100 }}>
+          <div className="admin-content" style={{ padding: 32, maxWidth: 1100 }}>
 
             {/* Overview */}
             {activePage === 'overview' && (
               <div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
+                <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
                   {[
                     { label: 'Total Users', value: users.length, bg: '#C47A8A' },
                     { label: 'Active Users', value: users.filter(u => u.is_active).length, bg: '#7A9E8A' },
@@ -267,7 +331,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
                   ))}
                 </div>
 
-                <div className="sa-panel">
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid #F0E8EA' }}>Recent Users</div>
                   <table className="sa-table">
                     <thead>
@@ -337,7 +401,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
                 {showCreateUser && (
                   <div className="sa-panel" style={{ marginBottom: 20, background: '#FDF6F4' }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 16 }}>New User</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div className="admin-form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                       <div>
                         <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>Username</label>
                         <input className="sa-input" placeholder="Username" value={newUser.username} onChange={e => setNewUser(p => ({ ...p, username: e.target.value }))} />
@@ -367,7 +431,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
                   </div>
                 )}
 
-                <div className="sa-panel">
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
                   <table className="sa-table">
                     <thead>
                       <tr>
@@ -460,7 +524,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
             {activePage === 'audit' && (
               <div>
                 <div style={{ marginBottom: 16, fontSize: 13, color: '#9A8A8E' }}>{auditTotal} total events</div>
-                <div className="sa-panel" style={{ padding: 0, overflow: 'hidden' }}>
+                <div className="sa-panel" style={{ padding: 0, overflowY: 'hidden', overflowX: 'auto' }}>
                   <table className="sa-table" style={{ padding: '0 24px' }}>
                     <thead>
                       <tr style={{ background: '#F7EEF0' }}>
