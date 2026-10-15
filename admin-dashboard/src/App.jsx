@@ -92,6 +92,21 @@ export default function App({ user, onLogout }) {
   // existed, since those never had a fee to begin with.
   const orderRevenue = (order) => order.subtotal != null ? order.subtotal : (parseFloat(order.total) || 0)
 
+  // Shared across the sidebar badge, the floating icons and the dashboard's
+  // Low Stock panel, so there is one definition of "low stock" in the app.
+  // A product with lash length/curl options lists those options
+  // individually, not the product as a whole.
+  const lowStockRows = products.filter(p => p.isActive).flatMap(p =>
+    p.hasOptions
+      ? p.options
+          .filter(o => o.isActive && o.stockQuantity <= o.lowStockThreshold)
+          .map(o => ({ key: `${p.id}-${o.id}`, label: `${p.name} ${o.lengthMm}mm ${o.curl} curl`, stock: o.stockQuantity }))
+      : p.stockQuantity <= p.lowStockThreshold
+        ? [{ key: String(p.id), label: p.name, stock: p.stockQuantity }]
+        : []
+  )
+  const pendingOrdersCount = orders.filter(o => o.status !== 'confirmed').length
+
   // Attaches the auth token to every request and logs the user out on a 401.
   // Never sets Content-Type for FormData bodies (file uploads) - the browser
   // must set its own multipart boundary.
@@ -1349,6 +1364,19 @@ export default function App({ user, onLogout }) {
                     {unreadCount}
                   </span>
                 )}
+                {item.value === 'orders' && pendingOrdersCount > 0 && (
+                  <span style={{
+                    background: '#E8923C',
+                    color: 'white',
+                    borderRadius: 10,
+                    padding: '1px 7px',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    marginLeft: 8,
+                  }}>
+                    {pendingOrdersCount}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -1517,18 +1545,8 @@ export default function App({ user, onLogout }) {
                     ))}
                   </div>
 
-                  {/* Low stock - a product with lash length/curl options lists
-                      those options individually, not the product as a whole */}
+                  {/* Low stock - see the shared lowStockRows definition above */}
                   {(() => {
-                    const lowStockRows = products.filter(p => p.isActive).flatMap(p =>
-                      p.hasOptions
-                        ? p.options
-                            .filter(o => o.isActive && o.stockQuantity <= o.lowStockThreshold)
-                            .map(o => ({ key: `${p.id}-${o.id}`, label: `${p.name} ${o.lengthMm}mm ${o.curl} curl`, stock: o.stockQuantity }))
-                        : p.stockQuantity <= p.lowStockThreshold
-                          ? [{ key: String(p.id), label: p.name, stock: p.stockQuantity }]
-                          : []
-                    )
                     if (lowStockRows.length === 0) return null
                     return (
                       <div className="panel" style={{ marginBottom: 24 }}>
@@ -3078,6 +3096,71 @@ export default function App({ user, onLogout }) {
 
           </div>
         </div>
+      </div>
+
+      {/* Floating icons - low stock and pending orders, visible from any page */}
+      <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 60, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {pendingOrdersCount > 0 && (
+          <div
+            onClick={() => setActivePage('orders')}
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              background: '#E8923C',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 16px rgba(232, 146, 60, 0.4)',
+              cursor: 'pointer',
+              position: 'relative',
+            }}
+            title="Pending orders"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+            <div style={{
+              position: 'absolute', top: '-4px', right: '-4px', background: '#2C1A20', color: 'white',
+              borderRadius: '50%', width: '20px', height: '20px', fontSize: '11px', fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              {pendingOrdersCount}
+            </div>
+          </div>
+        )}
+        {lowStockRows.length > 0 && (
+          <div
+            onClick={() => setActivePage(user?.role === 'staff' ? 'dashboard' : 'products')}
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              background: '#C47A8A',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 16px rgba(196, 122, 138, 0.4)',
+              cursor: 'pointer',
+              position: 'relative',
+            }}
+            title="Low stock"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <div style={{
+              position: 'absolute', top: '-4px', right: '-4px', background: '#2C1A20', color: 'white',
+              borderRadius: '50%', width: '20px', height: '20px', fontSize: '11px', fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              {lowStockRows.length}
+            </div>
+          </div>
+        )}
       </div>
     </>
   )
