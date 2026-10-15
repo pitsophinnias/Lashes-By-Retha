@@ -1517,6 +1517,38 @@ export default function App({ user, onLogout }) {
                     ))}
                   </div>
 
+                  {/* Low stock - a product with lash length/curl options lists
+                      those options individually, not the product as a whole */}
+                  {(() => {
+                    const lowStockRows = products.filter(p => p.isActive).flatMap(p =>
+                      p.hasOptions
+                        ? p.options
+                            .filter(o => o.isActive && o.stockQuantity <= o.lowStockThreshold)
+                            .map(o => ({ key: `${p.id}-${o.id}`, label: `${p.name} ${o.lengthMm}mm ${o.curl} curl`, stock: o.stockQuantity }))
+                        : p.stockQuantity <= p.lowStockThreshold
+                          ? [{ key: String(p.id), label: p.name, stock: p.stockQuantity }]
+                          : []
+                    )
+                    if (lowStockRows.length === 0) return null
+                    return (
+                      <div className="panel" style={{ marginBottom: 24 }}>
+                        <div className="panel-heading" style={{ background: '#C47A8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
+                          Low Stock
+                        </div>
+                        <div style={{ padding: '0 20px 20px 20px' }}>
+                          {lowStockRows.map(row => (
+                            <div key={row.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{row.label}</div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: row.stock === 0 ? '#C47A8A' : '#8C5A6A' }}>
+                                {row.stock === 0 ? 'Sold out' : `${row.stock} left`}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   {/* Revenue chart */}
                   <div className="panel" style={{ marginBottom: 24 }}>
                     <div className="panel-heading" style={{ background: '#C47A8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>Monthly Revenue (R)</div>
@@ -1621,38 +1653,6 @@ export default function App({ user, onLogout }) {
                       </div>
                     </div>
                   </div>
-
-                  {/* Low stock - a product with lash length/curl options lists
-                      those options individually, not the product as a whole */}
-                  {(() => {
-                    const lowStockRows = products.filter(p => p.isActive).flatMap(p =>
-                      p.hasOptions
-                        ? p.options
-                            .filter(o => o.isActive && o.stockQuantity <= o.lowStockThreshold)
-                            .map(o => ({ key: `${p.id}-${o.id}`, label: `${p.name} ${o.lengthMm}mm ${o.curl} curl`, stock: o.stockQuantity }))
-                        : p.stockQuantity <= p.lowStockThreshold
-                          ? [{ key: String(p.id), label: p.name, stock: p.stockQuantity }]
-                          : []
-                    )
-                    if (lowStockRows.length === 0) return null
-                    return (
-                      <div className="panel" style={{ marginBottom: 24 }}>
-                        <div className="panel-heading" style={{ background: '#C47A8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
-                          Low Stock
-                        </div>
-                        <div style={{ padding: '0 20px 20px 20px' }}>
-                          {lowStockRows.map(row => (
-                            <div key={row.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
-                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{row.label}</div>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: row.stock === 0 ? '#C47A8A' : '#8C5A6A' }}>
-                                {row.stock === 0 ? 'Sold out' : `${row.stock} left`}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })()}
 
                   {/* Recent notifications preview */}
                   <div className="panel">
