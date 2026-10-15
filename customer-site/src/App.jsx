@@ -78,6 +78,7 @@ function App() {
   const [copied, setCopied] = useState(false)
   const [policyTab, setPolicyTab] = useState('booking')
   const [products, setProducts] = useState([])
+  const [selectedOptions, setSelectedOptions] = useState({})
   const [productImages, setProductImages] = useState({})
   const [productPositions, setProductPositions] = useState({})
   const [galleryImages, setGalleryImages] = useState([])
@@ -147,27 +148,29 @@ function App() {
     document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const addToCart = (product) => {
-    if (product.stockQuantity <= 0) return
+  // A cart line is identified by cartKey, not product id, so the same
+  // product in two different lash lengths is two separate lines.
+  const addToCart = (item) => {
+    if (item.stockQuantity <= 0) return
     setCart(prev => {
-      const existing = prev.find(item => item.id === product.id)
+      const existing = prev.find(i => i.cartKey === item.cartKey)
       const currentQty = existing ? existing.qty : 0
-      if (currentQty >= product.stockQuantity) return prev // already at the most we have
+      if (currentQty >= item.stockQuantity) return prev // already at the most we have
       if (existing) {
-        return prev.map(item => item.id === product.id ? { ...item, qty: item.qty + 1 } : item)
+        return prev.map(i => i.cartKey === item.cartKey ? { ...i, qty: i.qty + 1 } : i)
       }
-      return [...prev, { ...product, qty: 1 }]
+      return [...prev, { ...item, qty: 1 }]
     })
     setCartOpen(true)
   }
 
-  const removeFromCart = (id) => {
-    setCart(prev => prev.filter(item => item.id !== id))
+  const removeFromCart = (cartKey) => {
+    setCart(prev => prev.filter(item => item.cartKey !== cartKey))
   }
 
-  const updateQty = (id, delta) => {
+  const updateQty = (cartKey, delta) => {
     setCart(prev => prev.map(item =>
-      item.id === id ? { ...item, qty: Math.max(1, Math.min(item.stockQuantity, item.qty + delta)) } : item
+      item.cartKey === cartKey ? { ...item, qty: Math.max(1, Math.min(item.stockQuantity, item.qty + delta)) } : item
     ).filter(item => item.qty > 0))
   }
 
@@ -190,15 +193,16 @@ function App() {
         body: JSON.stringify({
           customerName: orderName,
           customerPhone: orderPhone,
-          items: cart.map(i => ({ id: i.id, name: i.name, qty: i.qty, price: i.price })),
+          items: cart.map(i => ({ id: i.id, variantId: i.variantId, name: i.name, qty: i.qty, price: i.price })),
           total: cartTotal,
         }),
       })
+      const data = await res.json().catch(() => null)
       if (res.ok) {
         setOrderSubmitted(true)
         setCart([])
       } else {
-        setOrderError("I couldn't get your order through just now, but don't worry, your cart is still here. Please try again in a moment, or message me on WhatsApp and I'll sort it out for you.")
+        setOrderError(data?.error || "I couldn't get your order through just now, but don't worry, your cart is still here. Please try again in a moment, or message me on WhatsApp and I'll sort it out for you.")
       }
     } catch (err) {
       console.error('Order submission failed:', err)
@@ -206,57 +210,171 @@ function App() {
     }
   }
 
-  const renderProductCard = (product) => (
-    <div className="product-card" key={product.id}>
-      <div style={{ height: '200px', overflow: 'hidden', position: 'relative' }}>
-        {productImages[product.id] ? (
-          <img
-            className="product-img"
-            src={`${API}${productImages[product.id]}`}
-            alt={product.name}
-            style={{
-              width: '100%',
-              height: '200px',
-              objectFit: 'cover',
-              display: 'block',
-              transition: 'transform 0.3s ease',
-              objectPosition: productPositions[product.id]
-                ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
-                : '50% 50%',
-            }}
-          />
-        ) : (
-          <div className="product-image-placeholder">Product Image</div>
-        )}
-      </div>
-      <div style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {product.badge && <span className="product-badge" style={{ marginBottom: '8px' }}>{product.badge}</span>}
-        <h3 className="product-name">{product.name}</h3>
-        <p className="product-description">{product.description}</p>
-        <div style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
-          {product.detail}
-        </div>
-        <p className="product-price">R {product.price}</p>
-        <div style={{ fontSize: '12px', marginBottom: '10px', fontWeight: 600 }}>
-          {product.stockQuantity <= 0 ? (
-            <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>Sold out for now</span>
-          ) : product.stockQuantity <= product.lowStockThreshold ? (
-            <span style={{ color: '#C47A8A' }}>Only {product.stockQuantity} left</span>
+  const renderProductCard = (product) => {
+    const hasOptions = product.options && product.options.length > 0
+    const sel = selectedOptions[product.id] || {}
+    const lengths = hasOptions ? [...new Set(product.options.map(o => o.lengthMm))].sort((a, b) => a - b) : []
+    const curls = hasOptions ? [...new Set(product.options.map(o => o.curl))] : []
+    const showCurlPicker = curls.length > 1
+
+    const lengthDisabled = (len) =>
+      !product.options.some(o => o.lengthMm === len && o.isActive && o.stockQuantity > 0)
+    const curlDisabled = (curl) => {
+      if (sel.lengthMm) {
+        const match = product.options.find(o => o.lengthMm === sel.lengthMm && o.curl === curl)
+        return !match || !match.isActive || match.stockQuantity <= 0
+      }
+      return !product.options.some(o => o.curl === curl && o.isActive && o.stockQuantity > 0)
+    }
+
+    const selectedVariant = hasOptions
+      ? product.options.find(o => o.lengthMm === sel.lengthMm && (!showCurlPicker || o.curl === sel.curl))
+      : null
+    const choiceComplete = !hasOptions || !!selectedVariant
+    const effectiveStock = hasOptions ? (selectedVariant ? selectedVariant.stockQuantity : null) : product.stockQuantity
+    const effectiveLowThreshold = hasOptions ? (selectedVariant ? selectedVariant.lowStockThreshold : null) : product.lowStockThreshold
+
+    const pickLength = (len) => setSelectedOptions(prev => ({ ...prev, [product.id]: { ...prev[product.id], lengthMm: len } }))
+    const pickCurl = (curl) => setSelectedOptions(prev => ({ ...prev, [product.id]: { ...prev[product.id], curl } }))
+
+    const pillStyle = (active, disabled) => ({
+      padding: '6px 10px',
+      borderRadius: '16px',
+      fontSize: '12px',
+      fontWeight: 600,
+      border: `1px solid ${active ? '#C47A8A' : '#F5DDE2'}`,
+      background: active ? '#C47A8A' : '#FFFFFF',
+      color: disabled ? '#C8B8BC' : active ? '#FFFFFF' : '#2C2C2C',
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      opacity: disabled ? 0.5 : 1,
+      textDecoration: disabled ? 'line-through' : 'none',
+    })
+
+    const handleAdd = () => {
+      if (!choiceComplete) return
+      const item = hasOptions
+        ? {
+            id: product.id,
+            variantId: selectedVariant.id,
+            lengthMm: selectedVariant.lengthMm,
+            curl: selectedVariant.curl,
+            name: `${product.name}, ${selectedVariant.lengthMm}mm, ${selectedVariant.curl} curl`,
+            price: product.price,
+            stockQuantity: selectedVariant.stockQuantity,
+            cartKey: `${product.id}-${selectedVariant.id}`,
+          }
+        : {
+            id: product.id,
+            variantId: null,
+            lengthMm: null,
+            curl: null,
+            name: product.name,
+            price: product.price,
+            stockQuantity: product.stockQuantity,
+            cartKey: String(product.id),
+          }
+      addToCart(item)
+    }
+
+    return (
+      <div className="product-card" key={product.id}>
+        <div style={{ height: '200px', overflow: 'hidden', position: 'relative' }}>
+          {productImages[product.id] ? (
+            <img
+              className="product-img"
+              src={`${API}${productImages[product.id]}`}
+              alt={product.name}
+              style={{
+                width: '100%',
+                height: '200px',
+                objectFit: 'cover',
+                display: 'block',
+                transition: 'transform 0.3s ease',
+                objectPosition: productPositions[product.id]
+                  ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
+                  : '50% 50%',
+              }}
+            />
           ) : (
-            <span style={{ color: '#9A7A82', fontWeight: 400 }}>In stock</span>
+            <div className="product-image-placeholder">Product Image</div>
           )}
         </div>
-        <button
-          className="btn-add-cart add-to-cart-btn"
-          onClick={() => addToCart(product)}
-          disabled={product.stockQuantity <= 0}
-          style={product.stockQuantity <= 0 ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
-        >
-          {product.stockQuantity <= 0 ? 'Sold Out' : 'Add to Cart'}
-        </button>
+        <div style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+          {product.badge && <span className="product-badge" style={{ marginBottom: '8px' }}>{product.badge}</span>}
+          <h3 className="product-name">{product.name}</h3>
+          <p className="product-description">{product.description}</p>
+          <div style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
+            {product.detail}
+          </div>
+          <p className="product-price">R {product.price}</p>
+
+          {hasOptions && (
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                Length
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: showCurlPicker ? '12px' : '0' }}>
+                {lengths.map(len => (
+                  <button
+                    key={len}
+                    type="button"
+                    onClick={() => !lengthDisabled(len) && pickLength(len)}
+                    disabled={lengthDisabled(len)}
+                    style={pillStyle(sel.lengthMm === len, lengthDisabled(len))}
+                  >
+                    {len}mm
+                  </button>
+                ))}
+              </div>
+
+              {showCurlPicker && (
+                <>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                    Curl
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {curls.map(curl => (
+                      <button
+                        key={curl}
+                        type="button"
+                        onClick={() => !curlDisabled(curl) && pickCurl(curl)}
+                        disabled={curlDisabled(curl)}
+                        style={pillStyle(sel.curl === curl, curlDisabled(curl))}
+                      >
+                        {curl} curl
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <div style={{ fontSize: '12px', marginBottom: '10px', fontWeight: 600 }}>
+            {!choiceComplete ? (
+              <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>
+                Choose a length{showCurlPicker ? ' and curl' : ''} to see availability
+              </span>
+            ) : effectiveStock <= 0 ? (
+              <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>Sold out for now</span>
+            ) : effectiveStock <= effectiveLowThreshold ? (
+              <span style={{ color: '#C47A8A' }}>Only {effectiveStock} left</span>
+            ) : (
+              <span style={{ color: '#9A7A82', fontWeight: 400 }}>In stock</span>
+            )}
+          </div>
+          <button
+            className="btn-add-cart add-to-cart-btn"
+            onClick={handleAdd}
+            disabled={!choiceComplete || effectiveStock <= 0}
+            style={(!choiceComplete || effectiveStock <= 0) ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+          >
+            {!choiceComplete ? 'Select Options' : effectiveStock <= 0 ? 'Sold Out' : 'Add to Cart'}
+          </button>
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="page">
@@ -1833,7 +1951,7 @@ function App() {
                   <>
                     {cart.map((item) => (
                       <div
-                        key={item.id}
+                        key={item.cartKey}
                         style={{
                           display: 'flex',
                           justifyContent: 'space-between',
@@ -1851,7 +1969,7 @@ function App() {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <button
-                            onClick={() => updateQty(item.id, -1)}
+                            onClick={() => updateQty(item.cartKey, -1)}
                             style={{
                               width: '28px',
                               height: '28px',
@@ -1892,7 +2010,7 @@ function App() {
                             +
                           </button>
                           <button
-                            onClick={() => removeFromCart(item.id)}
+                            onClick={() => removeFromCart(item.cartKey)}
                             style={{ background: 'none', border: 'none', color: '#C8A8B0', fontSize: '14px', cursor: 'pointer', marginLeft: '4px' }}
                           >
                             x

@@ -125,6 +125,29 @@ const createTables = async () => {
       note TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS product_variants (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      length_mm INTEGER NOT NULL,
+      curl VARCHAR(10) NOT NULL,
+      stock_quantity INTEGER NOT NULL DEFAULT 0,
+      low_stock_threshold INTEGER NOT NULL DEFAULT 3,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (product_id, length_mm, curl)
+    );
+  `)
+
+  // order_items and stock_movements predate lash length/curl options; add the
+  // columns needed to record which option an order line or stock change was
+  // for for existing installs, without touching rows that already exist.
+  await pool.query(`
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS variant_id INTEGER REFERENCES product_variants(id);
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS length_mm INTEGER;
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS curl VARCHAR(10);
+    ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS variant_id INTEGER REFERENCES product_variants(id);
   `)
 
   // Seed default categories if none exist
@@ -186,6 +209,43 @@ const createTables = async () => {
     // product created through the admin dashboard gets id 5, not a clash.
     await pool.query(`SELECT setval('products_id_seq', (SELECT MAX(id) FROM products))`)
     console.log('Products seeded')
+  }
+
+  // One-time detail-text update for the lash trays, now that they carry
+  // length options. Only touches rows still holding the old text, so an
+  // owner who has since edited a product's detail by hand keeps their edit.
+  await pool.query(
+    `UPDATE products SET detail = $1 WHERE id = 1 AND detail = $2`,
+    ['Diameter: 0.15 | Curl: D | Lengths: 10mm to 16mm', 'Diameter: 0.15 | Curl: D']
+  )
+  await pool.query(
+    `UPDATE products SET detail = $1 WHERE id = 2 AND detail = $2`,
+    ['Diameter: 0.07 | Curl: D | Lengths: 7mm to 18mm', 'Diameter: 0.07 | Curl: D']
+  )
+  await pool.query(
+    `UPDATE products SET detail = $1 WHERE id = 3 AND detail = $2`,
+    ['Diameter: 0.05 | Curl: CC & D | Lengths: 9mm to 16mm', 'Diameter: 0.05 | Curl: Cc & D']
+  )
+
+  // Seed lash length/curl options if none exist yet. Stock of 5 per option
+  // is a placeholder for the owner to correct once real counts are known.
+  const { rows: variantRows } = await pool.query('SELECT COUNT(*) FROM product_variants')
+  if (parseInt(variantRows[0].count) === 0) {
+    const options = []
+    for (let mm = 10; mm <= 16; mm++) options.push([1, mm, 'D'])          // Classic
+    for (let mm = 7; mm <= 18; mm++) options.push([2, mm, 'D'])           // YY
+    for (let mm = 9; mm <= 16; mm++) { options.push([3, mm, 'CC']); options.push([3, mm, 'D']) } // Volume
+
+    const values = options.map((_, i) =>
+      `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3}, 5)`
+    ).join(', ')
+    const params = options.flat()
+    await pool.query(
+      `INSERT INTO product_variants (product_id, length_mm, curl, stock_quantity) VALUES ${values}
+       ON CONFLICT (product_id, length_mm, curl) DO NOTHING`,
+      params
+    )
+    console.log(`Product options seeded (${options.length})`)
   }
 
   console.log('Database tables ready')
