@@ -2615,6 +2615,16 @@ export default function App({ user, onLogout }) {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                         <div style={{ fontSize: 16, fontWeight: 700, color: '#1A1A1A' }}>R {order.total}</div>
+                        {order.fulfilmentMethod && (
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5,
+                            padding: '3px 8px', borderRadius: 10,
+                            background: order.fulfilmentMethod === 'delivery' ? '#E3F2FD' : '#F3E5F5',
+                            color: order.fulfilmentMethod === 'delivery' ? '#1565C0' : '#6A1B9A',
+                          }}>
+                            {order.fulfilmentMethod}
+                          </span>
+                        )}
                         <span className={`status-badge${order.status === 'confirmed' ? ' confirmed' : ''}`}>
                           {order.status || 'pending'}
                         </span>
@@ -2681,6 +2691,20 @@ export default function App({ user, onLogout }) {
                               <span style={{ fontSize: 14, fontWeight: 600, color: '#1A1A1A' }}>R {item.price * item.qty}</span>
                             </div>
                           ))}
+                          {order.subtotal != null && (
+                            <>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13, color: '#7A6670' }}>
+                                <span>Subtotal</span>
+                                <span>R {order.subtotal}</span>
+                              </div>
+                              {order.fulfilmentMethod === 'delivery' && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13, color: '#7A6670' }}>
+                                  <span>Delivery fee</span>
+                                  <span>R {order.deliveryFee}</span>
+                                </div>
+                              )}
+                            </>
+                          )}
                           <div style={{
                             display: 'flex',
                             justifyContent: 'space-between',
@@ -2707,6 +2731,34 @@ export default function App({ user, onLogout }) {
                             <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>WhatsApp</span>
                             <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{order.customerPhone}</span>
                           </div>
+                        </div>
+
+                        {/* Fulfilment details */}
+                        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #F0F0F0' }}>
+                          <div className="field-label" style={{ marginBottom: 10 }}>Fulfilment</div>
+                          {!order.fulfilmentMethod ? (
+                            <div style={{ fontSize: 13, color: '#AAAAAA', fontStyle: 'italic' }}>Not recorded</div>
+                          ) : (
+                            <>
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                                <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Method</span>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A', textTransform: 'capitalize' }}>{order.fulfilmentMethod}</span>
+                              </div>
+                              {order.fulfilmentMethod === 'delivery' && (
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                                  <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Address</span>
+                                  <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>
+                                    {order.deliveryAddress}, {order.deliverySuburb}, {order.deliveryCity}, {order.deliveryPostalCode}
+                                    {order.deliveryNotes && (
+                                      <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 4, fontWeight: 400 }}>
+                                        {order.deliveryNotes}
+                                      </div>
+                                    )}
+                                  </span>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
 
                         {/* Actions */}

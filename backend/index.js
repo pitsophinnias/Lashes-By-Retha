@@ -15,6 +15,10 @@ const { pool, createTables } = require('./db')
 const app = express()
 const PORT = process.env.PORT || 3002
 
+// Flat courier fee for a delivery order. The one place this is defined -
+// orders always get their fee computed here, never from the browser.
+const DELIVERY_FEE = 120
+
 app.use(cors())
 app.use(express.json())
 
@@ -623,9 +627,19 @@ app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRol
 // ── Orders ────────────────────────────────────────────────────────────────────
 // Public: the customer site has no login and must be able to place orders.
 app.post('/api/orders', async (req, res) => {
-  const { customerName, customerPhone, items } = req.body
+  const {
+    customerName, customerPhone, items, fulfilmentMethod,
+    deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
+  } = req.body
   if (!customerName || !customerPhone || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Missing required fields' })
+  }
+  if (!['delivery', 'pickup'].includes(fulfilmentMethod)) {
+    return res.status(400).json({ error: 'Please choose delivery or pickup.' })
+  }
+  if (fulfilmentMethod === 'delivery' &&
+      (!deliveryAddress?.trim() || !deliverySuburb?.trim() || !deliveryCity?.trim() || !deliveryPostalCode?.trim())) {
+    return res.status(400).json({ error: 'Please complete your delivery address.' })
   }
   try {
     // Look up every product server-side - price and total are never trusted
@@ -649,7 +663,7 @@ app.post('/api/orders', async (req, res) => {
     })
 
     const orderItems = []
-    let total = 0
+    let subtotal = 0
     for (const item of items) {
       const product = productsById[parseInt(item.id)]
       if (!product || !product.is_active) {
@@ -679,7 +693,7 @@ app.post('/api/orders', async (req, res) => {
       }
 
       const price = parseFloat(product.price)
-      total += price * qty
+      subtotal += price * qty
       orderItems.push({
         productId: product.id,
         name: product.name,
@@ -691,9 +705,22 @@ app.post('/api/orders', async (req, res) => {
       })
     }
 
+    const deliveryFee = fulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
+    const total = subtotal + deliveryFee
+
     const orderResult = await pool.query(
-      'INSERT INTO orders (customer_name, customer_phone, total) VALUES ($1, $2, $3) RETURNING *',
-      [customerName, customerPhone, total]
+      `INSERT INTO orders (
+         customer_name, customer_phone, total, fulfilment_method, subtotal, delivery_fee,
+         delivery_address, delivery_suburb, delivery_city, delivery_postal_code, delivery_notes
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [
+        customerName, customerPhone, total, fulfilmentMethod, subtotal, deliveryFee,
+        fulfilmentMethod === 'delivery' ? deliveryAddress.trim() : null,
+        fulfilmentMethod === 'delivery' ? deliverySuburb.trim() : null,
+        fulfilmentMethod === 'delivery' ? deliveryCity.trim() : null,
+        fulfilmentMethod === 'delivery' ? deliveryPostalCode.trim() : null,
+        fulfilmentMethod === 'delivery' ? ((deliveryNotes || '').trim() || null) : null,
+      ]
     )
     const order = orderResult.rows[0]
     for (const item of orderItems) {
@@ -704,7 +731,7 @@ app.post('/api/orders', async (req, res) => {
       )
     }
     await addNotification('order', 'New order received',
-      `${customerName} placed an order for ${orderItems.length} item${orderItems.length !== 1 ? 's' : ''} totalling R${total}.`)
+      `${customerName} placed a ${fulfilmentMethod} order for ${orderItems.length} item${orderItems.length !== 1 ? 's' : ''} totalling R${total}.`)
     console.log('New order:', order.id)
     res.status(201).json({ success: true, orderId: order.id })
   } catch (err) {
@@ -736,6 +763,14 @@ app.get('/api/orders', authenticate, async (req, res) => {
       order.customerName = order.customer_name
       order.customerPhone = order.customer_phone
       order.createdAt = order.created_at
+      order.fulfilmentMethod = order.fulfilment_method
+      order.subtotal = order.subtotal !== null ? parseFloat(order.subtotal) : null
+      order.deliveryFee = order.delivery_fee !== null ? parseFloat(order.delivery_fee) : null
+      order.deliveryAddress = order.delivery_address
+      order.deliverySuburb = order.delivery_suburb
+      order.deliveryCity = order.delivery_city
+      order.deliveryPostalCode = order.delivery_postal_code
+      order.deliveryNotes = order.delivery_notes
     }
     res.json(orders)
   } catch (err) {
