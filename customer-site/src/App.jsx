@@ -285,7 +285,7 @@ function App() {
 
     return (
       <div className="product-card" key={product.id}>
-        <div style={{ height: '200px', overflow: 'hidden', position: 'relative' }}>
+        <div style={{ height: '240px', overflow: 'hidden', position: 'relative' }}>
           {productImages[product.id] ? (
             <img
               className="product-img"
@@ -293,7 +293,7 @@ function App() {
               alt={product.name}
               style={{
                 width: '100%',
-                height: '200px',
+                height: '240px',
                 objectFit: 'cover',
                 display: 'block',
                 transition: 'transform 0.3s ease',
@@ -602,7 +602,7 @@ function App() {
         }
 
         .product-image-placeholder {
-          height: 200px;
+          height: 240px;
           background-color: #FADADD;
           display: flex;
           align-items: center;
