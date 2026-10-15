@@ -436,6 +436,9 @@ export default function App({ user, onLogout }) {
     } catch {}
   }
 
+  // stockAdjustTarget is either { kind: 'product', id, name, stockQuantity }
+  // or { kind: 'variant', productId, variantId, name, stockQuantity }, for
+  // adjusting a whole product's stock or one lash length/curl option's.
   const adjustStock = async () => {
     if (!stockAdjustTarget) return
     const amount = parseInt(stockAdjustAmount)
@@ -443,14 +446,23 @@ export default function App({ user, onLogout }) {
       setProductFormStatus({ type: 'error', message: 'Enter a non-zero amount.' })
       return
     }
+    const url = stockAdjustTarget.kind === 'variant'
+      ? `/api/admin/products/${stockAdjustTarget.productId}/variants/${stockAdjustTarget.variantId}/stock`
+      : `/api/admin/products/${stockAdjustTarget.id}/stock`
     try {
-      const res = await apiFetch(`/api/admin/products/${stockAdjustTarget.id}/stock`, {
+      const res = await apiFetch(url, {
         method: 'POST',
         body: JSON.stringify({ change: amount, reason: stockAdjustReason, note: stockAdjustNote }),
       })
       const data = await res.json()
       if (res.ok) {
-        setProducts(prev => prev.map(p => p.id === data.id ? { ...p, stockQuantity: data.stockQuantity } : p))
+        if (stockAdjustTarget.kind === 'variant') {
+          setProducts(prev => prev.map(p => p.id === stockAdjustTarget.productId
+            ? { ...p, options: p.options.map(o => o.id === data.id ? { ...o, stockQuantity: data.stockQuantity } : o) }
+            : p))
+        } else {
+          setProducts(prev => prev.map(p => p.id === data.id ? { ...p, stockQuantity: data.stockQuantity } : p))
+        }
         setStockAdjustTarget(null)
         setStockAdjustAmount('')
         setStockAdjustNote('')
@@ -1604,21 +1616,30 @@ export default function App({ user, onLogout }) {
                     </div>
                   </div>
 
-                  {/* Low stock */}
+                  {/* Low stock - a product with lash length/curl options lists
+                      those options individually, not the product as a whole */}
                   {(() => {
-                    const lowStockProducts = products.filter(p => p.isActive && p.stockQuantity <= p.lowStockThreshold)
-                    if (lowStockProducts.length === 0) return null
+                    const lowStockRows = products.filter(p => p.isActive).flatMap(p =>
+                      p.hasOptions
+                        ? p.options
+                            .filter(o => o.isActive && o.stockQuantity <= o.lowStockThreshold)
+                            .map(o => ({ key: `${p.id}-${o.id}`, label: `${p.name} ${o.lengthMm}mm ${o.curl} curl`, stock: o.stockQuantity }))
+                        : p.stockQuantity <= p.lowStockThreshold
+                          ? [{ key: String(p.id), label: p.name, stock: p.stockQuantity }]
+                          : []
+                    )
+                    if (lowStockRows.length === 0) return null
                     return (
                       <div className="panel" style={{ marginBottom: 24 }}>
                         <div className="panel-heading" style={{ background: '#C47A8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
                           Low Stock
                         </div>
                         <div style={{ padding: '0 20px 20px 20px' }}>
-                          {lowStockProducts.map(p => (
-                            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
-                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{p.name}</div>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: p.stockQuantity === 0 ? '#C47A8A' : '#8C5A6A' }}>
-                                {p.stockQuantity === 0 ? 'Sold out' : `${p.stockQuantity} left`}
+                          {lowStockRows.map(row => (
+                            <div key={row.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{row.label}</div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: row.stock === 0 ? '#C47A8A' : '#8C5A6A' }}>
+                                {row.stock === 0 ? 'Sold out' : `${row.stock} left`}
                               </div>
                             </div>
                           ))}
@@ -1851,9 +1872,38 @@ export default function App({ user, onLogout }) {
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#C47A8A', marginBottom: 4 }}>
                               R {p.price}
                             </div>
-                            <div style={{ fontSize: 12, color: p.stockQuantity <= p.lowStockThreshold ? '#C47A8A' : '#9A8A8E' }}>
-                              Stock: {p.stockQuantity}{p.stockQuantity <= p.lowStockThreshold ? ' (low)' : ''}
-                            </div>
+                            {!p.hasOptions ? (
+                              <div style={{ fontSize: 12, color: p.stockQuantity <= p.lowStockThreshold ? '#C47A8A' : '#9A8A8E' }}>
+                                Stock: {p.stockQuantity}{p.stockQuantity <= p.lowStockThreshold ? ' (low)' : ''}
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: 6 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+                                  Lengths &amp; Curls
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                  {p.options.map(o => (
+                                    <div
+                                      key={o.id}
+                                      onClick={() => { setStockAdjustTarget({ kind: 'variant', productId: p.id, variantId: o.id, name: `${p.name}, ${o.lengthMm}mm, ${o.curl} curl`, stockQuantity: o.stockQuantity }); setProductFormStatus(null) }}
+                                      style={{
+                                        cursor: 'pointer',
+                                        fontSize: 12,
+                                        fontWeight: 600,
+                                        padding: '4px 10px',
+                                        borderRadius: 14,
+                                        border: `1px solid ${o.stockQuantity <= o.lowStockThreshold ? '#F5C0CC' : '#EDD5DB'}`,
+                                        background: o.stockQuantity <= o.lowStockThreshold ? '#FDE8EC' : '#F7EEF0',
+                                        color: o.stockQuantity <= o.lowStockThreshold ? '#A23F51' : '#8C5A6A',
+                                      }}
+                                      title="Click to adjust this option's stock"
+                                    >
+                                      {o.lengthMm}mm {o.curl}: {o.stockQuantity}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </>
                         ) : (
                           <>
@@ -1914,9 +1964,11 @@ export default function App({ user, onLogout }) {
                             >
                               Edit
                             </button>
-                            <button className="secondary-btn" onClick={() => { setStockAdjustTarget(p); setProductFormStatus(null) }}>
-                              Adjust Stock
-                            </button>
+                            {!p.hasOptions && (
+                              <button className="secondary-btn" onClick={() => { setStockAdjustTarget({ kind: 'product', id: p.id, name: p.name, stockQuantity: p.stockQuantity }); setProductFormStatus(null) }}>
+                                Adjust Stock
+                              </button>
+                            )}
                             <button className="delete-btn" onClick={() => toggleProductActive(p)}>
                               {p.isActive ? 'Deactivate' : 'Reactivate'}
                             </button>
@@ -2620,6 +2672,11 @@ export default function App({ user, onLogout }) {
                                 }}>
                                   x{item.qty}
                                 </span>
+                                {item.lengthMm != null && (
+                                  <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
+                                    {item.lengthMm}mm, {item.curl} curl
+                                  </div>
+                                )}
                               </div>
                               <span style={{ fontSize: 14, fontWeight: 600, color: '#1A1A1A' }}>R {item.price * item.qty}</span>
                             </div>

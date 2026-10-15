@@ -76,6 +76,30 @@ const addNotification = async (type, title, message) => {
   }
 }
 
+// Lash length/curl options, grouped by product id, for attaching to a
+// product list response. Pass includeInactive to also return deactivated
+// options (used by the admin screen; the public shop never sees them).
+const fetchVariantsByProduct = async (includeInactive) => {
+  const result = await pool.query(
+    includeInactive
+      ? 'SELECT * FROM product_variants ORDER BY product_id ASC, length_mm ASC, curl ASC'
+      : 'SELECT * FROM product_variants WHERE is_active = TRUE ORDER BY product_id ASC, length_mm ASC, curl ASC'
+  )
+  const byProduct = {}
+  result.rows.forEach(v => {
+    if (!byProduct[v.product_id]) byProduct[v.product_id] = []
+    byProduct[v.product_id].push({
+      id: v.id,
+      lengthMm: v.length_mm,
+      curl: v.curl,
+      stockQuantity: v.stock_quantity,
+      lowStockThreshold: v.low_stock_threshold,
+      isActive: v.is_active,
+    })
+  })
+  return byProduct
+}
+
 const addAuditLog = async (userId, username, action, details, ipAddress) => {
   try {
     await pool.query(
@@ -327,16 +351,22 @@ app.get('/api/products', async (req, res) => {
       `SELECT id, name, description, detail, price, badge, stock_quantity, low_stock_threshold
        FROM products WHERE is_active = TRUE ORDER BY id ASC`
     )
-    res.json(result.rows.map(p => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      detail: p.detail,
-      price: parseFloat(p.price),
-      badge: p.badge,
-      stockQuantity: p.stock_quantity,
-      lowStockThreshold: p.low_stock_threshold,
-    })))
+    const variantsByProduct = await fetchVariantsByProduct(false)
+    res.json(result.rows.map(p => {
+      const options = variantsByProduct[p.id] || []
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        detail: p.detail,
+        price: parseFloat(p.price),
+        badge: p.badge,
+        stockQuantity: p.stock_quantity,
+        lowStockThreshold: p.low_stock_threshold,
+        hasOptions: options.length > 0,
+        options,
+      }
+    }))
   } catch (err) {
     console.error(err)
     res.json([])
@@ -347,17 +377,23 @@ app.get('/api/products', async (req, res) => {
 app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM products ORDER BY id ASC')
-    res.json(result.rows.map(p => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      detail: p.detail,
-      price: parseFloat(p.price),
-      badge: p.badge,
-      stockQuantity: p.stock_quantity,
-      lowStockThreshold: p.low_stock_threshold,
-      isActive: p.is_active,
-    })))
+    const variantsByProduct = await fetchVariantsByProduct(true)
+    res.json(result.rows.map(p => {
+      const options = variantsByProduct[p.id] || []
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        detail: p.detail,
+        price: parseFloat(p.price),
+        badge: p.badge,
+        stockQuantity: p.stock_quantity,
+        lowStockThreshold: p.low_stock_threshold,
+        isActive: p.is_active,
+        hasOptions: options.length > 0,
+        options,
+      }
+    }))
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to fetch products' })
@@ -471,6 +507,42 @@ app.post('/api/admin/products/:id/stock', authenticate, requireRole('sysadmin', 
   }
 })
 
+// Same as above, but for one lash length/curl option rather than the whole
+// product.
+app.post('/api/admin/products/:productId/variants/:variantId/stock', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const productId = parseInt(req.params.productId)
+  const variantId = parseInt(req.params.variantId)
+  const { change, reason, note } = req.body
+  const delta = parseInt(change)
+  if (!delta || isNaN(delta)) {
+    return res.status(400).json({ error: 'A non-zero stock change is required' })
+  }
+  if (!['restock', 'adjustment'].includes(reason)) {
+    return res.status(400).json({ error: 'Reason must be "restock" or "adjustment"' })
+  }
+  try {
+    const existingResult = await pool.query(
+      'SELECT * FROM product_variants WHERE id = $1 AND product_id = $2', [variantId, productId]
+    )
+    if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Option not found' })
+    const existing = existingResult.rows[0]
+    const newStock = Math.max(0, existing.stock_quantity + delta)
+    const result = await pool.query(
+      'UPDATE product_variants SET stock_quantity = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [newStock, variantId]
+    )
+    await pool.query(
+      'INSERT INTO stock_movements (product_id, variant_id, change, reason, user_id, note) VALUES ($1, $2, $3, $4, $5, $6)',
+      [productId, variantId, newStock - existing.stock_quantity, reason, req.user.id, note || null]
+    )
+    const v = result.rows[0]
+    res.json({ id: v.id, stockQuantity: v.stock_quantity })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to adjust stock' })
+  }
+})
+
 // ── Students ──────────────────────────────────────────────────────────────────
 // Classes are a static list on the frontend (CLASSES), so class_id is just
 // the matching id from that list, not a foreign key.
@@ -565,6 +637,17 @@ app.post('/api/orders', async (req, res) => {
     const productsById = {}
     productResult.rows.forEach(p => { productsById[p.id] = p })
 
+    // A product with lash length/curl options requires a valid, active,
+    // in-stock option; a product without any never looks at variantId.
+    const variantResult = productIds.length
+      ? await pool.query('SELECT * FROM product_variants WHERE product_id = ANY($1)', [productIds])
+      : { rows: [] }
+    const variantsByProduct = {}
+    variantResult.rows.forEach(v => {
+      if (!variantsByProduct[v.product_id]) variantsByProduct[v.product_id] = []
+      variantsByProduct[v.product_id].push(v)
+    })
+
     const orderItems = []
     let total = 0
     for (const item of items) {
@@ -578,9 +661,34 @@ app.post('/api/orders', async (req, res) => {
       if (!qty || qty <= 0) {
         return res.status(400).json({ error: 'Invalid quantity' })
       }
+
+      const productVariants = variantsByProduct[product.id] || []
+      let variant = null
+      if (productVariants.length > 0) {
+        variant = productVariants.find(v => v.id === parseInt(item.variantId))
+        if (!variant || !variant.is_active) {
+          return res.status(400).json({
+            error: `Please choose a length for "${product.name}" before adding it to your cart.`
+          })
+        }
+        if (qty > variant.stock_quantity) {
+          return res.status(400).json({
+            error: `Only ${variant.stock_quantity} left of "${product.name}" in ${variant.length_mm}mm, ${variant.curl} curl. Please lower the quantity.`
+          })
+        }
+      }
+
       const price = parseFloat(product.price)
       total += price * qty
-      orderItems.push({ productId: product.id, name: product.name, qty, price })
+      orderItems.push({
+        productId: product.id,
+        name: product.name,
+        qty,
+        price,
+        variantId: variant ? variant.id : null,
+        lengthMm: variant ? variant.length_mm : null,
+        curl: variant ? variant.curl : null,
+      })
     }
 
     const orderResult = await pool.query(
@@ -590,8 +698,9 @@ app.post('/api/orders', async (req, res) => {
     const order = orderResult.rows[0]
     for (const item of orderItems) {
       await pool.query(
-        'INSERT INTO order_items (order_id, product_id, product_name, qty, price) VALUES ($1, $2, $3, $4, $5)',
-        [order.id, item.productId, item.name, item.qty, item.price]
+        `INSERT INTO order_items (order_id, product_id, product_name, qty, price, variant_id, length_mm, curl)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [order.id, item.productId, item.name, item.qty, item.price, item.variantId, item.lengthMm, item.curl]
       )
     }
     await addNotification('order', 'New order received',
@@ -620,6 +729,9 @@ app.get('/api/orders', authenticate, async (req, res) => {
         name: i.product_name,
         qty: i.qty,
         price: parseFloat(i.price),
+        variantId: i.variant_id,
+        lengthMm: i.length_mm,
+        curl: i.curl,
       }))
       order.customerName = order.customer_name
       order.customerPhone = order.customer_phone
@@ -660,6 +772,33 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
       const productResult = await client.query('SELECT * FROM products WHERE id = $1 FOR UPDATE', [item.product_id])
       const product = productResult.rows[0]
       if (!product) continue // product no longer exists; nothing to deduct
+
+      if (item.variant_id) {
+        // This item was for a specific lash length/curl - stock lives on
+        // the option, not the product.
+        const variantResult = await client.query('SELECT * FROM product_variants WHERE id = $1 FOR UPDATE', [item.variant_id])
+        const variant = variantResult.rows[0]
+        if (!variant) continue // option no longer exists; nothing to deduct
+
+        const optionLabel = `${variant.length_mm}mm, ${variant.curl} curl`
+        if (variant.stock_quantity < item.qty) {
+          await client.query('ROLLBACK')
+          return res.status(400).json({
+            error: `Not enough stock for "${product.name}" (${optionLabel}) - only ${variant.stock_quantity} left, but this order needs ${item.qty}. Restock before confirming.`
+          })
+        }
+
+        const newStock = variant.stock_quantity - item.qty
+        await client.query('UPDATE product_variants SET stock_quantity = $1, updated_at = NOW() WHERE id = $2', [newStock, variant.id])
+        await client.query(
+          'INSERT INTO stock_movements (product_id, variant_id, change, reason, order_id, user_id) VALUES ($1, $2, $3, $4, $5, $6)',
+          [product.id, variant.id, -item.qty, 'sale', id, req.user.id]
+        )
+        if (variant.stock_quantity > variant.low_stock_threshold && newStock <= variant.low_stock_threshold) {
+          lowStockCrossed.push({ name: `${product.name} ${variant.length_mm}mm ${variant.curl} curl`, stock: newStock })
+        }
+        continue
+      }
 
       if (product.stock_quantity < item.qty) {
         await client.query('ROLLBACK')
