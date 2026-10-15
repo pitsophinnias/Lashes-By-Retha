@@ -66,6 +66,12 @@ const policies = [
 
 const API = 'http://localhost:3002'
 
+// Matches the backend's DELIVERY_FEE - used here only to show a live order
+// summary before checkout; the server always computes the real charge.
+const DELIVERY_FEE = 120
+const PICKUP_ADDRESS = '125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911'
+const PICKUP_HOURS = 'Tuesday to Saturday, 08:00 to 17:00'
+
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
   const [cart, setCart] = useState([])
@@ -75,6 +81,13 @@ function App() {
   const [orderPhone, setOrderPhone] = useState('')
   const [orderSubmitted, setOrderSubmitted] = useState(false)
   const [orderError, setOrderError] = useState('')
+  const [fulfilmentMethod, setFulfilmentMethod] = useState(null)
+  const [deliveryAddress, setDeliveryAddress] = useState('')
+  const [deliverySuburb, setDeliverySuburb] = useState('')
+  const [deliveryCity, setDeliveryCity] = useState('')
+  const [deliveryPostalCode, setDeliveryPostalCode] = useState('')
+  const [deliveryNotes, setDeliveryNotes] = useState('')
+  const [lastOrder, setLastOrder] = useState(null)
   const [copied, setCopied] = useState(false)
   const [policyTab, setPolicyTab] = useState('booking')
   const [products, setProducts] = useState([])
@@ -176,6 +189,11 @@ function App() {
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0)
   const cartCount = cart.reduce((sum, item) => sum + item.qty, 0)
+  const deliveryFeeApplicable = fulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
+  const orderTotal = cartTotal + deliveryFeeApplicable
+  const deliveryAddressComplete = !!(deliveryAddress.trim() && deliverySuburb.trim() && deliveryCity.trim() && deliveryPostalCode.trim())
+  const canPlaceOrder = !!(orderName.trim() && orderPhone.trim() && fulfilmentMethod &&
+    (fulfilmentMethod === 'pickup' || deliveryAddressComplete))
 
   const copyPaymentDetails = () => {
     navigator.clipboard.writeText('63093932440')
@@ -184,7 +202,7 @@ function App() {
   }
 
   const submitOrder = async () => {
-    if (!orderName.trim() || !orderPhone.trim()) return
+    if (!canPlaceOrder) return
     setOrderError('')
     try {
       const res = await fetch(`${API}/api/orders`, {
@@ -194,11 +212,17 @@ function App() {
           customerName: orderName,
           customerPhone: orderPhone,
           items: cart.map(i => ({ id: i.id, variantId: i.variantId, name: i.name, qty: i.qty, price: i.price })),
-          total: cartTotal,
+          fulfilmentMethod,
+          deliveryAddress: fulfilmentMethod === 'delivery' ? deliveryAddress : undefined,
+          deliverySuburb: fulfilmentMethod === 'delivery' ? deliverySuburb : undefined,
+          deliveryCity: fulfilmentMethod === 'delivery' ? deliveryCity : undefined,
+          deliveryPostalCode: fulfilmentMethod === 'delivery' ? deliveryPostalCode : undefined,
+          deliveryNotes: fulfilmentMethod === 'delivery' ? deliveryNotes : undefined,
         }),
       })
       const data = await res.json().catch(() => null)
       if (res.ok) {
+        setLastOrder({ id: data.orderId, total: orderTotal, fulfilmentMethod })
         setOrderSubmitted(true)
         setCart([])
       } else {
@@ -1926,15 +1950,29 @@ function App() {
                   <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', color: '#2C2C2C', marginBottom: '12px' }}>
                     Thank you, your order has been placed!
                   </div>
-                  <p style={{ fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '24px' }}>
-                    We have received your order and will be in touch on WhatsApp to confirm your payment and arrange delivery. We appreciate your support!
+                  <p style={{ fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '16px' }}>
+                    {lastOrder?.fulfilmentMethod === 'delivery'
+                      ? "We'll be in touch on WhatsApp to confirm your payment and arrange delivery. We appreciate your support!"
+                      : "We'll let you know on WhatsApp as soon as your order is ready to collect. We appreciate your support!"}
                   </p>
+                  {lastOrder && (
+                    <p style={{ fontSize: '14px', color: '#2C2C2C', fontWeight: 600, lineHeight: 1.7, marginBottom: '24px' }}>
+                      Your total is R {lastOrder.total}. Please use HBH-{lastOrder.id} as your payment reference.
+                    </p>
+                  )}
                   <button
                     onClick={() => {
                       setCartOpen(false)
                       setOrderSubmitted(false)
                       setCheckoutStep(false)
                       setOrderError('')
+                      setFulfilmentMethod(null)
+                      setDeliveryAddress('')
+                      setDeliverySuburb('')
+                      setDeliveryCity('')
+                      setDeliveryPostalCode('')
+                      setDeliveryNotes('')
+                      setLastOrder(null)
                     }}
                     style={{
                       background: '#C47A8A',
@@ -2122,6 +2160,119 @@ function App() {
                     }}
                   />
 
+                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }}>
+                    Delivery or Pickup
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+                    {['delivery', 'pickup'].map((method) => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => setFulfilmentMethod(method)}
+                        style={{
+                          flex: 1,
+                          padding: '12px',
+                          borderRadius: '10px',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          textTransform: 'capitalize',
+                          border: `1px solid ${fulfilmentMethod === method ? '#C47A8A' : '#F5DDE2'}`,
+                          background: fulfilmentMethod === method ? '#C47A8A' : 'white',
+                          color: fulfilmentMethod === method ? 'white' : '#2C2C2C',
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+
+                  {fulfilmentMethod === 'delivery' && (
+                    <div style={{ marginBottom: '16px' }}>
+                      <input
+                        type="text"
+                        placeholder="Street address"
+                        value={deliveryAddress}
+                        onChange={(e) => setDeliveryAddress(e.target.value)}
+                        style={{
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
+                          fontSize: '14px', marginBottom: '10px', background: 'white', color: '#2C2C2C',
+                          fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
+                        }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Suburb"
+                        value={deliverySuburb}
+                        onChange={(e) => setDeliverySuburb(e.target.value)}
+                        style={{
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
+                          fontSize: '14px', marginBottom: '10px', background: 'white', color: '#2C2C2C',
+                          fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
+                        }}
+                      />
+                      <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                        <input
+                          type="text"
+                          placeholder="Town or city"
+                          value={deliveryCity}
+                          onChange={(e) => setDeliveryCity(e.target.value)}
+                          style={{
+                            flex: 1, padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
+                            fontSize: '14px', background: 'white', color: '#2C2C2C',
+                            fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
+                          }}
+                        />
+                        <input
+                          type="text"
+                          placeholder="Postal code"
+                          value={deliveryPostalCode}
+                          onChange={(e) => setDeliveryPostalCode(e.target.value)}
+                          style={{
+                            width: '120px', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
+                            fontSize: '14px', background: 'white', color: '#2C2C2C',
+                            fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
+                          }}
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Delivery notes (optional)"
+                        value={deliveryNotes}
+                        onChange={(e) => setDeliveryNotes(e.target.value)}
+                        style={{
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
+                          fontSize: '14px', background: 'white', color: '#2C2C2C',
+                          fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {fulfilmentMethod === 'pickup' && (
+                    <div
+                      style={{
+                        background: '#FDF0F3',
+                        borderRadius: '12px',
+                        padding: '14px 18px',
+                        marginBottom: '16px',
+                        border: '1px solid #F5DDE2',
+                      }}
+                    >
+                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7 }}>
+                        Pickup from {PICKUP_ADDRESS}
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7 }}>
+                        {PICKUP_HOURS}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#7A6670', marginTop: '6px', lineHeight: 1.6 }}>
+                        We'll let you know on WhatsApp when your order is ready to collect.
+                      </div>
+                    </div>
+                  )}
+
                   <div
                     style={{
                       background: '#FDF0F3',
@@ -2159,9 +2310,22 @@ function App() {
                     </p>
                   </div>
 
-                  <p style={{ fontSize: '13px', color: '#7A6670', marginBottom: '16px' }}>
-                    Order total: R {cartTotal}
-                  </p>
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#7A6670', marginBottom: '4px' }}>
+                      <span>Subtotal</span>
+                      <span>R {cartTotal}</span>
+                    </div>
+                    {fulfilmentMethod === 'delivery' && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#7A6670', marginBottom: '4px' }}>
+                        <span>Delivery fee</span>
+                        <span>R {DELIVERY_FEE}</span>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: 700, color: '#2C2C2C', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #F5DDE2' }}>
+                      <span>Total</span>
+                      <span>R {orderTotal}</span>
+                    </div>
+                  </div>
 
                   {orderError && (
                     <div style={{
@@ -2180,7 +2344,7 @@ function App() {
 
                   <button
                     onClick={submitOrder}
-                    disabled={!orderName.trim() || !orderPhone.trim()}
+                    disabled={!canPlaceOrder}
                     style={{
                       width: '100%',
                       background: '#C47A8A',
@@ -2190,8 +2354,8 @@ function App() {
                       padding: '14px',
                       fontSize: '15px',
                       fontWeight: 700,
-                      cursor: (!orderName.trim() || !orderPhone.trim()) ? 'not-allowed' : 'pointer',
-                      opacity: (!orderName.trim() || !orderPhone.trim()) ? 0.5 : 1,
+                      cursor: !canPlaceOrder ? 'not-allowed' : 'pointer',
+                      opacity: !canPlaceOrder ? 0.5 : 1,
                     }}
                   >
                     Place Order

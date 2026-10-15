@@ -150,6 +150,20 @@ const createTables = async () => {
     ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS variant_id INTEGER REFERENCES product_variants(id);
   `)
 
+  // Delivery/pickup fields on orders. Nullable so existing orders placed
+  // before this feature keep working - the admin screen shows them as
+  // "Not recorded" rather than guessing.
+  await pool.query(`
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfilment_method VARCHAR(20);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal NUMERIC(10,2);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(10,2);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_address VARCHAR(255);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_suburb VARCHAR(255);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_city VARCHAR(255);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_postal_code VARCHAR(20);
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_notes TEXT;
+  `)
+
   // Seed default categories if none exist
   const { rows } = await pool.query('SELECT COUNT(*) FROM categories')
   if (parseInt(rows[0].count) === 0) {
