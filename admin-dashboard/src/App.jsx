@@ -86,6 +86,12 @@ export default function App({ user, onLogout }) {
   const [studentSaving, setStudentSaving] = useState(false)
   const [studentFormError, setStudentFormError] = useState('')
 
+  // The amount of an order that is the business's own revenue - excludes
+  // the delivery fee, which is passed straight through to the courier.
+  // Falls back to the full total for orders placed before delivery/pickup
+  // existed, since those never had a fee to begin with.
+  const orderRevenue = (order) => order.subtotal != null ? order.subtotal : (parseFloat(order.total) || 0)
+
   // Attaches the auth token to every request and logs the user out on a 401.
   // Never sets Content-Type for FormData bodies (file uploads) - the browser
   // must set its own multipart boundary.
@@ -188,7 +194,7 @@ export default function App({ user, onLogout }) {
           const monthlyTotals = Array(12).fill(0)
           data.filter(order => order.status === 'confirmed').forEach(order => {
             const month = new Date(order.createdAt).getMonth()
-            monthlyTotals[month] += order.total || 0
+            monthlyTotals[month] += orderRevenue(order)
           })
           setRevenueData(months.map((name, i) => ({ name, revenue: monthlyTotals[i] })))
         } else {
@@ -1435,7 +1441,7 @@ export default function App({ user, onLogout }) {
 
               const totalRevenue = orders
                 .filter(o => o.status === 'confirmed')
-                .reduce((sum, o) => sum + (o.total || 0), 0)
+                .reduce((sum, o) => sum + orderRevenue(o), 0)
               const totalOrders = orders.length
 
               const statCards = [

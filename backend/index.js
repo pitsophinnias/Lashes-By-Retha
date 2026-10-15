@@ -763,6 +763,7 @@ app.get('/api/orders', authenticate, async (req, res) => {
       order.customerName = order.customer_name
       order.customerPhone = order.customer_phone
       order.createdAt = order.created_at
+      order.total = parseFloat(order.total)
       order.fulfilmentMethod = order.fulfilment_method
       order.subtotal = order.subtotal !== null ? parseFloat(order.subtotal) : null
       order.deliveryFee = order.delivery_fee !== null ? parseFloat(order.delivery_fee) : null
