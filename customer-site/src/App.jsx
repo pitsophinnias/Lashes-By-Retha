@@ -234,8 +234,15 @@ function App() {
     const effectiveStock = hasOptions ? (selectedVariant ? selectedVariant.stockQuantity : null) : product.stockQuantity
     const effectiveLowThreshold = hasOptions ? (selectedVariant ? selectedVariant.lowStockThreshold : null) : product.lowStockThreshold
 
-    const pickLength = (len) => setSelectedOptions(prev => ({ ...prev, [product.id]: { ...prev[product.id], lengthMm: len } }))
-    const pickCurl = (curl) => setSelectedOptions(prev => ({ ...prev, [product.id]: { ...prev[product.id], curl } }))
+    // Clicking an already-selected length or curl unselects it.
+    const pickLength = (len) => setSelectedOptions(prev => ({
+      ...prev,
+      [product.id]: { ...prev[product.id], lengthMm: prev[product.id]?.lengthMm === len ? undefined : len },
+    }))
+    const pickCurl = (curl) => setSelectedOptions(prev => ({
+      ...prev,
+      [product.id]: { ...prev[product.id], curl: prev[product.id]?.curl === curl ? undefined : curl },
+    }))
 
     const pillStyle = (active, disabled) => ({
       padding: '6px 10px',
@@ -1152,7 +1159,7 @@ function App() {
           // If no categories loaded yet, show all products flat (fallback)
           if (grouped.length === 0) {
             return (
-              <div className="product-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px', textAlign: 'left' }}>
+              <div className="product-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px', textAlign: 'left', alignItems: 'start' }}>
                 {products.map(product => renderProductCard(product))}
               </div>
             )
@@ -1177,6 +1184,7 @@ function App() {
                 display: 'grid',
                 gridTemplateColumns: 'repeat(3, 1fr)',
                 gap: '24px',
+                alignItems: 'start',
               }}>
                 {group.products.map(product => renderProductCard(product))}
               </div>
