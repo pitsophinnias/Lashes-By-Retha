@@ -736,6 +736,7 @@ app.get('/api/orders', authenticate, async (req, res) => {
       order.customerName = order.customer_name
       order.customerPhone = order.customer_phone
       order.createdAt = order.created_at
+      order.total = parseFloat(order.total)
     }
     res.json(orders)
   } catch (err) {
