@@ -66,6 +66,10 @@ const policies = [
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
+// Cloudinary URLs are already absolute; local-disk URLs are relative and
+// need the API host in front of them.
+const mediaUrl = (url) => (url && /^https?:\/\//.test(url) ? url : `${API}${url}`)
+
 // Matches the backend's DELIVERY_FEE - used here only to show a live order
 // summary before checkout; the server always computes the real charge.
 const DELIVERY_FEE = 120
@@ -354,7 +358,7 @@ function App() {
           {productImages[product.id] ? (
             <img
               className="product-img"
-              src={`${API}${productImages[product.id]}`}
+              src={mediaUrl(productImages[product.id])}
               alt={product.name}
               style={{
                 width: '100%',
@@ -1472,7 +1476,7 @@ function App() {
               >
                 {img.type === 'video' ? (
                   <video
-                    src={`${API}${img.url}`}
+                    src={mediaUrl(img.url)}
                     autoPlay
                     muted
                     loop
@@ -1481,7 +1485,7 @@ function App() {
                   />
                 ) : (
                   <img
-                    src={`${API}${img.url}`}
+                    src={mediaUrl(img.url)}
                     alt="Lash work"
                     style={{ width: '100%', height: '220px', objectFit: 'cover', display: 'block' }}
                   />

@@ -35,6 +35,10 @@ const CLASSES = [
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
+// Cloudinary URLs are already absolute; local-disk URLs are relative and
+// need the API host in front of them.
+const mediaUrl = (url) => (url && /^https?:\/\//.test(url) ? url : `${API}${url}`)
+
 export default function App({ user, onLogout }) {
   const [activePage, setActivePage] = useState('dashboard')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -148,13 +152,7 @@ export default function App({ user, onLogout }) {
       } catch {}
     })
     // Fetch gallery
-    apiFetch('/api/gallery')
-      .then(r => r.json())
-      .then(data => {
-        if (Array.isArray(data)) setGalleryImages(data)
-        else setGalleryImages([])
-      })
-      .catch(() => {})
+    fetchGallery()
     // Fetch categories
     apiFetch('/api/categories')
       .then(r => r.json())
@@ -242,14 +240,39 @@ export default function App({ user, onLogout }) {
       if (res.ok && data.url) {
         if (type === 'products') setProductImages(prev => ({ ...prev, [id]: data.url }))
         if (type === 'classes') setClassImages(prev => ({ ...prev, [id]: data.url }))
-        if (type === 'gallery') setGalleryImages(prev => [...prev, { url: data.url, filename: data.url.split('/').pop() }])
+        if (type === 'gallery') fetchGallery()
         setUploadStatus(prev => ({ ...prev, [key]: 'success' }))
         setTimeout(() => setUploadStatus(prev => ({ ...prev, [key]: null })), 3000)
       } else {
-        setUploadStatus(prev => ({ ...prev, [key]: 'error' }))
+        setUploadStatus(prev => ({ ...prev, [key]: data.error || 'Upload failed. Please try again.' }))
       }
     } catch {
-      setUploadStatus(prev => ({ ...prev, [key]: 'error' }))
+      setUploadStatus(prev => ({ ...prev, [key]: 'Upload failed. Please try again.' }))
+    }
+  }
+
+  const fetchGallery = async () => {
+    try {
+      const res = await apiFetch('/api/gallery')
+      const data = await res.json()
+      setGalleryImages(Array.isArray(data) ? data : [])
+    } catch {
+      setGalleryImages([])
+    }
+  }
+
+  const [deletingGalleryId, setDeletingGalleryId] = useState(null)
+
+  const removeGalleryItem = async (img) => {
+    if (!window.confirm('Remove this file from the gallery?')) return
+    setDeletingGalleryId(img.id)
+    try {
+      const res = await apiFetch(`/api/gallery/${img.id}`, { method: 'DELETE' })
+      if (res.ok) setGalleryImages(prev => prev.filter(g => g.id !== img.id))
+    } catch {
+      // silent fail - the item simply stays in the grid
+    } finally {
+      setDeletingGalleryId(null)
     }
   }
 
@@ -934,6 +957,7 @@ export default function App({ user, onLogout }) {
         }
 
         .gallery-tile {
+          position: relative;
           border-radius: 12px;
           overflow: hidden;
           background: #EDD5DB;
@@ -954,6 +978,30 @@ export default function App({ user, onLogout }) {
           height: 100%;
           object-fit: cover;
           display: block;
+        }
+
+        .gallery-tile-remove {
+          position: absolute;
+          top: 6px;
+          right: 6px;
+          background: rgba(44,20,28,0.65);
+          color: #FFFFFF;
+          border: none;
+          border-radius: 6px;
+          padding: 4px 8px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          letter-spacing: 0.3px;
+        }
+
+        .gallery-tile-remove:hover {
+          background: #C47A8A;
+        }
+
+        .gallery-tile-remove:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
 
         /* Tab section heading */
@@ -1853,7 +1901,7 @@ export default function App({ user, onLogout }) {
                       <div className="card-img" style={{ overflow: 'hidden' }}>
                         {productImages[p.id] ? (
                           <img
-                            src={`${API}${productImages[p.id]}?t=${Date.now()}`}
+                            src={`${mediaUrl(productImages[p.id])}?t=${Date.now()}`}
                             alt={p.name}
                             style={{ width: '88px', height: '88px', borderRadius: '10px', objectFit: 'cover' }}
                           />
@@ -2094,7 +2142,7 @@ export default function App({ user, onLogout }) {
                         <div className="card-img" style={{ overflow: 'hidden' }}>
                           {productImages[p.id] ? (
                             <img
-                              src={`${API}${productImages[p.id]}?t=${Date.now()}`}
+                              src={`${mediaUrl(productImages[p.id])}?t=${Date.now()}`}
                               alt={p.name}
                               style={{
                                 width: '88px',
@@ -2126,8 +2174,8 @@ export default function App({ user, onLogout }) {
                           {uploadStatus[`products-${p.id}`] === 'success' && (
                             <div className="success-msg">Uploaded successfully</div>
                           )}
-                          {uploadStatus[`products-${p.id}`] === 'error' && (
-                            <div className="error-msg">Upload failed. Please try again.</div>
+                          {uploadStatus[`products-${p.id}`] && uploadStatus[`products-${p.id}`] !== 'uploading' && uploadStatus[`products-${p.id}`] !== 'success' && (
+                            <div className="error-msg">{uploadStatus[`products-${p.id}`]}</div>
                           )}
                           <div style={{ marginTop: '8px' }}>
                             <div className="field-label" style={{ marginBottom: '4px' }}>
@@ -2186,7 +2234,7 @@ export default function App({ user, onLogout }) {
                         <div className="card-img" style={{ overflow: 'hidden' }}>
                           {classImages[c.id] ? (
                             <img
-                              src={`${API}${classImages[c.id]}?t=${Date.now()}`}
+                              src={`${mediaUrl(classImages[c.id])}?t=${Date.now()}`}
                               alt={c.name}
                               style={{
                                 width: '88px',
@@ -2231,8 +2279,8 @@ export default function App({ user, onLogout }) {
                           {uploadStatus[`classes-${c.id}`] === 'success' && (
                             <div className="success-msg">Uploaded successfully</div>
                           )}
-                          {uploadStatus[`classes-${c.id}`] === 'error' && (
-                            <div className="error-msg">Upload failed. Please try again.</div>
+                          {uploadStatus[`classes-${c.id}`] && uploadStatus[`classes-${c.id}`] !== 'uploading' && uploadStatus[`classes-${c.id}`] !== 'success' && (
+                            <div className="error-msg">{uploadStatus[`classes-${c.id}`]}</div>
                           )}
                         </div>
                         <div>
@@ -2268,8 +2316,7 @@ export default function App({ user, onLogout }) {
                       if (!status) return null
                       if (status === 'uploading') return <div className="success-msg" key={key}>Uploading...</div>
                       if (status === 'success') return <div className="success-msg" key={key}>Uploaded successfully</div>
-                      if (status === 'error') return <div className="error-msg" key={key}>Upload failed. Please try again.</div>
-                      return null
+                      return <div className="error-msg" key={key}>{status}</div>
                     })}
 
                     {galleryImages.length > 0 ? (
@@ -2278,7 +2325,7 @@ export default function App({ user, onLogout }) {
                           <div key={img.filename} className="gallery-tile">
                             {img.type === 'video' ? (
                               <video
-                                src={`${API}${img.url}`}
+                                src={mediaUrl(img.url)}
                                 muted
                                 autoPlay
                                 loop
@@ -2286,9 +2333,18 @@ export default function App({ user, onLogout }) {
                               />
                             ) : (
                               <img
-                                src={`${API}${img.url}`}
+                                src={mediaUrl(img.url)}
                                 alt={img.filename}
                               />
+                            )}
+                            {img.id && (
+                              <button
+                                className="gallery-tile-remove"
+                                onClick={() => removeGalleryItem(img)}
+                                disabled={deletingGalleryId === img.id}
+                              >
+                                {deletingGalleryId === img.id ? 'Removing...' : 'Remove'}
+                              </button>
                             )}
                           </div>
                         ))}

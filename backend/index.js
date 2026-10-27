@@ -13,6 +13,7 @@ const jwt = require('jsonwebtoken')
 const { authenticate, requireRole, JWT_SECRET } = require('./auth')
 
 const { pool, createTables } = require('./db')
+const { cloudinary, isCloudinaryEnabled, uploadBuffer } = require('./cloudinary')
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -96,28 +97,52 @@ const findFilesForId = (dir, type, id) => {
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 // ── Multer ────────────────────────────────────────────────────────────────────
-const storage = multer.diskStorage({
+// With Cloudinary configured, files are held in memory and streamed up rather
+// than written to Render's disk, which is wiped on every restart or sleep.
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp']
+const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm']
+
+const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, TYPE_DIRS[req.params.type] || UPLOAD_DIR)
+    // /api/upload/gallery has no :type param (unlike /api/upload/:type/:id),
+    // so req.params.type is undefined there - treat that as gallery too.
+    cb(null, TYPE_DIRS[req.params.type || 'gallery'])
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
-    const base = req.params.type === 'gallery'
+    const base = (req.params.type || 'gallery') === 'gallery'
       ? `gallery-${Date.now()}`
       : `${req.params.type}-${req.params.id || Date.now()}`
     cb(null, `${base}${ext}`)
   }
 })
 
+const storage = isCloudinaryEnabled ? multer.memoryStorage() : diskStorage
+
 const fileFilter = (req, file, cb) => {
-  const allowedImages = ['.jpg', '.jpeg', '.png', '.webp']
-  const allowedVideos = ['.mp4', '.mov', '.webm']
   const ext = path.extname(file.originalname).toLowerCase()
-  if ([...allowedImages, ...allowedVideos].includes(ext)) cb(null, true)
+  if ([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS].includes(ext)) cb(null, true)
   else cb(new Error('Only image and video files are allowed'), false)
 }
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: 50 * 1024 * 1024 } })
+// Cloudinary's free plan caps images at 10MB and videos at 100MB - the
+// multer limit covers the worst case, and checkFileSize below enforces the
+// tighter image limit with a friendly message instead of a raw 413.
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024
+
+const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_VIDEO_BYTES } })
+
+const checkFileSize = (file) => {
+  const ext = path.extname(file.originalname).toLowerCase()
+  const isVideo = VIDEO_EXTENSIONS.includes(ext)
+  const max = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES
+  if (file.size <= max) return null
+  // In local-disk mode, multer has already written the file by the time we
+  // can check its size - remove it so a rejected upload doesn't linger.
+  if (file.path) { try { fs.unlinkSync(file.path) } catch {} }
+  return isVideo ? 'Videos must be smaller than 100MB.' : 'Images must be smaller than 10MB.'
+}
 
 // ── Notification helper ───────────────────────────────────────────────────────
 const addNotification = async (type, title, message) => {
@@ -928,27 +953,69 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
 app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const { type, id } = req.params
-  const dir = TYPE_DIRS[type]
-  if (dir) {
-    // Remove any previous file(s) for this id so a replacement upload with a
-    // different extension can't leave the old image as the one still served.
+  if (!TYPE_DIRS[type]) return res.status(400).json({ error: 'Invalid type' })
+  const sizeError = checkFileSize(req.file)
+  if (sizeError) return res.status(400).json({ error: sizeError })
+
+  try {
+    if (isCloudinaryEnabled) {
+      const result = await uploadBuffer(req.file.buffer, {
+        folder: `hairbyher/${type}`,
+        public_id: `${type}-${id}`,
+        overwrite: true,
+        invalidate: true,
+        resource_type: 'auto',
+      })
+      await pool.query(
+        `INSERT INTO media (type, item_id, url, public_id, resource_type, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (type, item_id) DO UPDATE
+         SET url = $3, public_id = $4, resource_type = $5, updated_at = NOW()`,
+        [type, id, result.secure_url, result.public_id, result.resource_type]
+      )
+      await addNotification('image', 'Image uploaded', `A new image was uploaded for ${type} (id: ${id}).`)
+      return res.json({ success: true, url: result.secure_url })
+    }
+
+    // Local disk fallback - remove any previous file(s) for this id so a
+    // replacement upload with a different extension can't leave the old
+    // image as the one still served.
+    const dir = TYPE_DIRS[type]
     findFilesForId(dir, type, id)
       .filter(f => f !== req.file.filename)
       .forEach(f => { try { fs.unlinkSync(path.join(dir, f)) } catch {} })
+    const url = `/uploads/${type}/${req.file.filename}`
+    await addNotification('image', 'Image uploaded', `A new image was uploaded for ${type} (id: ${id}).`)
+    res.json({ success: true, url })
+  } catch (err) {
+    console.error('Upload failed:', err)
+    res.status(500).json({ error: 'Failed to upload image' })
   }
-  const url = `/uploads/${type}/${req.file.filename}`
-  await addNotification('image', 'Image uploaded',
-    `A new image was uploaded for ${type} (id: ${id}).`)
-  res.json({ success: true, url })
 })
 
 app.post('/api/upload/gallery', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
-  const ext = path.extname(req.file.filename).toLowerCase()
-  const videoExts = ['.mp4', '.mov', '.webm']
-  const fileType = videoExts.includes(ext) ? 'video' : 'image'
-  const url = `/uploads/gallery/${req.file.filename}`
+  const sizeError = checkFileSize(req.file)
+  if (sizeError) return res.status(400).json({ error: sizeError })
+
+  const ext = path.extname(req.file.originalname).toLowerCase()
+  const fileType = VIDEO_EXTENSIONS.includes(ext) ? 'video' : 'image'
+
   try {
+    if (isCloudinaryEnabled) {
+      const result = await uploadBuffer(req.file.buffer, {
+        folder: 'hairbyher/gallery',
+        resource_type: 'auto',
+      })
+      await pool.query(
+        'INSERT INTO gallery_images (filename, url, type, public_id) VALUES ($1, $2, $3, $4)',
+        [result.public_id, result.secure_url, fileType, result.public_id]
+      )
+      await addNotification('image', 'Gallery image added', 'A new file was added to the gallery.')
+      return res.json({ success: true, url: result.secure_url, type: fileType })
+    }
+
+    const url = `/uploads/gallery/${req.file.filename}`
     await pool.query(
       'INSERT INTO gallery_images (filename, url, type) VALUES ($1, $2, $3)',
       [req.file.filename, url, fileType]
@@ -964,20 +1031,49 @@ app.post('/api/upload/gallery', authenticate, requireRole('sysadmin', 'owner'), 
 app.get('/api/gallery', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM gallery_images ORDER BY created_at DESC')
-    res.json(result.rows.map(r => ({ filename: r.filename, url: r.url, type: r.type })))
+    res.json(result.rows.map(r => ({ id: r.id, filename: r.filename, url: r.url, type: r.type })))
   } catch {
     res.json([])
   }
 })
 
-app.get('/api/upload/:type/:id', (req, res) => {
-  const { type, id } = req.params
-  const dir = type === 'products' ? PRODUCT_DIR : type === 'classes' ? CLASS_DIR : null
-  if (!dir) return res.status(400).json({ error: 'Invalid type' })
+app.delete('/api/gallery/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { id } = req.params
   try {
+    const result = await pool.query('SELECT * FROM gallery_images WHERE id = $1', [id])
+    const row = result.rows[0]
+    if (!row) return res.status(404).json({ error: 'Gallery item not found' })
+
+    if (isCloudinaryEnabled && row.public_id) {
+      await cloudinary.uploader.destroy(row.public_id, {
+        resource_type: row.type === 'video' ? 'video' : 'image',
+      })
+    } else if (!isCloudinaryEnabled) {
+      try { fs.unlinkSync(path.join(GALLERY_DIR, row.filename)) } catch {}
+    }
+
+    await pool.query('DELETE FROM gallery_images WHERE id = $1', [id])
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Failed to delete gallery item:', err)
+    res.status(500).json({ error: 'Failed to delete gallery item' })
+  }
+})
+
+app.get('/api/upload/:type/:id', async (req, res) => {
+  const { type, id } = req.params
+  if (type !== 'products' && type !== 'classes') return res.status(400).json({ error: 'Invalid type' })
+  try {
+    if (isCloudinaryEnabled) {
+      const result = await pool.query(
+        'SELECT url FROM media WHERE type = $1 AND item_id = $2',
+        [type, id]
+      )
+      return res.json({ url: result.rows[0]?.url || null })
+    }
+    const dir = TYPE_DIRS[type]
     const [match] = findFilesForId(dir, type, id)
-    if (match) res.json({ url: `/uploads/${type}/${match}` })
-    else res.json({ url: null })
+    res.json({ url: match ? `/uploads/${type}/${match}` : null })
   } catch {
     res.json({ url: null })
   }
@@ -1169,12 +1265,18 @@ app.patch('/api/notifications/:id/read', authenticate, async (req, res) => {
   }
 })
 
-// ── CORS error handler ──────────────────────────────────────────────────────
-// Without this, a blocked origin falls through to Express's default handler
-// and comes back as an unhandled 500.
+// ── CORS / upload error handler ──────────────────────────────────────────────
+// Without this, a blocked origin or an oversized upload falls through to
+// Express's default handler and comes back as an unhandled 500.
 app.use((err, req, res, next) => {
   if (err.message?.startsWith('CORS blocked')) {
     return res.status(403).json({ error: 'Origin not allowed' })
+  }
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ error: 'File is too large. Videos must be under 100MB, images under 10MB.' })
+  }
+  if (err.message === 'Only image and video files are allowed') {
+    return res.status(400).json({ error: err.message })
   }
   next(err)
 })

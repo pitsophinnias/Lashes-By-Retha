@@ -67,6 +67,17 @@ const createTables = async () => {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS media (
+      id SERIAL PRIMARY KEY,
+      type VARCHAR(50) NOT NULL,
+      item_id INTEGER NOT NULL,
+      url VARCHAR(500) NOT NULL,
+      public_id VARCHAR(255),
+      resource_type VARCHAR(20),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (type, item_id)
+    );
+
     CREATE TABLE IF NOT EXISTS students (
       id SERIAL PRIMARY KEY,
       class_id INTEGER NOT NULL,
@@ -153,6 +164,12 @@ const createTables = async () => {
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS length_mm INTEGER;
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS curl VARCHAR(10);
     ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS variant_id INTEGER REFERENCES product_variants(id);
+  `)
+
+  // Cloudinary public id for a gallery file, so it can be migrated or
+  // removed from Cloudinary later without re-deriving it from the filename.
+  await pool.query(`
+    ALTER TABLE gallery_images ADD COLUMN IF NOT EXISTS public_id VARCHAR(255);
   `)
 
   // Delivery/pickup fields on orders. Nullable so existing orders placed
