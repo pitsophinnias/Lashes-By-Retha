@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 
-const API = 'http://localhost:3002'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
 export default function SysAdminDashboard({ user, onLogout }) {
   const [activePage, setActivePage] = useState('overview')

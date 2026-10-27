@@ -1,7 +1,12 @@
 const { Pool } = require('pg')
 
+// Local Postgres (DATABASE_URL pointing at localhost) has no SSL listener,
+// but managed providers like Render require it.
+const isLocalDb = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || '')
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: isLocalDb ? false : { rejectUnauthorized: false },
 })
 
 const createTables = async () => {
@@ -195,15 +200,21 @@ const createTables = async () => {
   // Seed sysadmin user if none exist
   const { rows: userRows } = await pool.query('SELECT COUNT(*) FROM users')
   if (parseInt(userRows[0].count) === 0) {
-    const bcrypt = require('bcrypt')
-    const hash = await bcrypt.hash(process.env.ADMIN_DEFAULT_PASSWORD || 'hbh@1234', 12)
-    const roleResult = await pool.query("SELECT id FROM roles WHERE name = 'sysadmin'")
-    await pool.query(
-      `INSERT INTO users (username, email, password_hash, role_id, must_change_password)
-       VALUES ($1, $2, $3, $4, FALSE)`,
-      ['Pitso', 'pitso@hairbyher.co.za', hash, roleResult.rows[0].id]
-    )
-    console.log('Sysadmin user seeded: Pitso')
+    const isProd = process.env.NODE_ENV === 'production'
+    const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || (isProd ? null : 'hbh@1234')
+    if (!defaultPassword) {
+      console.error('ADMIN_DEFAULT_PASSWORD is required in production. Skipping sysadmin seed.')
+    } else {
+      const bcrypt = require('bcrypt')
+      const hash = await bcrypt.hash(defaultPassword, 12)
+      const roleResult = await pool.query("SELECT id FROM roles WHERE name = 'sysadmin'")
+      await pool.query(
+        `INSERT INTO users (username, email, password_hash, role_id, must_change_password)
+         VALUES ($1, $2, $3, $4, TRUE)`,
+        ['Pitso', 'pitso@hairbyher.co.za', hash, roleResult.rows[0].id]
+      )
+      console.log('Sysadmin user seeded: Pitso')
+    }
   }
 
   // Seed products if none exist. Ids 1-4 are kept exactly as the old
