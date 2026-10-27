@@ -1,5 +1,7 @@
 const express = require('express')
 const cors = require('cors')
+const helmet = require('helmet')
+const rateLimit = require('express-rate-limit')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
@@ -14,13 +16,62 @@ const { pool, createTables } = require('./db')
 
 const app = express()
 const PORT = process.env.PORT || 3002
+const isProd = process.env.NODE_ENV === 'production'
 
 // Flat courier fee for a delivery order. The one place this is defined -
 // orders always get their fee computed here, never from the browser.
 const DELIVERY_FEE = 120
 
-app.use(cors())
-app.use(express.json())
+// Render sits in front of this app as a reverse proxy - trust its
+// X-Forwarded-For header so rate limiting sees the real visitor IP.
+app.set('trust proxy', 1)
+
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }, // product/gallery images load on the customer site
+}))
+
+// ── CORS — only allow known frontend origins ────────────────────────────────
+const allowedOrigins = [
+  ...(isProd ? [] : ['http://localhost:5273', 'http://localhost:5274']),
+  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : []),
+]
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true)
+    cb(new Error(`CORS blocked: ${origin}`))
+  },
+}))
+
+app.use(express.json({ limit: '1mb' }))
+
+// ── Rate limiting ────────────────────────────────────────────────────────────
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+  skip: (req) => req.path === '/api/health' || (req.method === 'GET' && req.path.startsWith('/uploads')),
+})
+app.use(globalLimiter)
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many failed login attempts. Please try again later.' },
+})
+
+const ordersLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many orders from this address. Please try again later.' },
+})
 
 // ── Upload directories ────────────────────────────────────────────────────────
 const UPLOAD_DIR = path.join(__dirname, 'uploads')
@@ -140,7 +191,7 @@ app.get('/api/health', (req, res) => {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 // Login
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' })
@@ -626,7 +677,7 @@ app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRol
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 // Public: the customer site has no login and must be able to place orders.
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', ordersLimiter, async (req, res) => {
   const {
     customerName, customerPhone, items, fulfilmentMethod,
     deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
@@ -1116,6 +1167,16 @@ app.patch('/api/notifications/:id/read', authenticate, async (req, res) => {
   } catch {
     res.status(500).json({ error: 'Failed to mark read' })
   }
+})
+
+// ── CORS error handler ──────────────────────────────────────────────────────
+// Without this, a blocked origin falls through to Express's default handler
+// and comes back as an unhandled 500.
+app.use((err, req, res, next) => {
+  if (err.message?.startsWith('CORS blocked')) {
+    return res.status(403).json({ error: 'Origin not allowed' })
+  }
+  next(err)
 })
 
 // ── Start server ──────────────────────────────────────────────────────────────
