@@ -64,7 +64,7 @@ const policies = [
   },
 ]
 
-const API = 'http://localhost:3002'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
 // Matches the backend's DELIVERY_FEE - used here only to show a live order
 // summary before checkout; the server always computes the real charge.

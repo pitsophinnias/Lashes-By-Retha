@@ -1,5 +1,17 @@
 const jwt = require('jsonwebtoken')
-const JWT_SECRET = process.env.JWT_SECRET || 'hbh-secret-key-change-in-production'
+
+const isProd = process.env.NODE_ENV === 'production'
+let JWT_SECRET = process.env.JWT_SECRET
+
+if (isProd) {
+  if (!JWT_SECRET || JWT_SECRET.length < 32) {
+    console.error('JWT_SECRET is required in production and must be at least 32 characters.')
+    process.exit(1)
+  }
+} else if (!JWT_SECRET) {
+  JWT_SECRET = 'hbh-dev-secret-not-for-production'
+  console.warn('JWT_SECRET not set - using an insecure development-only fallback.')
+}
 
 const authenticate = (req, res, next) => {
   const header = req.headers['authorization']
