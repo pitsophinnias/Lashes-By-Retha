@@ -72,6 +72,11 @@ const DELIVERY_FEE = 120
 const PICKUP_ADDRESS = '125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911'
 const PICKUP_HOURS = 'Tuesday to Saturday, 08:00 to 17:00'
 
+// Render's free tier puts the backend to sleep after 15 minutes idle, and it
+// can take up to a minute to wake back up - this is how long we wait for the
+// health check before giving up and showing the shop as unreachable.
+const BACKEND_WAKE_TIMEOUT_MS = 60000
+
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
   const [cart, setCart] = useState([])
@@ -100,6 +105,9 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [expandedClassId, setExpandedClassId] = useState(null)
+  // 'checking' while we wait for a sleeping backend to wake up, 'ready' once
+  // it responds, 'unreachable' once it fails to respond within the timeout.
+  const [backendStatus, setBackendStatus] = useState('checking')
   const bookingUrl = 'https://lashesbyretha.setmore.com'
 
   useEffect(() => {
@@ -110,7 +118,21 @@ function App() {
     return () => mq.removeEventListener('change', handler)
   }, [])
 
+  // Wakes a sleeping Render backend before we rely on it for anything. The
+  // rest of the page (hero, about, training, contact, policies) is static
+  // and never waits on this.
   useEffect(() => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), BACKEND_WAKE_TIMEOUT_MS)
+    fetch(`${API}/api/health`, { signal: controller.signal })
+      .then(r => { if (r.ok) setBackendStatus('ready'); else setBackendStatus('unreachable') })
+      .catch(() => setBackendStatus('unreachable'))
+      .finally(() => clearTimeout(timer))
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [])
+
+  useEffect(() => {
+    if (backendStatus !== 'ready') return
     fetch(`${API}/api/products`)
       .then(r => r.json())
       .then(data => {
@@ -139,7 +161,7 @@ function App() {
         else setProductCategories({})
       })
       .catch(() => setProductCategories({}))
-  }, [])
+  }, [backendStatus])
 
   // Product images and positions depend on the product list having loaded.
   useEffect(() => {
@@ -159,6 +181,25 @@ function App() {
 
   const scrollToShop = () => {
     document.getElementById('shop')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  const renderBackendStatus = () => {
+    if (backendStatus === 'checking') {
+      return (
+        <p className="backend-status-message is-loading">
+          Just a moment while we get everything ready for you.
+        </p>
+      )
+    }
+    if (backendStatus === 'unreachable') {
+      return (
+        <p className="backend-status-message is-error">
+          We're having trouble loading our products right now. Please refresh the page, or message us on{' '}
+          <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer">WhatsApp at 082 685 5399</a>.
+        </p>
+      )
+    }
+    return null
   }
 
   // A cart line is identified by cartKey, not product id, so the same
@@ -599,6 +640,35 @@ function App() {
         .section-text {
           font-size: 1.05rem;
           color: #7A6670;
+        }
+
+        /* Backend wake-up / unreachable states */
+        .backend-status-message {
+          max-width: 480px;
+          margin: 0 auto;
+          padding: 48px 20px;
+          text-align: center;
+          font-size: 1.05rem;
+          color: #7A6670;
+        }
+
+        .backend-status-message.is-loading {
+          animation: backendStatusPulse 1.6s ease-in-out infinite;
+        }
+
+        .backend-status-message.is-error {
+          color: #A0566A;
+          font-weight: 600;
+        }
+
+        .backend-status-message a {
+          color: #C47A8A;
+          text-decoration: underline;
+        }
+
+        @keyframes backendStatusPulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.45; }
         }
 
         /* Products */
@@ -1163,7 +1233,7 @@ function App() {
 
       <section id="shop" className="section products-section">
         <h2 className="section-heading">Our Products</h2>
-        {(() => {
+        {backendStatus !== 'ready' ? renderBackendStatus() : (() => {
           const grouped = []
 
           // Add categorised groups in order
@@ -1392,6 +1462,7 @@ function App() {
       <section id="gallery" className="section section-alt gallery-section">
         <h2 className="section-heading">Our Work</h2>
         <p className="section-text gallery-subheading">A glimpse of the sets we create</p>
+        {backendStatus !== 'ready' ? renderBackendStatus() : (
         <div className="gallery-grid">
           {galleryImages.length > 0 ? (
             galleryImages.map((img) => (
@@ -1449,6 +1520,7 @@ function App() {
             ))
           )}
         </div>
+        )}
       </section>
 
       <section id="contact" className="section contact-section">

@@ -1,12 +1,31 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
+
+// Render's free tier puts the backend to sleep after 15 minutes idle, and it
+// can take up to a minute to wake back up.
+const BACKEND_WAKE_TIMEOUT_MS = 60000
+
+const fetchWithTimeout = (url, options = {}, timeoutMs = BACKEND_WAKE_TIMEOUT_MS) => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer))
+}
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [waking, setWaking] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchWithTimeout(`${API}/api/health`)
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setWaking(false) })
+    return () => { cancelled = true }
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -17,7 +36,7 @@ export default function Login({ onLogin }) {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch(`${API}/api/auth/login`, {
+      const res = await fetchWithTimeout(`${API}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username.trim(), password }),
@@ -30,8 +49,12 @@ export default function Login({ onLogin }) {
       localStorage.setItem('hbh_token', data.token)
       localStorage.setItem('hbh_user', JSON.stringify(data.user))
       onLogin(data.user)
-    } catch {
-      setError('Unable to connect to the server. Please try again.')
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        setError('The server is taking too long to respond. Please try again in a moment.')
+      } else {
+        setError('Unable to connect to the server. Please try again.')
+      }
     } finally {
       setLoading(false)
     }
@@ -74,6 +97,20 @@ export default function Login({ onLogin }) {
         }
         .login-btn:hover { background: #A0566A; }
         .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .waking-banner {
+          background: #F7EEF0;
+          color: #9A8A8E;
+          border-radius: 8px;
+          padding: 10px 14px;
+          font-size: 13px;
+          font-weight: 600;
+          margin-bottom: 14px;
+          animation: wakingPulse 1.6s ease-in-out infinite;
+        }
+        @keyframes wakingPulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
       `}</style>
 
       <div style={{
@@ -124,6 +161,12 @@ export default function Login({ onLogin }) {
             <p style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 28 }}>
               Sign in to the Hair By Her admin dashboard.
             </p>
+
+            {waking && (
+              <div className="waking-banner">
+                Waking up the server, this can take up to a minute...
+              </div>
+            )}
 
             <form onSubmit={handleSubmit}>
               <label style={{ fontSize: 11, fontWeight: 700, color: '#C4A0A8', letterSpacing: 1, textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
