@@ -32,10 +32,21 @@ app.use(helmet({
 }))
 
 // ── CORS — only allow known frontend origins ────────────────────────────────
+// ALLOWED_ORIGINS entries can pick up stray whitespace, quotes or a trailing
+// slash when set through a hosting dashboard - clean each one so a valid
+// origin doesn't fail CORS just because it doesn't match byte-for-byte.
+const cleanOrigin = (origin) => origin.trim().replace(/^['"]|['"]$/g, '').trim().replace(/\/+$/, '')
+
 const allowedOrigins = [
   ...(isProd ? [] : ['http://localhost:5273', 'http://localhost:5274']),
-  ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : []),
+  ...(process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(cleanOrigin).filter(Boolean)
+    : []),
 ]
+
+if (isProd) {
+  console.log('Allowed CORS origins:', allowedOrigins.join(', ') || '(none configured)')
+}
 
 app.use(cors({
   origin: (origin, cb) => {
@@ -1270,6 +1281,7 @@ app.patch('/api/notifications/:id/read', authenticate, async (req, res) => {
 // Express's default handler and comes back as an unhandled 500.
 app.use((err, req, res, next) => {
   if (err.message?.startsWith('CORS blocked')) {
+    console.error(err.message)
     return res.status(403).json({ error: 'Origin not allowed' })
   }
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
