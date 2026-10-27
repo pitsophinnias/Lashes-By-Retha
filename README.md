@@ -23,6 +23,7 @@ Copy backend/.env.example to backend/.env and fill in values.
 - ADMIN_DEFAULT_PASSWORD — password for the seeded sysadmin account; required in production
 - ALLOWED_ORIGINS — comma-separated list of frontend origins allowed to call the API
 - SETMORE_REFRESH_TOKEN — from the Setmore dashboard, needed for appointment API access
+- CLOUDINARY_URL — from your Cloudinary dashboard; when set, product/class/gallery uploads go to Cloudinary instead of local disk (needed on Render, since its free tier disk is wiped on every restart or sleep). Leave unset for local dev to keep using local disk storage.
 
 ### customer-site and admin-dashboard
 
@@ -38,7 +39,9 @@ Backend (web service)
 - Root directory: backend
 - Build command: npm ci
 - Start command: node index.js
-- Environment: DATABASE_URL, PORT, NODE_ENV=production, JWT_SECRET, ADMIN_DEFAULT_PASSWORD, ALLOWED_ORIGINS, SETMORE_REFRESH_TOKEN
+- Environment: DATABASE_URL, PORT, NODE_ENV=production, JWT_SECRET, ADMIN_DEFAULT_PASSWORD, ALLOWED_ORIGINS, SETMORE_REFRESH_TOKEN, CLOUDINARY_URL
+
+If you have existing images under backend/uploads from before CLOUDINARY_URL was set, run `npm run migrate:uploads` from backend/ (with CLOUDINARY_URL set in your environment) to upload them to Cloudinary and update the database. It is safe to run more than once.
 
 Customer site (static site)
 - Root directory: customer-site
