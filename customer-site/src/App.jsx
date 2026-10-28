@@ -493,6 +493,15 @@ function App() {
       }
       return !product.options.some(o => o.curl === curl && o.isActive && o.stockQuantity > 0)
     }
+    // Mobile dropdown only: the length list narrows to the chosen curl, the
+    // same way the curl pills already narrow to the chosen length above.
+    const lengthDisabledForCurl = (len) => {
+      if (showCurlPicker && sel.curl) {
+        const match = product.options.find(o => o.lengthMm === len && o.curl === sel.curl)
+        return !match || !match.isActive || match.stockQuantity <= 0
+      }
+      return lengthDisabled(len)
+    }
 
     const selectedVariant = hasOptions
       ? product.options.find(o => o.lengthMm === sel.lengthMm && (!showCurlPicker || o.curl === sel.curl))
@@ -510,6 +519,21 @@ function App() {
       ...prev,
       [product.id]: { ...prev[product.id], curl: prev[product.id]?.curl === curl ? undefined : curl },
     }))
+
+    const handleLengthSelect = (e) => {
+      const value = e.target.value
+      setSelectedOptions(prev => ({
+        ...prev,
+        [product.id]: { ...prev[product.id], lengthMm: value ? Number(value) : undefined },
+      }))
+    }
+    const handleCurlSelect = (e) => {
+      const value = e.target.value
+      setSelectedOptions(prev => ({
+        ...prev,
+        [product.id]: { ...prev[product.id], curl: value || undefined },
+      }))
+    }
 
     const pillStyle = (active, disabled) => ({
       padding: '6px 10px',
@@ -573,58 +597,103 @@ function App() {
             <div className="product-image-placeholder">Product Image</div>
           )}
         </div>
-        <div style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div className="product-card-body" style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
           {product.badge && <span className="product-badge" style={{ marginBottom: '8px' }}>{product.badge}</span>}
           <h3 className="product-name">{product.name}</h3>
           <p className="product-description">{product.description}</p>
-          <div style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
+          <div className="product-detail-line" style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
             {product.detail}
           </div>
           <p className="product-price">R {product.price}</p>
 
           {hasOptions && (
-            <div style={{ marginBottom: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-                Length
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: showCurlPicker ? '12px' : '0' }}>
-                {lengths.map(len => (
-                  <button
-                    key={len}
-                    type="button"
-                    onClick={() => !lengthDisabled(len) && pickLength(len)}
-                    disabled={lengthDisabled(len)}
-                    style={pillStyle(sel.lengthMm === len, lengthDisabled(len))}
+            <div className="product-options" style={{ marginBottom: '10px' }}>
+              {isMobile ? (
+                <>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                    Length
+                  </label>
+                  <select
+                    className="option-select"
+                    value={sel.lengthMm ?? ''}
+                    onChange={handleLengthSelect}
+                    style={{ marginBottom: showCurlPicker ? '10px' : '0' }}
                   >
-                    {len}mm
-                  </button>
-                ))}
-              </div>
+                    <option value="">Choose a length</option>
+                    {lengths.map(len => {
+                      const disabled = lengthDisabledForCurl(len)
+                      return (
+                        <option key={len} value={len} disabled={disabled}>
+                          {len}mm{disabled ? ' (sold out)' : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
 
-              {showCurlPicker && (
+                  {showCurlPicker && (
+                    <>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                        Curl
+                      </label>
+                      <select className="option-select" value={sel.curl ?? ''} onChange={handleCurlSelect}>
+                        <option value="">Choose a curl</option>
+                        {curls.map(curl => {
+                          const disabled = curlDisabled(curl)
+                          return (
+                            <option key={curl} value={curl} disabled={disabled}>
+                              {curl} curl{disabled ? ' (sold out)' : ''}
+                            </option>
+                          )
+                        })}
+                      </select>
+                    </>
+                  )}
+                </>
+              ) : (
                 <>
                   <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-                    Curl
+                    Length
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                    {curls.map(curl => (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: showCurlPicker ? '12px' : '0' }}>
+                    {lengths.map(len => (
                       <button
-                        key={curl}
+                        key={len}
                         type="button"
-                        onClick={() => !curlDisabled(curl) && pickCurl(curl)}
-                        disabled={curlDisabled(curl)}
-                        style={pillStyle(sel.curl === curl, curlDisabled(curl))}
+                        onClick={() => !lengthDisabled(len) && pickLength(len)}
+                        disabled={lengthDisabled(len)}
+                        style={pillStyle(sel.lengthMm === len, lengthDisabled(len))}
                       >
-                        {curl} curl
+                        {len}mm
                       </button>
                     ))}
                   </div>
+
+                  {showCurlPicker && (
+                    <>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                        Curl
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {curls.map(curl => (
+                          <button
+                            key={curl}
+                            type="button"
+                            onClick={() => !curlDisabled(curl) && pickCurl(curl)}
+                            disabled={curlDisabled(curl)}
+                            style={pillStyle(sel.curl === curl, curlDisabled(curl))}
+                          >
+                            {curl} curl
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>
           )}
 
-          <div style={{ fontSize: '12px', marginBottom: '10px', fontWeight: 600 }}>
+          <div className="product-availability" style={{ fontSize: '12px', marginBottom: '10px', fontWeight: 600 }}>
             {!choiceComplete ? (
               <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>
                 Choose a length{showCurlPicker ? ' and curl' : ''} to see availability
@@ -943,6 +1012,26 @@ function App() {
           margin-bottom: 14px;
         }
 
+        .option-select {
+          display: block;
+          width: 100%;
+          min-height: 44px;
+          padding: 8px 12px;
+          border-radius: 8px;
+          border: 1px solid #F5DDE2;
+          background: #FFFFFF;
+          color: #2C2C2C;
+          font-family: 'Lato', sans-serif;
+          font-size: 14px;
+          cursor: pointer;
+        }
+
+        .option-select:focus {
+          outline: none;
+          border-color: #C47A8A;
+          box-shadow: 0 0 0 2px rgba(196, 122, 138, 0.25);
+        }
+
         .btn-add-cart {
           width: 100%;
           background-color: #C47A8A;
@@ -1189,6 +1278,24 @@ function App() {
           /* Products */
           .product-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 12px !important; }
           .products-section { padding: 60px 16px !important; }
+          .product-card-body { padding: 12px 14px 14px 14px !important; }
+          .product-name { margin-bottom: 4px !important; }
+          .product-description {
+            display: -webkit-box !important;
+            -webkit-line-clamp: 2 !important;
+            -webkit-box-orient: vertical !important;
+            overflow: hidden !important;
+            margin-bottom: 6px !important;
+          }
+          .product-detail-line {
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            margin-bottom: 8px !important;
+          }
+          .product-price { margin-bottom: 8px !important; }
+          .product-options { margin-bottom: 8px !important; }
+          .product-availability { margin-bottom: 8px !important; }
 
           /* Classes */
           .classes-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 12px !important; }
