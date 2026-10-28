@@ -36,33 +36,179 @@ const CLASSES = [
   },
 ]
 
-const policies = [
-  {
-    label: 'Deposit',
-    heading: 'Securing Your Appointment',
-    body: 'To secure your booking, we kindly ask for a non-refundable deposit of R100, payable immediately after your appointment is confirmed. Please make payment to FNB account 63093932440 and send your proof of payment via WhatsApp to 082 685 5399. Your slot is only secured once your deposit has been received.',
-  },
-  {
-    label: 'Cancellation and Rescheduling',
-    heading: 'Changes to Your Booking',
-    body: 'We completely understand that life happens. If you need to reschedule or cancel, we simply ask that you let us know at least 12 hours before your appointment. Cancellations or reschedules made after this time will unfortunately result in your deposit being forfeited.',
-  },
-  {
-    label: 'Late Arrivals',
-    heading: 'Please Try to Be on Time',
-    body: 'We have a 15-minute grace period in place for all appointments. If you arrive more than 15 minutes late, we may not be able to accommodate your full service, and your appointment may need to be cancelled with the deposit forfeited. We always do our best to make things work, and we appreciate you doing the same.',
-  },
-  {
-    label: 'After Your Appointment',
-    heading: 'Something Not Quite Right?',
-    body: 'Your satisfaction means everything to us. If you experience any concerns with your lash extensions after your visit, please reach out to us within 48 hours of your appointment date and we will gladly look into it for you. Unfortunately we are unable to assist with concerns raised after this period.',
-  },
-  {
-    label: 'Refunds',
-    heading: 'Refund Policy',
-    body: 'As all our services are rendered in person and with care, we are unable to offer refunds on services performed. We always strive to make sure you leave happy, so please do not hesitate to speak to us during your appointment if something does not feel right.',
-  },
-]
+const POLICIES = {
+  booking: [
+    {
+      label: 'Deposit',
+      heading: 'Securing Your Appointment',
+      body: 'To secure your booking, we kindly ask for a non-refundable deposit of R100, payable immediately after your appointment is confirmed. Please make payment to FNB account 63093932440 and send your proof of payment via WhatsApp to 082 685 5399. Your slot is only secured once your deposit has been received.',
+    },
+    {
+      label: 'Cancellation and Rescheduling',
+      heading: 'Changes to Your Booking',
+      body: 'We completely understand that life happens. If you need to reschedule or cancel, we simply ask that you let us know at least 12 hours before your appointment. Cancellations or reschedules made after this time will unfortunately result in your deposit being forfeited.',
+    },
+    {
+      label: 'Late Arrivals',
+      heading: 'Please Try to Be on Time',
+      body: 'We have a 15-minute grace period in place for all appointments. If you arrive more than 15 minutes late, we may not be able to accommodate your full service, and your appointment may need to be cancelled with the deposit forfeited. We always do our best to make things work, and we appreciate you doing the same.',
+    },
+    {
+      label: 'After Your Appointment',
+      heading: 'Something Not Quite Right?',
+      body: 'Your satisfaction means everything to us. If you experience any concerns with your lash extensions after your visit, please reach out to us within 48 hours of your appointment date and we will gladly look into it for you. Unfortunately we are unable to assist with concerns raised after this period.',
+    },
+    {
+      label: 'Refunds',
+      heading: 'Refund Policy',
+      body: 'As all our services are rendered in person and with care, we are unable to offer refunds on services performed. We always strive to make sure you leave happy, so please do not hesitate to speak to us during your appointment if something does not feel right.',
+    },
+  ],
+  returns: [
+    {
+      heading: 'Our Promise',
+      body: "We want you to love every product you receive from us. If something isn't right, here's how we'll help.",
+    },
+    {
+      heading: 'If Your Product Is Faulty',
+      body: "Please let us know on WhatsApp (082 685 5399) as soon as you notice the problem, ideally within 7 days of receiving your order, with a photo of the product. You can return a faulty product within six months of delivery, and you're welcome to choose a replacement, a refund or store credit. A product is not considered faulty if it was damaged through use, incorrect application or not following care instructions.",
+    },
+    {
+      heading: 'Cancelling An Online Order',
+      body: "You may cancel an online order within 7 days of receiving it, as long as the lash trays are unopened, sealed and in their original packaging. Please contact us on WhatsApp before sending anything back. The return courier fee is for your account, and we'll refund you within 30 days of receiving the returned items.",
+    },
+    {
+      heading: 'Opened Products',
+      body: 'For hygiene reasons, we kindly ask that you understand we cannot accept opened lash trays or used products unless they are faulty.',
+    },
+    {
+      heading: 'Choosing The Right Size',
+      body: "Please double-check the length, curl and diameter before placing your order. We are unable to exchange or refund opened trays ordered in the wrong size. If you're unsure which size to choose, please don't hesitate to message us and we'll gladly help.",
+    },
+    {
+      heading: 'Store Credit',
+      body: 'Where we offer store credit, it can be used on any of our other products.',
+    },
+  ],
+  delivery: [
+    {
+      heading: 'Where We Deliver',
+      body: 'We deliver anywhere in South Africa using The Courier Guy or Aramex. We do not deliver outside South Africa at this time.',
+    },
+    {
+      heading: 'Delivery Fee',
+      body: 'Delivery is a flat fee of R120 per order, added at checkout.',
+    },
+    {
+      heading: 'How Long It Takes',
+      body: "We send your order once your payment has been confirmed. Delivery usually takes 3 to 5 working days, depending on your province. Delivery times are set by the courier company, so they may sometimes take a little longer. We'll share your tracking details with you on WhatsApp.",
+    },
+    {
+      heading: 'Collecting Your Order',
+      body: "You're welcome to collect your order from our studio at no charge, at 125 Piet Retief Boulevard, Vanderbijlpark SE1. Collection is Tuesday to Saturday, 08:00 to 17:00, once we've let you know your order is ready.",
+    },
+    {
+      heading: 'Damaged Parcels',
+      body: "If your parcel arrives damaged, please send us photos of the packaging and the product on WhatsApp within 48 hours of receiving it. We'll look into whether the damage happened in packing or in transit, and we'll make it right with a replacement or refund for any faulty items.",
+    },
+    {
+      heading: 'Missing Parcels',
+      body: "If your parcel hasn't arrived within the expected time, please let us know. We'll follow up with the courier straight away and open an investigation. Once the courier's investigation is complete, we'll send you a replacement or a full refund.",
+    },
+    {
+      heading: 'Delivery Details',
+      body: 'Please make sure your address and phone number are correct at checkout. If a parcel is returned to us because of an incorrect address, a new delivery fee will apply.',
+    },
+  ],
+  training: [
+    {
+      heading: 'Securing Your Spot',
+      body: 'A non-refundable deposit of R500 secures your place on a training course. Please pay to FNB account 63093932440 and send your proof of payment on WhatsApp to 082 685 5399.',
+    },
+    {
+      heading: 'Paying The Balance',
+      body: 'The remaining balance is due before your training starts. Your certificate will be issued once your course fees have been paid in full.',
+    },
+    {
+      heading: 'Moving To Another Date',
+      body: "We understand that plans change. If you let us know at least 48 hours before your course starts, we'll gladly move you to another available date and your deposit will carry over. If you cancel or postpone with less than 48 hours' notice, or don't attend, your deposit will unfortunately be forfeited.",
+    },
+  ],
+  privacy: [
+    {
+      heading: 'Your Privacy Matters',
+      body: 'Your privacy matters to us. This policy explains what information we collect and how we look after it, in line with the Protection of Personal Information Act (POPIA).',
+    },
+    {
+      heading: 'What We Collect',
+      list: {
+        type: 'bullet',
+        items: [
+          'Your name and WhatsApp number when you place an order or enrol for training',
+          'Your delivery address if you choose delivery',
+          'The details of your order or training course',
+        ],
+      },
+    },
+    {
+      heading: 'Why We Collect It',
+      body: "We only use your information to process your order, arrange delivery or collection, manage your training enrolment, and contact you about these. We will not send you marketing messages unless you've agreed to receive them.",
+    },
+    {
+      heading: 'Who We Share It With',
+      body: "We never sell your information. We only share what's needed with the courier delivering your order, the payment providers that process your payment, and the services that host our website and images. Each of them only receives what they need to do their part.",
+    },
+    {
+      heading: 'How Long We Keep It',
+      body: 'We keep your information for as long as we need it for your order or training, and for any period the law requires for our business records.',
+    },
+    {
+      heading: 'Cookies',
+      body: 'Our website does not use advertising or tracking cookies.',
+    },
+    {
+      heading: 'Your Rights',
+      body: (
+        <>
+          You may ask us what information we hold about you, ask us to correct it, or ask us to delete it. Please
+          email lashesbyretha@gmail.com and we'll gladly help. If you're unhappy with how we've handled your
+          information, you may contact the{' '}
+          <a href="https://inforegulator.org.za" target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+            Information Regulator
+          </a>
+          .
+        </>
+      ),
+    },
+  ],
+  terms: [
+    {
+      heading: 'Agreement',
+      body: 'By placing an order or enrolling for training on our website, you agree to these terms.',
+    },
+    {
+      heading: 'Terms Of Use',
+      list: {
+        type: 'numbered',
+        items: [
+          'Prices: All prices are in South African Rand. We are not VAT registered, so no VAT is added to our prices. Prices may change from time to time, but the price you see when you order is the price you pay.',
+          "Orders: Your order is confirmed once we've received your payment. If an item is out of stock after you've paid, we'll let you know and offer you another option or a full refund.",
+          'Payment: You can pay by EFT to FNB account 63093932440 and send your proof of payment on WhatsApp to 082 685 5399. Other payment options will be shown at checkout when available. Instalment options are available for lash training only.',
+          'Delivery, returns and training: Our Delivery, Returns and Lash Training policies form part of these terms.',
+          'Appointments: Appointments are booked through our Setmore booking page and follow our Booking Policy.',
+          'Product use: Our products are for professional use. Please follow the care and application guidance provided.',
+          'Your rights: Nothing in these terms takes away your rights under the Consumer Protection Act or the Electronic Communications and Transactions Act.',
+          'Changes: We may update these terms from time to time. The version on our website when you order is the one that applies.',
+          'Law: These terms are governed by the laws of South Africa.',
+        ],
+      },
+    },
+    {
+      heading: 'Questions?',
+      body: "Please don't hesitate to contact us on WhatsApp at 082 685 5399 or email lashesbyretha@gmail.com.",
+    },
+  ],
+}
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
@@ -245,6 +391,58 @@ function App() {
     setCopied(true)
     setTimeout(() => setCopied(false), 2500)
   }
+
+  const openPolicies = (tab) => {
+    setPolicyTab(tab)
+    setShowPolicies(true)
+    window.scrollTo(0, 0)
+  }
+
+  const renderPolicySections = (sections) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {sections.map((section, i) => (
+        <div
+          key={i}
+          style={{
+            background: '#FFFFFF',
+            borderRadius: '12px',
+            borderLeft: '4px solid #C47A8A',
+            padding: '24px 28px',
+            boxShadow: '0 2px 12px rgba(196, 122, 138, 0.08)',
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: '20px',
+              fontWeight: 600,
+              color: '#2C2C2C',
+              marginBottom: '10px',
+            }}
+          >
+            {section.heading}
+          </div>
+          {section.body && (
+            <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>{section.body}</div>
+          )}
+          {section.list && section.list.type === 'numbered' && (
+            <ol style={{ margin: 0, paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {section.list.items.map((item, idx) => (
+                <li key={idx} style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>{item}</li>
+              ))}
+            </ol>
+          )}
+          {section.list && section.list.type === 'bullet' && (
+            <ul style={{ margin: 0, paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {section.list.items.map((item, idx) => (
+                <li key={idx} style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>{item}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  )
 
   const submitOrder = async () => {
     if (!canPlaceOrder) return
@@ -1055,6 +1253,8 @@ function App() {
 
           .policies-nav { padding: 0 16px !important; height: auto !important; min-height: 60px !important; flex-wrap: wrap !important; gap: 8px !important; padding-top: 10px !important; padding-bottom: 10px !important; }
           .policies-content { padding: 40px 16px !important; }
+          .policies-tabs { width: 100% !important; max-width: 100% !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+          .policies-tabs button { flex-shrink: 0 !important; white-space: nowrap !important; }
         }
       `}</style>
 
@@ -1562,10 +1762,17 @@ function App() {
               <span style={{ fontSize: '14px', color: '#2C2C2C' }}>Tuesday to Saturday, 8:00 AM to 7:00 PM</span>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
               <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>WhatsApp</span>
               <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
                 Chat with us on WhatsApp
+              </a>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Email</span>
+              <a href="mailto:lashesbyretha@gmail.com" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
+                lashesbyretha@gmail.com
               </a>
             </div>
           </div>
@@ -1656,15 +1863,16 @@ function App() {
             </svg>
           </a>
         </div>
-        <button
-          className="footer-policies-link"
-          onClick={() => {
-            setShowPolicies(true)
-            window.scrollTo(0, 0)
-          }}
-        >
-          Policies
-        </button>
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <button className="footer-policies-link" onClick={() => openPolicies('booking')}>Policies</button>
+          <button className="footer-policies-link" onClick={() => openPolicies('returns')}>Returns</button>
+          <button className="footer-policies-link" onClick={() => openPolicies('delivery')}>Delivery</button>
+          <button className="footer-policies-link" onClick={() => openPolicies('privacy')}>Privacy</button>
+          <button className="footer-policies-link" onClick={() => openPolicies('terms')}>Terms</button>
+        </div>
+        <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
+          Hair By Her (Pty) Ltd &middot; Reg. No. 2022/273934/07 &middot; 125 Piet Retief Boulevard, Vanderbijlpark SE1, Gauteng, 1911
+        </p>
         <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>&copy; 2026 Hair By Her. All rights reserved.</p>
         </div>
       </footer>
@@ -1730,6 +1938,7 @@ function App() {
             <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '16px 0 48px 0' }} />
 
             <div
+              className="policies-tabs"
               style={{
                 display: 'flex',
                 gap: 0,
@@ -1740,122 +1949,35 @@ function App() {
                 width: 'fit-content',
               }}
             >
-              <button
-                onClick={() => setPolicyTab('booking')}
-                style={{
-                  padding: '10px 24px',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  border: 'none',
-                  fontFamily: 'inherit',
-                  transition: 'background 0.2s',
-                  background: policyTab === 'booking' ? '#C47A8A' : '#FFFFFF',
-                  color: policyTab === 'booking' ? '#FFFFFF' : '#7A6670',
-                }}
-              >
-                Booking Policy
-              </button>
-              <button
-                onClick={() => setPolicyTab('product')}
-                style={{
-                  padding: '10px 24px',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  border: 'none',
-                  fontFamily: 'inherit',
-                  transition: 'background 0.2s',
-                  background: policyTab === 'product' ? '#C47A8A' : '#FFFFFF',
-                  color: policyTab === 'product' ? '#FFFFFF' : '#7A6670',
-                }}
-              >
-                Product Policy
-              </button>
+              {[
+                ['booking', 'Booking'],
+                ['returns', 'Returns'],
+                ['delivery', 'Delivery'],
+                ['training', 'Lash Training'],
+                ['privacy', 'Privacy'],
+                ['terms', 'Terms'],
+              ].map(([tab, label]) => (
+                <button
+                  key={tab}
+                  onClick={() => setPolicyTab(tab)}
+                  style={{
+                    padding: '10px 24px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    border: 'none',
+                    fontFamily: 'inherit',
+                    transition: 'background 0.2s',
+                    background: policyTab === tab ? '#C47A8A' : '#FFFFFF',
+                    color: policyTab === tab ? '#FFFFFF' : '#7A6670',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
 
-            {policyTab === 'booking' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {policies.map((policy) => (
-                  <div
-                    key={policy.label}
-                    style={{
-                      background: '#FFFFFF',
-                      borderRadius: '12px',
-                      borderLeft: '4px solid #C47A8A',
-                      padding: '24px 28px',
-                      boxShadow: '0 2px 12px rgba(196, 122, 138, 0.08)',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        letterSpacing: '2px',
-                        color: '#C47A8A',
-                        textTransform: 'uppercase',
-                        marginBottom: '10px',
-                      }}
-                    >
-                      {policy.label}
-                    </div>
-                    <div
-                      style={{
-                        fontFamily: "'Cormorant Garamond', serif",
-                        fontSize: '20px',
-                        fontWeight: 600,
-                        color: '#2C2C2C',
-                        marginBottom: '10px',
-                      }}
-                    >
-                      {policy.heading}
-                    </div>
-                    <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>
-                      {policy.body}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {policyTab === 'product' && (
-              <div
-                style={{
-                  background: '#FFFFFF',
-                  borderRadius: '12px',
-                  borderLeft: '4px solid #C47A8A',
-                  padding: '24px 28px',
-                  boxShadow: '0 2px 12px rgba(196, 122, 138, 0.08)',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    letterSpacing: '2px',
-                    color: '#C47A8A',
-                    textTransform: 'uppercase',
-                    marginBottom: '10px',
-                  }}
-                >
-                  Coming Soon
-                </div>
-                <div
-                  style={{
-                    fontFamily: "'Cormorant Garamond', serif",
-                    fontSize: '20px',
-                    fontWeight: 600,
-                    color: '#2C2C2C',
-                    marginBottom: '10px',
-                  }}
-                >
-                  Product Policies
-                </div>
-                <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>
-                  Our product policies are currently being finalised. Please check back soon or reach out to us on WhatsApp at 082 685 5399 if you have any questions about a purchase.
-                </div>
-              </div>
-            )}
+            {renderPolicySections(POLICIES[policyTab])}
 
             <div
               style={{
