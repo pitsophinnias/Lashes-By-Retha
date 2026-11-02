@@ -85,6 +85,17 @@ function buildOzowFields(orderId, amount) {
   return { transactionReference, amountStr, fields }
 }
 
+// Ozow's status API's field casing isn't confirmed to match its request/
+// notify docs (PascalCase) - looks up a key regardless of case so either
+// works.
+function pick(obj, key) {
+  if (obj == null) return undefined
+  if (obj[key] !== undefined) return obj[key]
+  const lowerKey = key.toLowerCase()
+  const foundKey = Object.keys(obj).find(k => k.toLowerCase() === lowerKey)
+  return foundKey !== undefined ? obj[foundKey] : undefined
+}
+
 function mapOzowStatus(status) {
   if (status === 'Complete') return 'paid'
   if (status === 'Cancelled' || status === 'Abandoned') return 'cancelled'
@@ -97,6 +108,10 @@ function mapOzowStatus(status) {
 // having to import it (which would create a require cycle).
 let notifyAdmin = async () => {}
 const setNotifier = (fn) => { notifyAdmin = fn }
+
+// Logs only the key names of the first live response, once per process, so
+// we can confirm the actual field casing without ever logging values.
+let loggedStatusResponseKeys = false
 
 async function fetchOzowStatus(transactionReference) {
   const controller = new AbortController()
@@ -112,7 +127,12 @@ async function fetchOzowStatus(transactionReference) {
       return null
     }
     const data = await res.json()
-    return Array.isArray(data) ? data : null
+    if (!Array.isArray(data)) return null
+    if (!loggedStatusResponseKeys && data.length > 0) {
+      loggedStatusResponseKeys = true
+      console.log('Ozow status API response keys:', Object.keys(data[0]))
+    }
+    return data
   } catch (err) {
     console.error('Ozow status API call failed:', err.message)
     return null
@@ -136,8 +156,14 @@ async function reconcileOzowPayment(transactionReference) {
 
     const transactions = await fetchOzowStatus(transactionReference)
     if (!transactions) return // API call failed; leave state as-is
-    const match = transactions.find(t => t.TransactionReference === transactionReference)
+    const match = transactions.find(t => pick(t, 'TransactionReference') === transactionReference)
     if (!match) return
+
+    const matchTransactionId = pick(match, 'TransactionId')
+    const matchSiteCode = pick(match, 'SiteCode')
+    const matchAmount = pick(match, 'Amount')
+    const matchStatus = pick(match, 'Status')
+    const matchStatusMessage = pick(match, 'StatusMessage')
 
     const client = await pool.connect()
     try {
@@ -149,20 +175,33 @@ async function reconcileOzowPayment(transactionReference) {
       // Already paid - a second notification or status check must change nothing.
       if (order.payment_status === 'paid') { await client.query('ROLLBACK'); return }
 
-      const siteMatches = String(match.SiteCode) === String(OZOW_SITE_CODE)
-      const amountMatches = Math.abs(parseFloat(match.Amount) - parseFloat(payment.amount)) < 0.005
-      const isPaid = match.Status === 'Complete' && siteMatches && amountMatches
-      const newStatus = isPaid ? 'paid' : mapOzowStatus(match.Status)
+      const siteMatches = String(matchSiteCode) === String(OZOW_SITE_CODE)
+      const amountMatches = Math.abs(parseFloat(matchAmount) - parseFloat(payment.amount)) < 0.005
+      const isPaid = matchStatus === 'Complete' && siteMatches && amountMatches
+      const newStatus = isPaid ? 'paid' : mapOzowStatus(matchStatus)
 
+      // The status API has no IsTest field - is_test was already set when
+      // this payment attempt was created, so it's left untouched here.
       await client.query(
-        `UPDATE ozow_payments SET status = $1, status_message = $2, ozow_transaction_id = $3, is_test = $4, updated_at = NOW()
-         WHERE id = $5`,
-        [newStatus, match.StatusMessage || null, match.TransactionId || null, String(match.IsTest) === 'true', payment.id]
+        `UPDATE ozow_payments SET status = $1, status_message = $2, ozow_transaction_id = $3, updated_at = NOW()
+         WHERE id = $4`,
+        [newStatus, matchStatusMessage || null, matchTransactionId || null, payment.id]
       )
+
+      // Only the latest attempt may move the order's overall payment_status -
+      // a stale result from an older attempt (e.g. a late "Cancelled" after
+      // the customer already succeeded on a retry) must not overwrite it.
+      // A paid result always wins and is never downgraded, regardless of
+      // which attempt it came from.
+      const latestAttemptResult = await client.query(
+        'SELECT id FROM ozow_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [order.id]
+      )
+      const isLatestAttempt = latestAttemptResult.rows[0]?.id === payment.id
 
       if (isPaid) {
         await client.query(`UPDATE orders SET payment_status = 'paid', paid_at = NOW() WHERE id = $1`, [order.id])
-      } else {
+      } else if (isLatestAttempt) {
         await client.query('UPDATE orders SET payment_status = $1 WHERE id = $2', [newStatus, order.id])
       }
       await client.query('COMMIT')
