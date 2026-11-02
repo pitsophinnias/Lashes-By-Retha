@@ -186,6 +186,30 @@ const createTables = async () => {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_notes TEXT;
   `)
 
+  // Ozow pay-by-bank support. payment_method/payment_status default every
+  // existing and future EFT order to exactly today's behaviour; public_token
+  // lets the customer site look up its own order without logging in.
+  await pool.query(`
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20) NOT NULL DEFAULT 'eft';
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid';
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS public_token VARCHAR(64) UNIQUE;
+
+    CREATE TABLE IF NOT EXISTS ozow_payments (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER REFERENCES orders(id),
+      transaction_reference VARCHAR(50) UNIQUE NOT NULL,
+      ozow_transaction_id VARCHAR(50),
+      amount NUMERIC(10,2) NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'started',
+      status_message TEXT,
+      is_test BOOLEAN,
+      raw_notification JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
   // Seed default categories if none exist
   const { rows } = await pool.query('SELECT COUNT(*) FROM categories')
   if (parseInt(rows[0].count) === 0) {

@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
+const crypto = require('crypto')
 const dotenv = require('dotenv')
 dotenv.config()
 
@@ -14,6 +15,7 @@ const { authenticate, requireRole, JWT_SECRET } = require('./auth')
 
 const { pool, createTables } = require('./db')
 const { cloudinary, isCloudinaryEnabled, uploadBuffer } = require('./cloudinary')
+const ozow = require('./ozow')
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -30,6 +32,105 @@ app.set('trust proxy', 1)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // product/gallery images load on the customer site
 }))
+
+// ── Rate limiting ────────────────────────────────────────────────────────────
+// Defined before the Ozow routes below, which need globalLimiter at
+// registration time.
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+  skip: (req) => req.path === '/api/health' || (req.method === 'GET' && req.path.startsWith('/uploads')),
+})
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many failed login attempts. Please try again later.' },
+})
+
+const ordersLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many orders from this address. Please try again later.' },
+})
+
+// ── Ozow return & notify ─────────────────────────────────────────────────────
+// Mounted before the CORS middleware below: Ozow's browser redirects come
+// from https://pay.ozow.com and its server-to-server notifications may carry
+// no or odd Origin headers, so these two paths must never hit the CORS check.
+const ozowFormParser = express.urlencoded({ extended: false, limit: '100kb' })
+
+// Caps how long we wait for reconcileOzowPayment before redirecting the
+// customer back to the shop - the redirect itself is never proof of payment,
+// this is just so the browser doesn't hang if Ozow's status API is slow.
+const withTimeout = (promise, ms) => Promise.race([
+  promise,
+  new Promise((resolve) => setTimeout(resolve, ms)),
+])
+
+const handleOzowReturn = async (req, res) => {
+  const { outcome } = req.params
+  if (!['success', 'cancel', 'error'].includes(outcome)) return res.status(404).end()
+
+  const reference = (req.body && req.body.TransactionReference) || req.query.TransactionReference
+  let publicToken = null
+
+  if (reference) {
+    await withTimeout(ozow.reconcileOzowPayment(reference), 5000)
+    try {
+      const result = await pool.query(
+        `SELECT o.public_token FROM ozow_payments p JOIN orders o ON o.id = p.order_id WHERE p.transaction_reference = $1`,
+        [reference]
+      )
+      if (result.rows[0]) publicToken = result.rows[0].public_token
+    } catch (err) {
+      console.error('Ozow return lookup failed:', err.message)
+    }
+  }
+
+  const redirectOutcome = publicToken ? outcome : 'error'
+  const redirectUrl = new URL(`${ozow.CUSTOMER_SITE_URL || 'http://localhost'}/`)
+  redirectUrl.searchParams.set('payment', redirectOutcome)
+  if (publicToken) redirectUrl.searchParams.set('order', publicToken)
+  res.redirect(303, redirectUrl.toString())
+}
+
+app.get('/api/payments/ozow/return/:outcome', globalLimiter, handleOzowReturn)
+app.post('/api/payments/ozow/return/:outcome', globalLimiter, ozowFormParser, handleOzowReturn)
+
+app.post('/api/payments/ozow/notify', globalLimiter, ozowFormParser, async (req, res) => {
+  if (!ozow.isOzowConfigured) return res.status(503).end()
+  const body = req.body || {}
+
+  if (String(body.SiteCode) !== String(ozow.OZOW_SITE_CODE)) {
+    console.warn('Ozow notify: site code mismatch')
+    return res.status(400).json({ error: 'Invalid notification' })
+  }
+  if (!ozow.verifyResponseHash(body, ozow.OZOW_PRIVATE_KEY)) {
+    console.warn('Ozow notify: hash verification failed')
+    return res.status(400).json({ error: 'Invalid notification' })
+  }
+
+  try {
+    await pool.query(
+      'UPDATE ozow_payments SET raw_notification = $1, updated_at = NOW() WHERE transaction_reference = $2',
+      [JSON.stringify(body), body.TransactionReference]
+    )
+  } catch (err) {
+    console.error('Failed to store Ozow notification:', err.message)
+  }
+
+  await ozow.reconcileOzowPayment(body.TransactionReference)
+  res.status(200).send('OK')
+})
 
 // ── CORS — only allow known frontend origins ────────────────────────────────
 // ALLOWED_ORIGINS entries can pick up stray whitespace, quotes or a trailing
@@ -56,34 +157,7 @@ app.use(cors({
 }))
 
 app.use(express.json({ limit: '1mb' }))
-
-// ── Rate limiting ────────────────────────────────────────────────────────────
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' },
-  skip: (req) => req.path === '/api/health' || (req.method === 'GET' && req.path.startsWith('/uploads')),
-})
 app.use(globalLimiter)
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  message: { error: 'Too many failed login attempts. Please try again later.' },
-})
-
-const ordersLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many orders from this address. Please try again later.' },
-})
 
 // ── Upload directories ────────────────────────────────────────────────────────
 const UPLOAD_DIR = path.join(__dirname, 'uploads')
@@ -166,6 +240,8 @@ const addNotification = async (type, title, message) => {
     console.error('Failed to add notification:', err.message)
   }
 }
+
+ozow.setNotifier(addNotification)
 
 // Lash length/curl options, grouped by product id, for attaching to a
 // product list response. Pass includeInactive to also return deactivated
@@ -715,7 +791,7 @@ app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRol
 // Public: the customer site has no login and must be able to place orders.
 app.post('/api/orders', ordersLimiter, async (req, res) => {
   const {
-    customerName, customerPhone, items, fulfilmentMethod,
+    customerName, customerPhone, items, fulfilmentMethod, paymentMethod,
     deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
   } = req.body
   if (!customerName || !customerPhone || !items || !Array.isArray(items) || items.length === 0) {
@@ -727,6 +803,10 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
   if (fulfilmentMethod === 'delivery' &&
       (!deliveryAddress?.trim() || !deliverySuburb?.trim() || !deliveryCity?.trim() || !deliveryPostalCode?.trim())) {
     return res.status(400).json({ error: 'Please complete your delivery address.' })
+  }
+  const orderPaymentMethod = paymentMethod === 'ozow' ? 'ozow' : 'eft'
+  if (orderPaymentMethod === 'ozow' && !ozow.isOzowConfigured) {
+    return res.status(400).json({ error: 'Ozow payments are not available right now. Please pay by EFT instead.' })
   }
   try {
     // Look up every product server-side - price and total are never trusted
@@ -794,12 +874,14 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
 
     const deliveryFee = fulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
     const total = subtotal + deliveryFee
+    const publicToken = crypto.randomBytes(24).toString('hex')
 
     const orderResult = await pool.query(
       `INSERT INTO orders (
          customer_name, customer_phone, total, fulfilment_method, subtotal, delivery_fee,
-         delivery_address, delivery_suburb, delivery_city, delivery_postal_code, delivery_notes
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+         delivery_address, delivery_suburb, delivery_city, delivery_postal_code, delivery_notes,
+         payment_method, public_token
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
       [
         customerName, customerPhone, total, fulfilmentMethod, subtotal, deliveryFee,
         fulfilmentMethod === 'delivery' ? deliveryAddress.trim() : null,
@@ -807,6 +889,7 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
         fulfilmentMethod === 'delivery' ? deliveryCity.trim() : null,
         fulfilmentMethod === 'delivery' ? deliveryPostalCode.trim() : null,
         fulfilmentMethod === 'delivery' ? ((deliveryNotes || '').trim() || null) : null,
+        orderPaymentMethod, publicToken,
       ]
     )
     const order = orderResult.rows[0]
@@ -820,7 +903,7 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
     await addNotification('order', 'New order received',
       `${customerName} placed a ${fulfilmentMethod} order for ${orderItems.length} item${orderItems.length !== 1 ? 's' : ''} totalling R${total}.`)
     console.log('New order:', order.id)
-    res.status(201).json({ success: true, orderId: order.id })
+    res.status(201).json({ success: true, orderId: order.id, orderToken: order.public_token })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to save order' })
@@ -847,6 +930,11 @@ app.get('/api/orders', authenticate, async (req, res) => {
         lengthMm: i.length_mm,
         curl: i.curl,
       }))
+      const latestOzowResult = await pool.query(
+        'SELECT ozow_transaction_id, status FROM ozow_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [order.id]
+      )
+      const latestOzow = latestOzowResult.rows[0]
       order.customerName = order.customer_name
       order.customerPhone = order.customer_phone
       order.createdAt = order.created_at
@@ -859,11 +947,125 @@ app.get('/api/orders', authenticate, async (req, res) => {
       order.deliveryCity = order.delivery_city
       order.deliveryPostalCode = order.delivery_postal_code
       order.deliveryNotes = order.delivery_notes
+      order.paymentMethod = order.payment_method
+      order.paymentStatus = order.payment_status
+      order.paidAt = order.paid_at
+      order.ozowTransactionId = latestOzow ? latestOzow.ozow_transaction_id : null
+      order.ozowStatus = latestOzow ? latestOzow.status : null
     }
     res.json(orders)
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to fetch orders' })
+  }
+})
+
+// ── Ozow payments ─────────────────────────────────────────────────────────────
+app.get('/api/payments/options', (req, res) => {
+  res.json({ ozow: ozow.isOzowConfigured })
+})
+
+app.post('/api/payments/ozow/start', ordersLimiter, async (req, res) => {
+  if (!ozow.isOzowConfigured) {
+    return res.status(503).json({ error: 'Ozow payments are not available right now. Please pay by EFT instead.' })
+  }
+  const { orderToken } = req.body
+  if (!orderToken) return res.status(400).json({ error: 'Missing order token' })
+  try {
+    const orderResult = await pool.query('SELECT * FROM orders WHERE public_token = $1', [orderToken])
+    const order = orderResult.rows[0]
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    if (order.payment_method !== 'ozow') {
+      return res.status(400).json({ error: 'This order is not set up for Ozow payment.' })
+    }
+    if (order.payment_status === 'paid') {
+      return res.status(400).json({ error: 'This order has already been paid.' })
+    }
+    if (order.status === 'confirmed') {
+      return res.status(400).json({ error: 'This order has already been confirmed.' })
+    }
+
+    const { transactionReference, amountStr, fields } = ozow.buildOzowFields(order.id, order.total)
+    await pool.query(
+      `INSERT INTO ozow_payments (order_id, transaction_reference, amount, status, is_test)
+       VALUES ($1, $2, $3, 'started', $4)`,
+      [order.id, transactionReference, amountStr, ozow.OZOW_IS_TEST]
+    )
+    res.json({ action: 'https://pay.ozow.com/', fields })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to start Ozow payment' })
+  }
+})
+
+// In-memory map of orderId -> last reconcile check timestamp, so a customer
+// refreshing the result page repeatedly can't hammer Ozow's status API.
+const lastOzowCheck = new Map()
+
+app.get('/api/orders/by-token/:token', async (req, res) => {
+  try {
+    const orderResult = await pool.query('SELECT * FROM orders WHERE public_token = $1', [req.params.token])
+    let order = orderResult.rows[0]
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+
+    if (ozow.isOzowConfigured && order.payment_method === 'ozow' &&
+        ['unpaid', 'pending'].includes(order.payment_status)) {
+      const latestPaymentResult = await pool.query(
+        'SELECT * FROM ozow_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [order.id]
+      )
+      const latestPayment = latestPaymentResult.rows[0]
+      const isRecent = latestPayment && (Date.now() - new Date(latestPayment.created_at).getTime()) < 24 * 60 * 60 * 1000
+      const lastCheck = lastOzowCheck.get(order.id) || 0
+      if (latestPayment && isRecent && Date.now() - lastCheck > 30000) {
+        lastOzowCheck.set(order.id, Date.now())
+        await ozow.reconcileOzowPayment(latestPayment.transaction_reference)
+        const refreshed = await pool.query('SELECT * FROM orders WHERE id = $1', [order.id])
+        order = refreshed.rows[0]
+      }
+    }
+
+    const latestOzowResult = await pool.query(
+      'SELECT ozow_transaction_id, status FROM ozow_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [order.id]
+    )
+    const latestOzow = latestOzowResult.rows[0]
+
+    res.json({
+      id: order.id,
+      total: parseFloat(order.total),
+      fulfilmentMethod: order.fulfilment_method,
+      paymentMethod: order.payment_method,
+      paymentStatus: order.payment_status,
+      status: order.status,
+      ozowTransactionId: latestOzow ? latestOzow.ozow_transaction_id : null,
+      ozowStatus: latestOzow ? latestOzow.status : null,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch order' })
+  }
+})
+
+app.patch('/api/orders/:token/switch-to-eft', async (req, res) => {
+  try {
+    const orderResult = await pool.query('SELECT * FROM orders WHERE public_token = $1', [req.params.token])
+    const order = orderResult.rows[0]
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    if (order.payment_status === 'paid') {
+      return res.status(400).json({ error: 'This order has already been paid.' })
+    }
+    if (order.status === 'confirmed') {
+      return res.status(400).json({ error: 'This order has already been confirmed.' })
+    }
+    await pool.query(
+      `UPDATE orders SET payment_method = 'eft', payment_status = 'unpaid' WHERE id = $1`,
+      [order.id]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to switch to EFT' })
   }
 })
 

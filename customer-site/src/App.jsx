@@ -193,7 +193,7 @@ const POLICIES = {
         items: [
           'Prices: All prices are in South African Rand. We are not VAT registered, so no VAT is added to our prices. Prices may change from time to time, but the price you see when you order is the price you pay.',
           "Orders: Your order is confirmed once we've received your payment. If an item is out of stock after you've paid, we'll let you know and offer you another option or a full refund.",
-          'Payment: You can pay by EFT to FNB account 63093932440 and send your proof of payment on WhatsApp to 082 685 5399. Other payment options will be shown at checkout when available. Instalment options are available for lash training only.',
+          'Payment: You can pay instantly with Ozow at checkout, straight from your banking app, or by EFT to FNB account 63093932440 with your proof of payment sent on WhatsApp to 082 685 5399. Instalment options are available for lash training only.',
           'Delivery, returns and training: Our Delivery, Returns and Lash Training policies form part of these terms.',
           'Appointments: Appointments are booked through our Setmore booking page and follow our Booking Policy.',
           'Product use: Our products are for professional use. Please follow the care and application guidance provided.',
@@ -237,6 +237,12 @@ function App() {
   const [orderSubmitted, setOrderSubmitted] = useState(false)
   const [orderError, setOrderError] = useState('')
   const [fulfilmentMethod, setFulfilmentMethod] = useState(null)
+  const [paymentOptions, setPaymentOptions] = useState({ ozow: false })
+  const [paymentMethod, setPaymentMethod] = useState(null)
+  const [ozowSubmitting, setOzowSubmitting] = useState(false)
+  const [paymentResult, setPaymentResult] = useState(null)
+  const [paymentResultLoading, setPaymentResultLoading] = useState(false)
+  const [pendingPollCount, setPendingPollCount] = useState(0)
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [deliverySuburb, setDeliverySuburb] = useState('')
   const [deliveryCity, setDeliveryCity] = useState('')
@@ -311,7 +317,52 @@ function App() {
         else setProductCategories({})
       })
       .catch(() => setProductCategories({}))
+    fetch(`${API}/api/payments/options`)
+      .then(r => r.json())
+      .then(data => setPaymentOptions({ ozow: !!data?.ozow }))
+      .catch(() => setPaymentOptions({ ozow: false }))
   }, [backendStatus])
+
+  // Looks up an order by its token for the payment result panel below.
+  const fetchOrderByToken = async (token) => {
+    const res = await fetch(`${API}/api/orders/by-token/${token}`)
+    const data = await res.json().catch(() => null)
+    if (!res.ok || !data) return null
+    return data
+  }
+
+  // Reads ?payment=&order= left behind by an Ozow redirect, then removes it
+  // from the URL so refreshing the page doesn't re-trigger the lookup.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const payment = params.get('payment')
+    const orderToken = params.get('order')
+    if (!payment) return
+    window.history.replaceState({}, '', window.location.pathname)
+    if (!orderToken) {
+      setPaymentResult({ outcome: 'error', order: null, token: null })
+      return
+    }
+    setPaymentResultLoading(true)
+    fetchOrderByToken(orderToken).then(data => {
+      setPaymentResult({ outcome: payment, order: data, token: orderToken })
+      setPaymentResultLoading(false)
+    })
+  }, [])
+
+  // While a payment looks pending, re-check every 5 seconds for up to a minute.
+  useEffect(() => {
+    if (!paymentResult || !paymentResult.token) return
+    const status = paymentResult.order?.paymentStatus
+    const isPendingLike = status === 'pending' || status === 'unpaid'
+    if (!isPendingLike || pendingPollCount >= 12) return
+    const timer = setTimeout(async () => {
+      const data = await fetchOrderByToken(paymentResult.token)
+      if (data) setPaymentResult(prev => (prev ? { ...prev, order: data } : prev))
+      setPendingPollCount(c => c + 1)
+    }, 5000)
+    return () => clearTimeout(timer)
+  }, [paymentResult, pendingPollCount])
 
   // Product images and positions depend on the product list having loaded.
   useEffect(() => {
@@ -384,12 +435,73 @@ function App() {
   const orderTotal = cartTotal + deliveryFeeApplicable
   const deliveryAddressComplete = !!(deliveryAddress.trim() && deliverySuburb.trim() && deliveryCity.trim() && deliveryPostalCode.trim())
   const canPlaceOrder = !!(orderName.trim() && orderPhone.trim() && fulfilmentMethod &&
-    (fulfilmentMethod === 'pickup' || deliveryAddressComplete))
+    (fulfilmentMethod === 'pickup' || deliveryAddressComplete) &&
+    (!paymentOptions.ozow || paymentMethod))
 
   const copyPaymentDetails = () => {
     navigator.clipboard.writeText('63093932440')
     setCopied(true)
     setTimeout(() => setCopied(false), 2500)
+  }
+
+  const closePaymentResult = () => {
+    setPaymentResult(null)
+    setPendingPollCount(0)
+  }
+
+  // Builds a hidden form and submits it to Ozow - the browser navigates away
+  // to pay.ozow.com from here.
+  const submitToOzow = async (orderToken) => {
+    try {
+      const res = await fetch(`${API}/api/payments/ozow/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderToken }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.action || !data?.fields) {
+        setOrderError(data?.error || "I couldn't take you to Ozow just now. Please try again, or pay by EFT instead.")
+        setOzowSubmitting(false)
+        setPaymentResultLoading(false)
+        return
+      }
+      const form = document.createElement('form')
+      form.method = 'POST'
+      form.action = data.action
+      Object.entries(data.fields).forEach(([key, value]) => {
+        const input = document.createElement('input')
+        input.type = 'hidden'
+        input.name = key
+        input.value = value
+        form.appendChild(input)
+      })
+      document.body.appendChild(form)
+      form.submit()
+    } catch (err) {
+      console.error('Ozow start failed:', err)
+      setOrderError("I couldn't reach the shop just now. Please check your connection and try again, or pay by EFT instead.")
+      setOzowSubmitting(false)
+      setPaymentResultLoading(false)
+    }
+  }
+
+  const retryOzowPayment = async () => {
+    if (!paymentResult?.token) return
+    setPaymentResultLoading(true)
+    await submitToOzow(paymentResult.token)
+  }
+
+  const switchToEft = async () => {
+    if (!paymentResult?.token) return
+    try {
+      const res = await fetch(`${API}/api/orders/${paymentResult.token}/switch-to-eft`, { method: 'PATCH' })
+      if (res.ok) {
+        const data = await fetchOrderByToken(paymentResult.token)
+        setPaymentResult(prev => (prev ? { ...prev, order: data, switchedToEft: true } : prev))
+      }
+    } catch (err) {
+      console.error('Switch to EFT failed:', err)
+    }
   }
 
   const openPolicies = (tab) => {
@@ -444,6 +556,18 @@ function App() {
     </div>
   )
 
+  const buildOrderPayload = () => ({
+    customerName: orderName,
+    customerPhone: orderPhone,
+    items: cart.map(i => ({ id: i.id, variantId: i.variantId, name: i.name, qty: i.qty, price: i.price })),
+    fulfilmentMethod,
+    deliveryAddress: fulfilmentMethod === 'delivery' ? deliveryAddress : undefined,
+    deliverySuburb: fulfilmentMethod === 'delivery' ? deliverySuburb : undefined,
+    deliveryCity: fulfilmentMethod === 'delivery' ? deliveryCity : undefined,
+    deliveryPostalCode: fulfilmentMethod === 'delivery' ? deliveryPostalCode : undefined,
+    deliveryNotes: fulfilmentMethod === 'delivery' ? deliveryNotes : undefined,
+  })
+
   const submitOrder = async () => {
     if (!canPlaceOrder) return
     setOrderError('')
@@ -451,17 +575,7 @@ function App() {
       const res = await fetch(`${API}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName: orderName,
-          customerPhone: orderPhone,
-          items: cart.map(i => ({ id: i.id, variantId: i.variantId, name: i.name, qty: i.qty, price: i.price })),
-          fulfilmentMethod,
-          deliveryAddress: fulfilmentMethod === 'delivery' ? deliveryAddress : undefined,
-          deliverySuburb: fulfilmentMethod === 'delivery' ? deliverySuburb : undefined,
-          deliveryCity: fulfilmentMethod === 'delivery' ? deliveryCity : undefined,
-          deliveryPostalCode: fulfilmentMethod === 'delivery' ? deliveryPostalCode : undefined,
-          deliveryNotes: fulfilmentMethod === 'delivery' ? deliveryNotes : undefined,
-        }),
+        body: JSON.stringify({ ...buildOrderPayload(), paymentMethod: 'eft' }),
       })
       const data = await res.json().catch(() => null)
       if (res.ok) {
@@ -475,6 +589,38 @@ function App() {
       console.error('Order submission failed:', err)
       setOrderError("I couldn't reach the shop just now, but your cart is safe. Please check your connection and try again, or message me on WhatsApp and I'll help right away.")
     }
+  }
+
+  const startOzowPayment = async () => {
+    if (!canPlaceOrder) return
+    setOrderError('')
+    setOzowSubmitting(true)
+    try {
+      const res = await fetch(`${API}/api/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...buildOrderPayload(), paymentMethod: 'ozow' }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.orderToken) {
+        setOrderError(data?.error || "I couldn't get your order through just now, but don't worry, your cart is still here. Please try again, or choose to pay by EFT instead.")
+        setOzowSubmitting(false)
+        return
+      }
+      // The cart isn't persisted and this page is about to unload for Ozow,
+      // so it's safe to clear it now that the order has been created.
+      setCart([])
+      await submitToOzow(data.orderToken)
+    } catch (err) {
+      console.error('Ozow order creation failed:', err)
+      setOrderError("I couldn't reach the shop just now, but your cart is safe. Please check your connection and try again, or choose to pay by EFT instead.")
+      setOzowSubmitting(false)
+    }
+  }
+
+  const placeOrder = () => {
+    if (paymentOptions.ozow && paymentMethod === 'ozow') startOzowPayment()
+    else submitOrder()
   }
 
   const renderProductCard = (product) => {
@@ -2272,6 +2418,7 @@ function App() {
                       setCheckoutStep(false)
                       setOrderError('')
                       setFulfilmentMethod(null)
+                      setPaymentMethod(null)
                       setDeliveryAddress('')
                       setDeliverySuburb('')
                       setDeliveryCity('')
@@ -2578,42 +2725,113 @@ function App() {
                     </div>
                   )}
 
-                  <div
-                    style={{
-                      background: '#FDF0F3',
-                      borderRadius: '12px',
-                      padding: '16px 20px',
-                      marginTop: '8px',
-                      marginBottom: '20px',
-                      border: '1px solid #F5DDE2',
-                    }}
-                  >
-                    <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '10px' }}>
-                      Payment Details
+                  {paymentOptions.ozow && (
+                    <div style={{ marginTop: '8px', marginBottom: '16px' }}>
+                      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }}>
+                        How Would You Like To Pay
+                      </div>
+                      <div style={{ marginBottom: '10px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentMethod('ozow')}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            padding: '12px 14px',
+                            borderRadius: '10px',
+                            fontSize: '14px',
+                            fontWeight: 700,
+                            border: `1px solid ${paymentMethod === 'ozow' ? '#C47A8A' : '#F5DDE2'}`,
+                            background: paymentMethod === 'ozow' ? '#C47A8A' : 'white',
+                            color: paymentMethod === 'ozow' ? 'white' : '#2C2C2C',
+                            cursor: 'pointer',
+                            fontFamily: 'inherit',
+                          }}
+                        >
+                          Pay now with Ozow (instant EFT from your bank app)
+                        </button>
+                        <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '6px', lineHeight: 1.6 }}>
+                          Pay securely from your own banking app. Your order is marked paid straight away.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod('eft')}
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '12px 14px',
+                          borderRadius: '10px',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          border: `1px solid ${paymentMethod === 'eft' ? '#C47A8A' : '#F5DDE2'}`,
+                          background: paymentMethod === 'eft' ? '#C47A8A' : 'white',
+                          color: paymentMethod === 'eft' ? 'white' : '#2C2C2C',
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        Pay by EFT and send proof of payment on WhatsApp
+                      </button>
                     </div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Hair By Her</div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
-                    <button
-                      onClick={copyPaymentDetails}
+                  )}
+
+                  {(!paymentOptions.ozow || paymentMethod === 'eft') && (
+                    <div
                       style={{
-                        marginTop: '10px',
-                        background: 'none',
-                        border: '1px solid #C47A8A',
-                        color: '#C47A8A',
-                        borderRadius: '20px',
-                        padding: '6px 16px',
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                        fontFamily: 'inherit',
+                        background: '#FDF0F3',
+                        borderRadius: '12px',
+                        padding: '16px 20px',
+                        marginTop: '8px',
+                        marginBottom: '20px',
+                        border: '1px solid #F5DDE2',
                       }}
                     >
-                      {copied ? 'Copied!' : 'Copy payment details'}
-                    </button>
-                    <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', lineHeight: 1.6 }}>
-                      Please send your proof of payment via WhatsApp to 082 685 5399 after making payment.
-                    </p>
-                  </div>
+                      <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '10px' }}>
+                        Payment Details
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
+                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Hair By Her</div>
+                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
+                      <button
+                        onClick={copyPaymentDetails}
+                        style={{
+                          marginTop: '10px',
+                          background: 'none',
+                          border: '1px solid #C47A8A',
+                          color: '#C47A8A',
+                          borderRadius: '20px',
+                          padding: '6px 16px',
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        {copied ? 'Copied!' : 'Copy payment details'}
+                      </button>
+                      <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', lineHeight: 1.6 }}>
+                        Please send your proof of payment via WhatsApp to 082 685 5399 after making payment.
+                      </p>
+                    </div>
+                  )}
+
+                  {paymentOptions.ozow && paymentMethod === 'ozow' && (
+                    <div
+                      style={{
+                        background: '#FDF0F3',
+                        borderRadius: '12px',
+                        padding: '16px 20px',
+                        marginTop: '8px',
+                        marginBottom: '20px',
+                        border: '1px solid #F5DDE2',
+                      }}
+                    >
+                      <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
+                        You'll be taken to Ozow to complete your payment securely from your own banking app. Please
+                        don't close this page until you're redirected back to us.
+                      </p>
+                    </div>
+                  )}
 
                   <div style={{ marginBottom: '16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#7A6670', marginBottom: '4px' }}>
@@ -2648,8 +2866,8 @@ function App() {
                   )}
 
                   <button
-                    onClick={submitOrder}
-                    disabled={!canPlaceOrder}
+                    onClick={placeOrder}
+                    disabled={!canPlaceOrder || ozowSubmitting}
                     style={{
                       width: '100%',
                       background: '#C47A8A',
@@ -2659,11 +2877,11 @@ function App() {
                       padding: '14px',
                       fontSize: '15px',
                       fontWeight: 700,
-                      cursor: !canPlaceOrder ? 'not-allowed' : 'pointer',
-                      opacity: !canPlaceOrder ? 0.5 : 1,
+                      cursor: (!canPlaceOrder || ozowSubmitting) ? 'not-allowed' : 'pointer',
+                      opacity: (!canPlaceOrder || ozowSubmitting) ? 0.5 : 1,
                     }}
                   >
-                    Place Order
+                    {ozowSubmitting ? 'Taking you to Ozow...' : 'Place Order'}
                   </button>
                 </>
               )}
@@ -2671,6 +2889,96 @@ function App() {
           </div>
         </>
       )}
+
+      {paymentResult && (() => {
+        const order = paymentResult.order
+        const status = !order ? 'error'
+          : order.paymentStatus === 'paid' ? 'paid'
+          : (order.paymentStatus === 'cancelled' || order.paymentStatus === 'failed') ? order.paymentStatus
+          : 'pending'
+
+        const btnPrimary = {
+          background: '#C47A8A', color: 'white', border: 'none', borderRadius: '24px',
+          padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+        }
+        const btnSecondary = {
+          background: 'white', color: '#C47A8A', border: '1px solid #C47A8A', borderRadius: '24px',
+          padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+        }
+        const heading = { fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }
+        const body = { fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '20px' }
+
+        return (
+          <div
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.5)',
+              zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+            }}
+          >
+            <div style={{ background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+              {paymentResultLoading ? (
+                <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', margin: 0 }}>
+                  Just a moment while we check on your payment...
+                </p>
+              ) : status === 'paid' ? (
+                <>
+                  <div style={heading}>Thank you, your payment went through!</div>
+                  <p style={body}>
+                    Your order number is #{order.id}. Retha will be in touch about your delivery or pickup shortly.
+                    We appreciate your support!
+                  </p>
+                  <button onClick={closePaymentResult} style={btnPrimary}>Continue Shopping</button>
+                </>
+              ) : status === 'pending' ? (
+                <>
+                  <div style={heading}>Your bank is still confirming the payment</div>
+                  <p style={body}>
+                    This usually only takes a moment. We'll keep checking for you, so please don't close this page
+                    just yet. If you'd rather not wait, you're welcome to close this and we'll update your order as
+                    soon as your bank confirms it.
+                  </p>
+                  <button onClick={closePaymentResult} style={btnSecondary}>Close</button>
+                </>
+              ) : paymentResult.switchedToEft ? (
+                <>
+                  <div style={heading}>No problem, let's pay by EFT</div>
+                  <p style={body}>
+                    Your order is still here and waiting for you. Please use HBH-{order?.id} as your payment
+                    reference.
+                  </p>
+                  <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '16px 20px', marginBottom: '20px', border: '1px solid #F5DDE2' }}>
+                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
+                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Hair By Her</div>
+                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
+                    <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', marginBottom: 0, lineHeight: 1.6 }}>
+                      Please send your proof of payment via WhatsApp to 082 685 5399 after making payment.
+                    </p>
+                  </div>
+                  <button onClick={closePaymentResult} style={btnPrimary}>Continue Shopping</button>
+                </>
+              ) : (
+                <>
+                  <div style={heading}>
+                    {status === 'error' ? "We couldn't find that payment" : "It looks like your payment didn't go through"}
+                  </div>
+                  <p style={body}>
+                    Not to worry, your order is still here for you. Please don't hesitate to try paying again, or
+                    pay by EFT instead.
+                  </p>
+                  {order ? (
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      <button onClick={retryOzowPayment} style={btnPrimary}>Try paying again</button>
+                      <button onClick={switchToEft} style={btnSecondary}>Pay by EFT instead</button>
+                    </div>
+                  ) : (
+                    <button onClick={closePaymentResult} style={btnPrimary}>Close</button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

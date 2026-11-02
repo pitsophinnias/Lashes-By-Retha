@@ -81,6 +81,9 @@ export default function App({ user, onLogout }) {
   const [stockAdjustNote, setStockAdjustNote] = useState('')
 
   const [orderConfirmError, setOrderConfirmError] = useState('')
+  // Order id currently showing the inline "confirm anyway?" prompt for an
+  // Ozow order whose payment hasn't come through yet.
+  const [confirmPromptOrderId, setConfirmPromptOrderId] = useState(null)
 
   const [selectedClass, setSelectedClass] = useState(null)
   const [classStudents, setClassStudents] = useState([])
@@ -95,6 +98,20 @@ export default function App({ user, onLogout }) {
   // Falls back to the full total for orders placed before delivery/pickup
   // existed, since those never had a fee to begin with.
   const orderRevenue = (order) => order.subtotal != null ? order.subtotal : (parseFloat(order.total) || 0)
+
+  // Reuses the site's existing badge colour families (green/orange/pink from
+  // payment-badge, grey from the order-item qty chip) - no new colours.
+  const paymentBadge = (order) => {
+    if (order.paymentMethod !== 'ozow') {
+      return { label: 'EFT', background: '#F0F0F0', color: '#888888' }
+    }
+    if (order.paymentStatus === 'paid') return { label: 'Paid (Ozow)', background: '#E8F5E9', color: '#2E7D32' }
+    if (order.paymentStatus === 'cancelled') return { label: 'Ozow cancelled', background: '#FDE8EC', color: '#C47A8A' }
+    if (order.paymentStatus === 'failed') return { label: 'Ozow failed', background: '#FDE8EC', color: '#C47A8A' }
+    return { label: 'Ozow pending', background: '#FFF3E0', color: '#E65100' }
+  }
+
+  const ozowNotPaid = (order) => order.paymentMethod === 'ozow' && order.paymentStatus !== 'paid'
 
   // Attaches the auth token to every request and logs the user out on a 401.
   // Never sets Content-Type for FormData bodies (file uploads) - the browser
@@ -384,6 +401,7 @@ export default function App({ user, onLogout }) {
 
   const confirmOrder = async (id) => {
     setOrderConfirmError('')
+    setConfirmPromptOrderId(null)
     try {
       const res = await apiFetch(`/api/orders/${id}/confirm`, { method: 'PATCH' })
       const data = await res.json().catch(() => ({}))
@@ -2687,6 +2705,11 @@ export default function App({ user, onLogout }) {
                             {order.fulfilmentMethod}
                           </span>
                         )}
+                        <span className="payment-badge" style={{
+                          background: paymentBadge(order).background, color: paymentBadge(order).color,
+                        }}>
+                          {paymentBadge(order).label}
+                        </span>
                         <span className={`status-badge${order.status === 'confirmed' ? ' confirmed' : ''}`}>
                           {order.status || 'pending'}
                         </span>
@@ -2823,15 +2846,59 @@ export default function App({ user, onLogout }) {
                           )}
                         </div>
 
+                        {/* Payment details */}
+                        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #F0F0F0' }}>
+                          <div className="field-label" style={{ marginBottom: 10 }}>Payment</div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Method</span>
+                            <span className="payment-badge" style={{
+                              background: paymentBadge(order).background, color: paymentBadge(order).color,
+                            }}>
+                              {paymentBadge(order).label}
+                            </span>
+                          </div>
+                          {order.ozowTransactionId && (
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Ozow Txn</span>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{order.ozowTransactionId}</span>
+                            </div>
+                          )}
+                        </div>
+
                         {/* Actions */}
-                        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #F0F0F0', display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #F0F0F0', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                           {order.status !== 'confirmed' && (
-                            <button
-                              className="upload-btn"
-                              onClick={() => confirmOrder(order.id)}
-                            >
-                              Confirm Payment Received
-                            </button>
+                            <div>
+                              {ozowNotPaid(order) && (
+                                <div style={{ fontSize: 12, color: '#C47A8A', marginBottom: 6 }}>
+                                  This Ozow payment has not come through yet.
+                                </div>
+                              )}
+                              {ozowNotPaid(order) && confirmPromptOrderId === order.id ? (
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                  <span style={{ fontSize: 12, color: '#888888' }}>Confirm anyway?</span>
+                                  <button className="upload-btn" onClick={() => confirmOrder(order.id)}>
+                                    Yes, confirm
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmPromptOrderId(null)}
+                                    style={{
+                                      background: 'none', border: '1px solid #DDDDDD', borderRadius: 6,
+                                      padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  className="upload-btn"
+                                  onClick={() => ozowNotPaid(order) ? setConfirmPromptOrderId(order.id) : confirmOrder(order.id)}
+                                >
+                                  Confirm Payment Received
+                                </button>
+                              )}
+                            </div>
                           )}
                           <a
                             href={`https://wa.me/${order.customerPhone.replace(/\D/g,'')}?text=${encodeURIComponent(`Hi ${order.customerName}, thank you for your order with Hair By Her. We have received your payment and will be in touch shortly to arrange delivery.`)}`}
