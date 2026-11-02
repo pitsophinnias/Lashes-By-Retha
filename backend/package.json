@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "migrate:uploads": "node scripts/migrate-uploads-to-cloudinary.js"
+    "migrate:uploads": "node scripts/migrate-uploads-to-cloudinary.js",
+    "test": "node --test"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

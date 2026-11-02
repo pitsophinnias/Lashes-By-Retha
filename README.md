@@ -24,6 +24,14 @@ Copy backend/.env.example to backend/.env and fill in values.
 - ALLOWED_ORIGINS — comma-separated list of frontend origins allowed to call the API
 - SETMORE_REFRESH_TOKEN — from the Setmore dashboard, needed for appointment API access
 - CLOUDINARY_URL — from your Cloudinary dashboard; when set, product/class/gallery uploads go to Cloudinary instead of local disk (needed on Render, since its free tier disk is wiped on every restart or sleep). Leave unset for local dev to keep using local disk storage.
+- OZOW_SITE_CODE, OZOW_PRIVATE_KEY — from the Ozow dashboard's Sites tab
+- OZOW_API_KEY — from the Ozow dashboard's Merchant Details tab
+- OZOW_IS_TEST — true or false; defaults to true (test mode) when unset, so nothing goes live by accident
+- OZOW_API_BASE — defaults to https://api.ozow.com
+- PUBLIC_API_URL — this backend's own public https URL, no trailing slash; used to build the Ozow return and notify URLs
+- CUSTOMER_SITE_URL — the customer site's public URL, no trailing slash; used to redirect the customer back after paying with Ozow
+
+Ozow counts as configured only when OZOW_SITE_CODE, OZOW_PRIVATE_KEY, OZOW_API_KEY, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Leave any of them unset and checkout only offers EFT.
 
 ### customer-site and admin-dashboard
 
@@ -39,7 +47,7 @@ Backend (web service)
 - Root directory: backend
 - Build command: npm ci
 - Start command: node index.js
-- Environment: DATABASE_URL, PORT, NODE_ENV=production, JWT_SECRET, ADMIN_DEFAULT_PASSWORD, ALLOWED_ORIGINS, SETMORE_REFRESH_TOKEN, CLOUDINARY_URL
+- Environment: DATABASE_URL, PORT, NODE_ENV=production, JWT_SECRET, ADMIN_DEFAULT_PASSWORD, ALLOWED_ORIGINS, SETMORE_REFRESH_TOKEN, CLOUDINARY_URL, OZOW_SITE_CODE, OZOW_PRIVATE_KEY, OZOW_API_KEY, OZOW_IS_TEST, PUBLIC_API_URL, CUSTOMER_SITE_URL
 
 If you have existing images under backend/uploads from before CLOUDINARY_URL was set, run `npm run migrate:uploads` from backend/ (with CLOUDINARY_URL set in your environment) to upload them to Cloudinary and update the database. It is safe to run more than once.
 
