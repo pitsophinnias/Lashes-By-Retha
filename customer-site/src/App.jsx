@@ -355,7 +355,8 @@ function App() {
     if (!paymentResult || !paymentResult.token) return
     const status = paymentResult.order?.paymentStatus
     const isPendingLike = status === 'pending' || status === 'unpaid'
-    if (!isPendingLike || pendingPollCount >= 12) return
+    const isEft = paymentResult.switchedToEft || paymentResult.order?.paymentMethod === 'eft'
+    if (!isPendingLike || isEft || pendingPollCount >= 12) return
     const timer = setTimeout(async () => {
       const data = await fetchOrderByToken(paymentResult.token)
       if (data) setPaymentResult(prev => (prev ? { ...prev, order: data } : prev))
@@ -2895,6 +2896,7 @@ function App() {
         const status = !order ? 'error'
           : order.paymentStatus === 'paid' ? 'paid'
           : (order.paymentStatus === 'cancelled' || order.paymentStatus === 'failed') ? order.paymentStatus
+          : (paymentResult.switchedToEft || order.paymentMethod === 'eft') ? 'eft'
           : 'pending'
 
         const btnPrimary = {
@@ -2929,17 +2931,7 @@ function App() {
                   </p>
                   <button onClick={closePaymentResult} style={btnPrimary}>Continue Shopping</button>
                 </>
-              ) : status === 'pending' ? (
-                <>
-                  <div style={heading}>Your bank is still confirming the payment</div>
-                  <p style={body}>
-                    This usually only takes a moment. We'll keep checking for you, so please don't close this page
-                    just yet. If you'd rather not wait, you're welcome to close this and we'll update your order as
-                    soon as your bank confirms it.
-                  </p>
-                  <button onClick={closePaymentResult} style={btnSecondary}>Close</button>
-                </>
-              ) : paymentResult.switchedToEft ? (
+              ) : status === 'eft' ? (
                 <>
                   <div style={heading}>No problem, let's pay by EFT</div>
                   <p style={body}>
@@ -2955,6 +2947,16 @@ function App() {
                     </p>
                   </div>
                   <button onClick={closePaymentResult} style={btnPrimary}>Continue Shopping</button>
+                </>
+              ) : status === 'pending' ? (
+                <>
+                  <div style={heading}>Your bank is still confirming the payment</div>
+                  <p style={body}>
+                    This usually only takes a moment. We'll keep checking for you, so please don't close this page
+                    just yet. If you'd rather not wait, you're welcome to close this and we'll update your order as
+                    soon as your bank confirms it.
+                  </p>
+                  <button onClick={closePaymentResult} style={btnSecondary}>Close</button>
                 </>
               ) : (
                 <>
