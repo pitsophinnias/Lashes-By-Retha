@@ -61,6 +61,8 @@ export default function App({ user, onLogout }) {
   const [notifTab, setNotifTab] = useState('all')
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(false)
+  const [ordersView, setOrdersView] = useState('active')
+  const [orderCounts, setOrderCounts] = useState({ active: 0, archived: 0 })
 
   const [bPwCurrent, setBPwCurrent] = useState('')
   const [bPwNew, setBPwNew] = useState('')
@@ -131,10 +133,10 @@ export default function App({ user, onLogout }) {
     return res
   }
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (view = ordersView) => {
     setOrdersLoading(true)
     try {
-      const res = await apiFetch('/api/orders')
+      const res = await apiFetch(`/api/orders?view=${view}`)
       const data = await res.json()
       if (res.ok && Array.isArray(data)) setOrders(data.reverse()) // newest first
       else setOrders([])
@@ -143,6 +145,11 @@ export default function App({ user, onLogout }) {
     } finally {
       setOrdersLoading(false)
     }
+  }
+
+  const switchOrdersView = (view) => {
+    setOrdersView(view)
+    fetchOrders(view)
   }
 
   useEffect(() => {
@@ -200,7 +207,8 @@ export default function App({ user, onLogout }) {
       })
       .catch(() => {})
     // Fetch orders for the dashboard's monthly revenue chart (confirmed only)
-    apiFetch('/api/orders')
+    // - view=all so archived orders still count towards revenue and sales.
+    apiFetch('/api/orders?view=all')
       .then(r => r.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -212,6 +220,10 @@ export default function App({ user, onLogout }) {
             monthlyTotals[month] += orderRevenue(order)
           })
           setRevenueData(months.map((name, i) => ({ name, revenue: monthlyTotals[i] })))
+          setOrderCounts({
+            active: data.filter(o => !o.archived).length,
+            archived: data.filter(o => o.archived).length,
+          })
         } else {
           setRecentOrders([])
         }
@@ -2682,7 +2694,7 @@ export default function App({ user, onLogout }) {
                     </div>
                   </div>
                   <button
-                    onClick={fetchOrders}
+                    onClick={() => fetchOrders()}
                     style={{
                       background: 'rgba(255,255,255,0.15)',
                       border: '1px solid rgba(255,255,255,0.3)',
@@ -2699,6 +2711,55 @@ export default function App({ user, onLogout }) {
                   </button>
                 </div>
 
+                <div style={{ fontSize: 12, color: '#9A8A8E', marginBottom: 16 }}>
+                  Orders auto-archive after 7 days.
+                </div>
+
+                {/* Active / Archive tabs */}
+                <div style={{
+                  display: 'flex',
+                  gap: 0,
+                  borderBottom: '1px solid #E8E8E8',
+                  marginBottom: 20,
+                  overflowX: 'auto',
+                }}>
+                  {[{ label: 'Active', value: 'active', count: orderCounts.active }, { label: 'Archive', value: 'archived', count: orderCounts.archived }].map(tab => (
+                    <button
+                      key={tab.value}
+                      onClick={() => switchOrdersView(tab.value)}
+                      style={{
+                        padding: '10px 18px',
+                        border: 'none',
+                        background: 'transparent',
+                        fontSize: 13,
+                        fontFamily: 'inherit',
+                        cursor: 'pointer',
+                        color: ordersView === tab.value ? '#C47A8A' : '#888888',
+                        borderBottom: ordersView === tab.value ? '2px solid #C47A8A' : '2px solid transparent',
+                        fontWeight: ordersView === tab.value ? 700 : 500,
+                        whiteSpace: 'nowrap',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      {tab.label}
+                      {tab.count > 0 && (
+                        <span style={{
+                          background: ordersView === tab.value ? '#C47A8A' : '#E8E8E8',
+                          color: ordersView === tab.value ? 'white' : '#888888',
+                          borderRadius: 10,
+                          padding: '1px 7px',
+                          fontSize: 10,
+                          fontWeight: 700,
+                        }}>
+                          {tab.count}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
                 {orderConfirmError && (
                   <div className="error-msg" style={{ marginBottom: 16 }}>
                     {orderConfirmError}
@@ -2711,7 +2772,9 @@ export default function App({ user, onLogout }) {
 
                 {!ordersLoading && orders.length === 0 && (
                   <div className="panel" style={{ fontSize: 13, color: '#AAAAAA', padding: '20px 24px' }}>
-                    No orders yet. When customers place orders on the website they will appear here.
+                    {ordersView === 'archived'
+                      ? 'No archived orders yet. Orders older than 7 days will appear here.'
+                      : 'No orders yet. When customers place orders on the website they will appear here.'}
                   </div>
                 )}
 

@@ -210,6 +210,13 @@ const createTables = async () => {
     );
   `)
 
+  // Orders auto-archive after 7 days, like notifications already do - see
+  // archiveOldOrders in index.js.
+  await pool.query(`
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+  `)
+
   // Lets a student "finish" a class instead of being deleted, so Retha keeps
   // a history of past students. Existing students default to active.
   await pool.query(`
