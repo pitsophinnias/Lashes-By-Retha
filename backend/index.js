@@ -301,6 +301,27 @@ const archiveOldNotifications = async () => {
 
 setInterval(archiveOldNotifications, 60 * 60 * 1000)
 
+// ── Auto-archive orders older than 7 days ────────────────────────────────────
+// A paid-but-unconfirmed order is never archived - Retha still has to pack
+// it. It archives once it's confirmed and old enough, same as any other order.
+const archiveOldOrders = async () => {
+  try {
+    const result = await pool.query(
+      `UPDATE orders SET archived = TRUE, archived_at = NOW()
+       WHERE archived = FALSE
+       AND created_at < NOW() - INTERVAL '7 days'
+       AND NOT (payment_status = 'paid' AND status <> 'confirmed')`
+    )
+    if (result.rowCount > 0) {
+      console.log(`Archived ${result.rowCount} old orders`)
+    }
+  } catch (err) {
+    console.error('Order archive error:', err.message)
+  }
+}
+
+setInterval(archiveOldOrders, 60 * 60 * 1000)
+
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', project: 'Lashes By Retha' })
@@ -917,8 +938,11 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
 
 app.get('/api/orders', authenticate, async (req, res) => {
   try {
+    const view = ['active', 'archived'].includes(req.query.view) ? req.query.view : 'all'
     const ordersResult = await pool.query(
-      'SELECT * FROM orders ORDER BY created_at DESC'
+      view === 'active' ? 'SELECT * FROM orders WHERE archived = FALSE ORDER BY created_at DESC'
+        : view === 'archived' ? 'SELECT * FROM orders WHERE archived = TRUE ORDER BY created_at DESC'
+        : 'SELECT * FROM orders ORDER BY created_at DESC'
     )
     const orders = ordersResult.rows
     for (const order of orders) {
@@ -957,6 +981,7 @@ app.get('/api/orders', authenticate, async (req, res) => {
       order.paidAt = order.paid_at
       order.ozowTransactionId = latestOzow ? latestOzow.ozow_transaction_id : null
       order.ozowStatus = latestOzow ? latestOzow.status : null
+      order.archivedAt = order.archived_at
     }
     res.json(orders)
   } catch (err) {
@@ -1504,6 +1529,7 @@ app.use((err, req, res, next) => {
 const start = async () => {
   await createTables()
   await archiveOldNotifications()
+  await archiveOldOrders()
   await addNotification('system', 'Dashboard ready', 'Hair By Her admin dashboard is live and running.')
   app.listen(PORT, () => {
     console.log(`Lashes By Retha backend listening on port ${PORT}`)

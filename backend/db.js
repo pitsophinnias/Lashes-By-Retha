@@ -210,6 +210,13 @@ const createTables = async () => {
     );
   `)
 
+  // Orders auto-archive after 7 days, like notifications already do - see
+  // archiveOldOrders in index.js.
+  await pool.query(`
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+  `)
+
   // Seed default categories if none exist
   const { rows } = await pool.query('SELECT COUNT(*) FROM categories')
   if (parseInt(rows[0].count) === 0) {
