@@ -50,6 +50,8 @@ services:
         value: "true"
       - key: OZOW_API_BASE
         value: https://api.ozow.com
+      - key: OZOW_TEST_API_BASE
+        value: https://stagingapi.ozow.com
 
   # Customer site
   - type: web

@@ -119,6 +119,8 @@ app.post('/api/payments/ozow/notify', globalLimiter, ozowFormParser, async (req,
     return res.status(400).json({ error: 'Invalid notification' })
   }
 
+  console.log(`Ozow notify received: ${body.TransactionReference} ${body.Status}`)
+
   try {
     await pool.query(
       'UPDATE ozow_payments SET raw_notification = $1, updated_at = NOW() WHERE transaction_reference = $2',
@@ -128,7 +130,10 @@ app.post('/api/payments/ozow/notify', globalLimiter, ozowFormParser, async (req,
     console.error('Failed to store Ozow notification:', err.message)
   }
 
-  await ozow.reconcileOzowPayment(body.TransactionReference)
+  // A verified notification (SiteCode and hash already checked above) is
+  // proof on its own - passed through as a fallback for when the status API
+  // has no match yet (e.g. a test transaction not queryable on the live API).
+  await ozow.reconcileOzowPayment(body.TransactionReference, body)
   res.status(200).send('OK')
 })
 
