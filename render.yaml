@@ -1,0 +1,85 @@
+# Render Blueprint for Hair By Her.
+# Creates the database, backend, customer site and admin dashboard in one go.
+# Secrets are marked sync: false - Render asks for them when the Blueprint is
+# first created. They are never stored in this file.
+
+databases:
+  - name: hairbyher-db
+    plan: free
+    region: frankfurt
+    databaseName: hairbyher
+    user: hairbyher
+
+services:
+  # Backend API
+  - type: web
+    name: hairbyher-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: node index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hairbyher-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_DEFAULT_PASSWORD
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: https://www.hairbyher.co.za,https://hairbyher.co.za,https://hairbyher-site.onrender.com,https://hairbyher-admin.onrender.com
+      - key: PUBLIC_API_URL
+        value: https://hairbyher-api.onrender.com
+      - key: CUSTOMER_SITE_URL
+        value: https://www.hairbyher.co.za
+      - key: OZOW_SITE_CODE
+        sync: false
+      - key: OZOW_PRIVATE_KEY
+        sync: false
+      - key: OZOW_API_KEY
+        sync: false
+      - key: OZOW_IS_TEST
+        value: "true"
+      - key: OZOW_API_BASE
+        value: https://api.ozow.com
+
+  # Customer site
+  - type: web
+    name: hairbyher-site
+    runtime: static
+    rootDir: customer-site
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    domains:
+      - www.hairbyher.co.za
+      - hairbyher.co.za
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        value: https://hairbyher-api.onrender.com
+
+  # Admin dashboard
+  - type: web
+    name: hairbyher-admin
+    runtime: static
+    rootDir: admin-dashboard
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        value: https://hairbyher-api.onrender.com

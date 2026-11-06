@@ -41,24 +41,14 @@ Copy .env.example to .env in each app and fill in values.
 
 ## Deploying to Render
 
-Three services: backend as a web service, customer-site and admin-dashboard as static sites, plus a Render Postgres database.
+The repo has a `render.yaml` Blueprint. On Render: New, Blueprint, pick this repo, and it creates `hairbyher-db`, `hairbyher-api`, `hairbyher-site` and `hairbyher-admin` in one go.
 
-Backend (web service)
-- Root directory: backend
-- Build command: npm ci
-- Start command: node index.js
-- Environment: DATABASE_URL, PORT, NODE_ENV=production, JWT_SECRET, ADMIN_DEFAULT_PASSWORD, ALLOWED_ORIGINS, SETMORE_REFRESH_TOKEN, CLOUDINARY_URL, OZOW_SITE_CODE, OZOW_PRIVATE_KEY, OZOW_API_KEY, OZOW_IS_TEST, PUBLIC_API_URL, CUSTOMER_SITE_URL
+Render will ask for the secret values on first creation: `ADMIN_DEFAULT_PASSWORD`, `CLOUDINARY_URL`, `OZOW_SITE_CODE`, `OZOW_PRIVATE_KEY`, `OZOW_API_KEY`. `JWT_SECRET` is generated automatically.
+
+If Render gives a service a different `onrender.com` address than its name (because the name was taken), update `PUBLIC_API_URL`, `ALLOWED_ORIGINS` and both `VITE_API_URL` values in the Blueprint to match, then redeploy the static sites with "Clear build cache & deploy".
+
+Custom domains: the Blueprint adds `www.hairbyher.co.za` and `hairbyher.co.za` to the customer site. In Cloudflare, both must be CNAME records pointing to `hairbyher-site.onrender.com`, set to DNS only (grey cloud) until Render shows them verified. Do not use an A record to 216.24.57.1 with Cloudflare, it causes Error 1000.
+
+`OZOW_IS_TEST` stays `true` until a test payment has passed.
 
 If you have existing images under backend/uploads from before CLOUDINARY_URL was set, run `npm run migrate:uploads` from backend/ (with CLOUDINARY_URL set in your environment) to upload them to Cloudinary and update the database. It is safe to run more than once.
-
-Customer site (static site)
-- Root directory: customer-site
-- Build command: npm ci && npm run build
-- Publish directory: dist
-- Environment: VITE_API_URL
-
-Admin dashboard (static site)
-- Root directory: admin-dashboard
-- Build command: npm ci && npm run build
-- Publish directory: dist
-- Environment: VITE_API_URL
