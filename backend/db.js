@@ -210,6 +210,13 @@ const createTables = async () => {
     );
   `)
 
+  // Lets a student "finish" a class instead of being deleted, so Retha keeps
+  // a history of past students. Existing students default to active.
+  await pool.query(`
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+  `)
+
   // Seed default categories if none exist
   const { rows } = await pool.query('SELECT COUNT(*) FROM categories')
   if (parseInt(rows[0].count) === 0) {
