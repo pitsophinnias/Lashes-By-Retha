@@ -28,6 +28,7 @@ Copy backend/.env.example to backend/.env and fill in values.
 - OZOW_API_KEY — from the Ozow dashboard's Merchant Details tab
 - OZOW_IS_TEST — true or false; defaults to true (test mode) when unset, so nothing goes live by accident
 - OZOW_API_BASE — defaults to https://api.ozow.com
+- OZOW_TEST_API_BASE — defaults to https://stagingapi.ozow.com; test (IsTest=true) transactions are only queryable there, not on the live API
 - PUBLIC_API_URL — this backend's own public https URL, no trailing slash; used to build the Ozow return and notify URLs
 - CUSTOMER_SITE_URL — the customer site's public URL, no trailing slash; used to redirect the customer back after paying with Ozow
 

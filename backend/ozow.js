@@ -8,6 +8,9 @@ const OZOW_API_KEY = process.env.OZOW_API_KEY || ''
 // can never send a site live by accident.
 const OZOW_IS_TEST = process.env.OZOW_IS_TEST !== 'false'
 const OZOW_API_BASE = process.env.OZOW_API_BASE || 'https://api.ozow.com'
+// Test (IsTest=true) transactions are only queryable on Ozow's staging API,
+// not the live one - a live test payment otherwise 404s on GetTransactionByReference forever.
+const OZOW_TEST_API_BASE = process.env.OZOW_TEST_API_BASE || 'https://stagingapi.ozow.com'
 const PUBLIC_API_URL = (process.env.PUBLIC_API_URL || '').replace(/\/+$/, '')
 const CUSTOMER_SITE_URL = (process.env.CUSTOMER_SITE_URL || '').replace(/\/+$/, '')
 
@@ -113,17 +116,20 @@ const setNotifier = (fn) => { notifyAdmin = fn }
 // we can confirm the actual field casing without ever logging values.
 let loggedStatusResponseKeys = false
 
-async function fetchOzowStatus(transactionReference) {
+async function fetchOzowStatus(transactionReference, isTest) {
+  const base = isTest ? OZOW_TEST_API_BASE : OZOW_API_BASE
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10000)
   try {
-    const url = `${OZOW_API_BASE}/GetTransactionByReference?siteCode=${encodeURIComponent(OZOW_SITE_CODE)}&transactionReference=${encodeURIComponent(transactionReference)}`
+    const url = `${base}/GetTransactionByReference?siteCode=${encodeURIComponent(OZOW_SITE_CODE)}&transactionReference=${encodeURIComponent(transactionReference)}`
     const res = await fetch(url, {
       headers: { ApiKey: OZOW_API_KEY, Accept: 'application/json' },
       signal: controller.signal,
     })
     if (!res.ok) {
-      console.error('Ozow status API returned', res.status)
+      let bodyText = ''
+      try { bodyText = (await res.text()).slice(0, 300) } catch {}
+      console.error(`Ozow status API returned ${res.status} from ${base} - body: ${bodyText}`)
       return null
     }
     const data = await res.json()
@@ -141,11 +147,14 @@ async function fetchOzowStatus(transactionReference) {
   }
 }
 
-// The only place that can mark an order paid. Checks Ozow's status API
-// (never trusts the browser redirect or an unverified notification alone),
-// and is idempotent - a duplicate call changes nothing once an order is
-// already paid.
-async function reconcileOzowPayment(transactionReference) {
+// The only place that can mark an order paid. Prefers Ozow's status API;
+// falls back to a verifiedNotification (the notify route's body, only ever
+// passed there after its SiteCode and hash have both already been checked)
+// when the status API has no match for this transaction - a verified
+// notification is proof on its own. The browser redirect alone is never
+// trusted either way. Idempotent - a duplicate call changes nothing once an
+// order is already paid.
+async function reconcileOzowPayment(transactionReference, verifiedNotification = null) {
   if (!isOzowConfigured || !transactionReference) return
   try {
     const paymentResult = await pool.query(
@@ -154,16 +163,19 @@ async function reconcileOzowPayment(transactionReference) {
     const payment = paymentResult.rows[0]
     if (!payment) return
 
-    const transactions = await fetchOzowStatus(transactionReference)
-    if (!transactions) return // API call failed; leave state as-is
-    const match = transactions.find(t => pick(t, 'TransactionReference') === transactionReference)
-    if (!match) return
+    const transactions = await fetchOzowStatus(transactionReference, payment.is_test)
+    const match = transactions
+      ? transactions.find(t => pick(t, 'TransactionReference') === transactionReference)
+      : null
 
-    const matchTransactionId = pick(match, 'TransactionId')
-    const matchSiteCode = pick(match, 'SiteCode')
-    const matchAmount = pick(match, 'Amount')
-    const matchStatus = pick(match, 'Status')
-    const matchStatusMessage = pick(match, 'StatusMessage')
+    const source = match || verifiedNotification
+    if (!source) return // no status API match and no verified notification; leave state as-is
+
+    const matchTransactionId = pick(source, 'TransactionId')
+    const matchSiteCode = pick(source, 'SiteCode')
+    const matchAmount = pick(source, 'Amount')
+    const matchStatus = pick(source, 'Status')
+    const matchStatusMessage = pick(source, 'StatusMessage')
 
     const client = await pool.connect()
     try {
@@ -178,7 +190,10 @@ async function reconcileOzowPayment(transactionReference) {
       const siteMatches = String(matchSiteCode) === String(OZOW_SITE_CODE)
       const amountMatches = Math.abs(parseFloat(matchAmount) - parseFloat(payment.amount)) < 0.005
       const isPaid = matchStatus === 'Complete' && siteMatches && amountMatches
-      const newStatus = isPaid ? 'paid' : mapOzowStatus(matchStatus)
+      // A "Complete" status that fails the site/amount check is a mismatch,
+      // not a payment - mapOzowStatus('Complete') is only ever reached here
+      // when isPaid is true, so it's never relied on to produce 'paid'.
+      const newStatus = isPaid ? 'paid' : (matchStatus === 'Complete' ? 'failed' : mapOzowStatus(matchStatus))
 
       // The status API has no IsTest field - is_test was already set when
       // this payment attempt was created, so it's left untouched here.

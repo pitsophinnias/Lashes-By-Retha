@@ -10,6 +10,10 @@ process.env.OZOW_PRIVATE_KEY = process.env.OZOW_PRIVATE_KEY || 'test-private-key
 process.env.OZOW_API_KEY = process.env.OZOW_API_KEY || 'test-api-key'
 process.env.PUBLIC_API_URL = process.env.PUBLIC_API_URL || 'https://api.example.com'
 process.env.CUSTOMER_SITE_URL = process.env.CUSTOMER_SITE_URL || 'https://www.example.com'
+// Distinct fake hosts (rather than relying on ozow.js's real-world defaults)
+// so the "which base was used" test is unambiguous either way.
+process.env.OZOW_API_BASE = process.env.OZOW_API_BASE || 'https://live.example.com'
+process.env.OZOW_TEST_API_BASE = process.env.OZOW_TEST_API_BASE || 'https://staging.example.com'
 
 const { pool } = require('../db')
 const ozow = require('../ozow')
@@ -17,11 +21,18 @@ const ozow = require('../ozow')
 // Routes the status API by transactionReference so each test controls
 // exactly what Ozow "returns", fully offline. Only used in this file.
 const mockTransactions = new Map()
+const forcedStatus = new Map() // reference -> HTTP status to force (e.g. 404)
+const fetchCalls = [] // { url, ref } for every GetTransactionByReference call
 const realFetch = global.fetch
 global.fetch = async (url) => {
   const parsed = new URL(url)
   if (parsed.pathname.endsWith('/GetTransactionByReference')) {
     const ref = parsed.searchParams.get('transactionReference')
+    fetchCalls.push({ url: String(url), ref })
+    const forced = forcedStatus.get(ref)
+    if (forced) {
+      return { ok: false, status: forced, text: async () => 'Not Found' }
+    }
     const tx = mockTransactions.get(ref)
     return { ok: true, json: async () => (tx ? [tx] : []) }
   }
@@ -39,11 +50,11 @@ const createOrder = async () => {
   return result.rows[0]
 }
 
-const createPayment = async (orderId, reference, createdAt) => {
+const createPayment = async (orderId, reference, createdAt, isTest = true) => {
   await pool.query(
     `INSERT INTO ozow_payments (order_id, transaction_reference, amount, status, is_test, created_at)
-     VALUES ($1, $2, '100.00', 'started', true, COALESCE($3, NOW()))`,
-    [orderId, reference, createdAt || null]
+     VALUES ($1, $2, '100.00', 'started', $3, COALESCE($4, NOW()))`,
+    [orderId, reference, isTest, createdAt || null]
   )
 }
 
@@ -143,6 +154,111 @@ test('a late Cancelled result for an older attempt does not overwrite the order 
   } finally {
     mockTransactions.delete(newerRef)
     mockTransactions.delete(olderRef)
+    await cleanupOrder(order.id)
+  }
+})
+
+test('a 404 from the status API with a valid verified notification marks the order paid', async () => {
+  const order = await createOrder()
+  const reference = `HBH-${order.id}-notify-paid`
+  await createPayment(order.id, reference)
+  forcedStatus.set(reference, 404)
+
+  const verifiedNotification = {
+    SiteCode: process.env.OZOW_SITE_CODE,
+    TransactionId: 'TXN-NOTIFY-1',
+    TransactionReference: reference,
+    Amount: '100.00',
+    Status: 'Complete',
+    StatusMessage: 'Success',
+  }
+
+  try {
+    await ozow.reconcileOzowPayment(reference, verifiedNotification)
+    const orderRow = (await pool.query('SELECT * FROM orders WHERE id = $1', [order.id])).rows[0]
+    const paymentRow = (await pool.query(
+      'SELECT * FROM ozow_payments WHERE transaction_reference = $1', [reference]
+    )).rows[0]
+    assert.strictEqual(orderRow.payment_status, 'paid')
+    assert.ok(orderRow.paid_at)
+    assert.strictEqual(paymentRow.ozow_transaction_id, 'TXN-NOTIFY-1')
+  } finally {
+    forcedStatus.delete(reference)
+    await cleanupOrder(order.id)
+  }
+})
+
+test('a 404 from the status API with no notification leaves the order unpaid', async () => {
+  const order = await createOrder()
+  const reference = `HBH-${order.id}-notify-none`
+  await createPayment(order.id, reference)
+  forcedStatus.set(reference, 404)
+
+  try {
+    await ozow.reconcileOzowPayment(reference)
+    const orderRow = (await pool.query('SELECT * FROM orders WHERE id = $1', [order.id])).rows[0]
+    assert.strictEqual(orderRow.payment_status, 'unpaid')
+  } finally {
+    forcedStatus.delete(reference)
+    await cleanupOrder(order.id)
+  }
+})
+
+test('fetchOzowStatus calls the staging base for a test payment and the live base otherwise', async () => {
+  const order = await createOrder()
+  const testRef = `HBH-${order.id}-base-test`
+  const liveRef = `HBH-${order.id}-base-live`
+  await createPayment(order.id, testRef, null, true)
+  await createPayment(order.id, liveRef, null, false)
+
+  mockTransactions.set(testRef, {
+    SiteCode: process.env.OZOW_SITE_CODE, TransactionId: 'TXN-T', TransactionReference: testRef,
+    Amount: '100.00', Status: 'Pending', StatusMessage: 'Awaiting confirmation',
+  })
+  mockTransactions.set(liveRef, {
+    SiteCode: process.env.OZOW_SITE_CODE, TransactionId: 'TXN-L', TransactionReference: liveRef,
+    Amount: '100.00', Status: 'Pending', StatusMessage: 'Awaiting confirmation',
+  })
+
+  try {
+    await ozow.reconcileOzowPayment(testRef)
+    await ozow.reconcileOzowPayment(liveRef)
+
+    const testCall = fetchCalls.find(c => c.ref === testRef)
+    const liveCall = fetchCalls.find(c => c.ref === liveRef)
+    assert.ok(testCall, 'expected a status API call for the test payment')
+    assert.ok(liveCall, 'expected a status API call for the live payment')
+    assert.ok(testCall.url.startsWith(process.env.OZOW_TEST_API_BASE), 'test payment must use the staging base URL')
+    assert.ok(liveCall.url.startsWith(process.env.OZOW_API_BASE), 'live payment must use the live base URL')
+  } finally {
+    mockTransactions.delete(testRef)
+    mockTransactions.delete(liveRef)
+    await cleanupOrder(order.id)
+  }
+})
+
+test('a verified notification with a wrong amount does not mark the order paid', async () => {
+  const order = await createOrder()
+  const reference = `HBH-${order.id}-notify-wrong-amount`
+  await createPayment(order.id, reference)
+  // No mockTransactions entry - the stub returns an empty match, so
+  // reconcile falls back to the (wrong-amount) verified notification.
+
+  const verifiedNotification = {
+    SiteCode: process.env.OZOW_SITE_CODE,
+    TransactionId: 'TXN-NOTIFY-2',
+    TransactionReference: reference,
+    Amount: '1.00', // the payment row's amount is 100.00
+    Status: 'Complete',
+    StatusMessage: 'Success',
+  }
+
+  try {
+    await ozow.reconcileOzowPayment(reference, verifiedNotification)
+    const orderRow = (await pool.query('SELECT * FROM orders WHERE id = $1', [order.id])).rows[0]
+    assert.notStrictEqual(orderRow.payment_status, 'paid')
+    assert.strictEqual(orderRow.paid_at, null)
+  } finally {
     await cleanupOrder(order.id)
   }
 })
