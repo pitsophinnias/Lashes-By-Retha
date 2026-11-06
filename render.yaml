@@ -35,9 +35,9 @@ services:
       - key: CLOUDINARY_URL
         sync: false
       - key: ALLOWED_ORIGINS
-        value: https://www.hairbyher.co.za,https://hairbyher.co.za,https://hairbyher-site.onrender.com,https://hairbyher-admin.onrender.com
+        value: https://www.hairbyher.co.za,https://hairbyher.co.za,https://hairbyher-site-guu9.onrender.com,https://hairbyher-admin-blaa.onrender.com
       - key: PUBLIC_API_URL
-        value: https://hairbyher-api.onrender.com
+        value: https://hairbyher-api-o0d1.onrender.com
       - key: CUSTOMER_SITE_URL
         value: https://www.hairbyher.co.za
       - key: OZOW_SITE_CODE
@@ -67,7 +67,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://hairbyher-api.onrender.com
+        value: https://hairbyher-api-o0d1.onrender.com
 
   # Admin dashboard
   - type: web
@@ -82,4 +82,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://hairbyher-api.onrender.com
+        value: https://hairbyher-api-o0d1.onrender.com
