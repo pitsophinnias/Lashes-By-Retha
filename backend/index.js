@@ -16,6 +16,7 @@ const { authenticate, requireRole, JWT_SECRET } = require('./auth')
 const { pool, createTables } = require('./db')
 const { cloudinary, isCloudinaryEnabled, uploadBuffer } = require('./cloudinary')
 const ozow = require('./ozow')
+const { normaliseSaPhone } = require('./phone')
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -802,6 +803,12 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
   if (!customerName || !customerPhone || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Missing required fields' })
   }
+  const normalisedPhone = normaliseSaPhone(customerPhone)
+  if (!normalisedPhone) {
+    return res.status(400).json({
+      error: "We're only able to serve customers in South Africa for now, so please use a South African number, for example 082 123 4567."
+    })
+  }
   if (!['delivery', 'pickup'].includes(fulfilmentMethod)) {
     return res.status(400).json({ error: 'Please choose delivery or pickup.' })
   }
@@ -888,7 +895,7 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
          payment_method, public_token
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
       [
-        customerName, customerPhone, total, fulfilmentMethod, subtotal, deliveryFee,
+        customerName, normalisedPhone, total, fulfilmentMethod, subtotal, deliveryFee,
         fulfilmentMethod === 'delivery' ? deliveryAddress.trim() : null,
         fulfilmentMethod === 'delivery' ? deliverySuburb.trim() : null,
         fulfilmentMethod === 'delivery' ? deliveryCity.trim() : null,
