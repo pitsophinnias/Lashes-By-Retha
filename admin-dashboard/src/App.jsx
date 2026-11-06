@@ -602,6 +602,31 @@ export default function App({ user, onLogout }) {
     }
   }
 
+  const completeStudent = async (studentId, studentName) => {
+    if (!window.confirm(`Mark ${studentName} as finished? They'll move to Past students.`)) return
+    try {
+      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}/complete`, { method: 'PATCH' })
+      if (res.ok) {
+        const data = await res.json()
+        setClassStudents(prev => prev.map(s => s.id === studentId ? data : s))
+      }
+    } catch {
+      // silent fail
+    }
+  }
+
+  const reactivateStudent = async (studentId) => {
+    try {
+      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}/reactivate`, { method: 'PATCH' })
+      if (res.ok) {
+        const data = await res.json()
+        setClassStudents(prev => prev.map(s => s.id === studentId ? data : s))
+      }
+    } catch {
+      // silent fail
+    }
+  }
+
   const changeBusinessPassword = async () => {
     setBPwMsg('')
     if (bPwNew !== bPwConfirm) { setBPwMsg('Passwords do not match.'); return }
@@ -2447,6 +2472,11 @@ export default function App({ user, onLogout }) {
                 )
               }
 
+              const currentStudents = classStudents.filter(s => s.status !== 'completed')
+              const pastStudents = classStudents
+                .filter(s => s.status === 'completed')
+                .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+
               return (
                 <div>
                   <button className="back-btn" onClick={() => { setSelectedClass(null); setClassStudents([]) }}>
@@ -2494,8 +2524,8 @@ export default function App({ user, onLogout }) {
 
                   <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#EDD5DB', padding: '12px 20px', color: '#2C1A20' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700 }}>Students</div>
-                      <div style={{ fontSize: 11, color: '#8C5A6A', fontWeight: 600 }}>{classStudents.length} enrolled</div>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>Current Students</div>
+                      <div style={{ fontSize: 11, color: '#8C5A6A', fontWeight: 600 }}>{currentStudents.length} enrolled</div>
                     </div>
 
                     <div style={{ padding: '16px 20px', borderBottom: '1px solid #F7EEF0' }}>
@@ -2550,12 +2580,12 @@ export default function App({ user, onLogout }) {
                       {studentsLoading && (
                         <div style={{ padding: 20, fontSize: 13, color: '#9A8A8E' }}>Loading students...</div>
                       )}
-                      {!studentsLoading && classStudents.length === 0 && (
+                      {!studentsLoading && currentStudents.length === 0 && (
                         <div style={{ padding: '24px 0', fontSize: 13, color: '#9A8A8E', textAlign: 'center' }}>
                           No students enrolled yet.
                         </div>
                       )}
-                      {!studentsLoading && classStudents.map(student => (
+                      {!studentsLoading && currentStudents.map(student => (
                         <div key={student.id} className="student-row">
                           <div>
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
@@ -2591,8 +2621,49 @@ export default function App({ user, onLogout }) {
                             >
                               W
                             </a>
+                            <button className="secondary-btn" onClick={() => completeStudent(student.id, student.name)}>
+                              Finished course
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="panel" style={{ padding: 0, overflow: 'hidden', marginTop: 20 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F7EEF0', padding: '12px 20px', color: '#2C1A20' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>Past Students</div>
+                      <div style={{ fontSize: 11, color: '#8C5A6A', fontWeight: 600 }}>{pastStudents.length} finished</div>
+                    </div>
+
+                    <div style={{ padding: '0 20px' }}>
+                      {!studentsLoading && pastStudents.length === 0 && (
+                        <div style={{ padding: '24px 0', fontSize: 13, color: '#9A8A8E', textAlign: 'center' }}>
+                          No past students yet.
+                        </div>
+                      )}
+                      {!studentsLoading && pastStudents.map(student => (
+                        <div key={student.id} className="student-row">
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
+                              {student.name}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                              {student.whatsapp}
+                            </div>
+                            <div style={{ fontSize: 11, color: '#C4A0A8', marginTop: 2 }}>
+                              Finished {new Date(student.completedAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <span className={`payment-badge payment-${student.paymentStatus === 'partial' ? 'partial' : student.paymentStatus === 'paid' ? 'paid' : 'unpaid'}`}>
+                              {student.paymentStatus === 'paid' ? 'Paid' : student.paymentStatus === 'partial' ? 'Partial' : 'Unpaid'}
+                            </span>
+                            <button className="secondary-btn" onClick={() => reactivateStudent(student.id)}>
+                              Move back
+                            </button>
                             <button className="delete-btn" onClick={() => removeStudent(student.id, student.name)}>
-                              Remove
+                              Delete
                             </button>
                           </div>
                         </div>

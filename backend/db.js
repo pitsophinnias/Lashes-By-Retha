@@ -217,6 +217,13 @@ const createTables = async () => {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
   `)
 
+  // Lets a student "finish" a class instead of being deleted, so Retha keeps
+  // a history of past students. Existing students default to active.
+  await pool.query(`
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+  `)
+
   // Seed default categories if none exist
   const { rows } = await pool.query('SELECT COUNT(*) FROM categories')
   if (parseInt(rows[0].count) === 0) {
@@ -300,6 +307,19 @@ const createTables = async () => {
     ['Diameter: 0.05 | Curl: CC & D | Lengths: 9mm to 16mm', 'Diameter: 0.05 | Curl: Cc & D']
   )
 
+  // Classic and YY lash trays (ids 1 and 2) now also come in CC curl, like
+  // Volume. Only touches a product's detail text once its old D-only text
+  // is still in place, so an owner who has since edited it by hand keeps
+  // their edit.
+  await pool.query(
+    `UPDATE products SET detail = $1 WHERE id = 1 AND detail = $2`,
+    ['Diameter: 0.15 | Curl: CC & D | Lengths: 10mm to 16mm', 'Diameter: 0.15 | Curl: D | Lengths: 10mm to 16mm']
+  )
+  await pool.query(
+    `UPDATE products SET detail = $1 WHERE id = 2 AND detail = $2`,
+    ['Diameter: 0.07 | Curl: CC & D | Lengths: 7mm to 18mm', 'Diameter: 0.07 | Curl: D | Lengths: 7mm to 18mm']
+  )
+
   // Seed lash length/curl options if none exist yet. Stock of 5 per option
   // is a placeholder for the owner to correct once real counts are known.
   const { rows: variantRows } = await pool.query('SELECT COUNT(*) FROM product_variants')
@@ -319,6 +339,33 @@ const createTables = async () => {
       params
     )
     console.log(`Product options seeded (${options.length})`)
+  }
+
+  // Classic (id 1) and YY (id 2) lash trays now also come in CC curl, same
+  // as Volume. One-time, guarded by product: only adds CC options for a
+  // product that has none yet, at the same lengths as its existing D
+  // options, and never touches existing D options or their stock.
+  for (const productId of [1, 2]) {
+    const { rows: ccRows } = await pool.query(
+      'SELECT COUNT(*) FROM product_variants WHERE product_id = $1 AND curl = $2',
+      [productId, 'CC']
+    )
+    if (parseInt(ccRows[0].count) > 0) continue
+
+    const { rows: lengthRows } = await pool.query(
+      'SELECT length_mm FROM product_variants WHERE product_id = $1 AND curl = $2',
+      [productId, 'D']
+    )
+    if (lengthRows.length === 0) continue
+
+    const values = lengthRows.map((_, i) => `($1, $${i + 2}, 'CC', 0)`).join(', ')
+    const params = [productId, ...lengthRows.map(r => r.length_mm)]
+    await pool.query(
+      `INSERT INTO product_variants (product_id, length_mm, curl, stock_quantity) VALUES ${values}
+       ON CONFLICT (product_id, length_mm, curl) DO NOTHING`,
+      params
+    )
+    console.log(`CC curl options added for product ${productId}`)
   }
 
   console.log('Database tables ready')

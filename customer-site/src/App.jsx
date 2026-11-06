@@ -227,6 +227,25 @@ const PICKUP_HOURS = 'Tuesday to Saturday, 08:00 to 17:00'
 // health check before giving up and showing the shop as unreachable.
 const BACKEND_WAKE_TIMEOUT_MS = 60000
 
+const SA_PHONE_ERROR = "We're only able to serve customers in South Africa for now, so please use a South African number, for example 082 123 4567."
+
+// Mirrors the backend's own normaliseSaPhone - accepts 082 685 5399,
+// 0826855399, +27 82 685 5399, +27826855399 and 27826855399 (spaces, dashes,
+// dots and brackets ignored); returns the +27XXXXXXXXX form, or null.
+const normaliseSaPhone = (input) => {
+  if (!input) return null
+  const cleaned = String(input).trim().replace(/[\s\-.()]/g, '')
+  if (!/^\+?\d+$/.test(cleaned)) return null
+
+  let digits = cleaned.replace(/^\+/, '')
+  if (digits.startsWith('27')) {
+    digits = `0${digits.slice(2)}`
+  }
+  if (!/^0[1-8]\d{8}$/.test(digits)) return null
+
+  return `+27${digits.slice(1)}`
+}
+
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
   const [cart, setCart] = useState([])
@@ -234,6 +253,7 @@ function App() {
   const [checkoutStep, setCheckoutStep] = useState(false)
   const [orderName, setOrderName] = useState('')
   const [orderPhone, setOrderPhone] = useState('')
+  const [phoneTouched, setPhoneTouched] = useState(false)
   const [orderSubmitted, setOrderSubmitted] = useState(false)
   const [orderError, setOrderError] = useState('')
   const [fulfilmentMethod, setFulfilmentMethod] = useState(null)
@@ -435,7 +455,9 @@ function App() {
   const deliveryFeeApplicable = fulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
   const orderTotal = cartTotal + deliveryFeeApplicable
   const deliveryAddressComplete = !!(deliveryAddress.trim() && deliverySuburb.trim() && deliveryCity.trim() && deliveryPostalCode.trim())
-  const canPlaceOrder = !!(orderName.trim() && orderPhone.trim() && fulfilmentMethod &&
+  const normalisedOrderPhone = normaliseSaPhone(orderPhone)
+  const phoneError = (phoneTouched && !normalisedOrderPhone) ? SA_PHONE_ERROR : ''
+  const canPlaceOrder = !!(orderName.trim() && normalisedOrderPhone && fulfilmentMethod &&
     (fulfilmentMethod === 'pickup' || deliveryAddressComplete) &&
     (!paymentOptions.ozow || paymentMethod))
 
@@ -620,6 +642,7 @@ function App() {
   }
 
   const placeOrder = () => {
+    setPhoneTouched(true)
     if (paymentOptions.ozow && paymentMethod === 'ozow') startOzowPayment()
     else submitOrder()
   }
@@ -2594,17 +2617,19 @@ function App() {
                   />
 
                   <input
-                    type="text"
-                    placeholder="Your WhatsApp number"
+                    type="tel"
+                    inputMode="tel"
+                    placeholder="e.g. 082 123 4567"
                     value={orderPhone}
                     onChange={(e) => setOrderPhone(e.target.value)}
+                    onBlur={() => setPhoneTouched(true)}
                     style={{
                       width: '100%',
                       padding: '12px 14px',
                       borderRadius: '10px',
-                      border: '1px solid #F5DDE2',
+                      border: `1px solid ${phoneError ? '#C47A8A' : '#F5DDE2'}`,
                       fontSize: '14px',
-                      marginBottom: '12px',
+                      marginBottom: phoneError ? '6px' : '12px',
                       background: 'white',
                       color: '#2C2C2C',
                       fontFamily: 'inherit',
@@ -2612,6 +2637,12 @@ function App() {
                       outline: 'none',
                     }}
                   />
+
+                  {phoneError && (
+                    <p style={{ fontSize: '12px', color: '#C47A8A', margin: '0 0 12px 0', lineHeight: 1.6 }}>
+                      {phoneError}
+                    </p>
+                  )}
 
                   <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }}>
                     Delivery or Pickup
