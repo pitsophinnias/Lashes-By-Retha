@@ -727,6 +727,7 @@ app.get('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 
     res.json(result.rows.map(s => ({
       id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
       paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+      status: s.status, completedAt: s.completed_at,
     })))
   } catch (err) {
     console.error(err)
@@ -750,6 +751,7 @@ app.post('/api/classes/:classId/students', authenticate, requireRole('sysadmin',
     res.status(201).json({
       id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
       paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+      status: s.status, completedAt: s.completed_at,
     })
   } catch (err) {
     console.error(err)
@@ -771,10 +773,54 @@ app.patch('/api/classes/:classId/students/:studentId', authenticate, requireRole
     res.json({
       id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
       paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+      status: s.status, completedAt: s.completed_at,
     })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to update student' })
+  }
+})
+
+// Marks a student as having finished the course, so they move from Current
+// students to Past students without losing their history.
+app.patch('/api/classes/:classId/students/:studentId/complete', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE students SET status = 'completed', completed_at = NOW()
+       WHERE id = $1 AND class_id = $2 RETURNING *`,
+      [req.params.studentId, req.params.classId]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    const s = result.rows[0]
+    res.json({
+      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
+      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+      status: s.status, completedAt: s.completed_at,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to mark student as finished' })
+  }
+})
+
+// Undoes a mistaken "Finished course" - moves the student back to Current students.
+app.patch('/api/classes/:classId/students/:studentId/reactivate', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE students SET status = 'active', completed_at = NULL
+       WHERE id = $1 AND class_id = $2 RETURNING *`,
+      [req.params.studentId, req.params.classId]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    const s = result.rows[0]
+    res.json({
+      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
+      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+      status: s.status, completedAt: s.completed_at,
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to move student back to current students' })
   }
 })
 
