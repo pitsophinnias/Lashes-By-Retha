@@ -2166,7 +2166,7 @@ function App() {
         <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
           Hair By Her (Pty) Ltd &middot; Reg. No. 2022/273934/07
         </p>
-        <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>&copy; 2026 Hair By Her. All rights reserved.</p>
+        <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>&copy; {new Date().getFullYear()} Hair By Her. All rights reserved.</p>
         </div>
       </footer>
       </>
