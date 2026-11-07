@@ -991,8 +991,17 @@ function App() {
           letter-spacing: 0.3px;
           color: #7A6670;
           max-width: 600px;
-          margin: 0 auto 2.5rem auto;
+          margin: 0 auto 0.5rem auto;
           line-height: 1.6;
+        }
+
+        .hero-tagline {
+          font-family: 'Cormorant Garamond', serif;
+          font-style: italic;
+          font-size: 22px;
+          color: #C47A8A;
+          max-width: 600px;
+          margin: 0 auto 2.5rem auto;
         }
 
         .hero-buttons {
@@ -1424,6 +1433,10 @@ function App() {
           .hero-headline {
             font-size: 2rem;
           }
+
+          .hero-tagline {
+            font-size: 18px;
+          }
         }
 
         /* ── Mobile base ── */
@@ -1442,6 +1455,7 @@ function App() {
           /* Hero */
           .hero-section { padding: 48px 20px 40px 20px !important; }
           .hero-heading { font-size: 34px !important; line-height: 1.2 !important; }
+          .hero-tagline { font-size: 17px !important; }
           .hero-buttons { flex-direction: column !important; align-items: center !important; gap: 12px !important; }
           .hero-btn { width: 100% !important; max-width: 280px !important; }
 
@@ -1527,6 +1541,7 @@ function App() {
 
         @media (max-width: 480px) {
           .hero-heading { font-size: 28px !important; }
+          .hero-tagline { font-size: 16px !important; }
 
           .policies-nav { padding: 0 16px !important; height: auto !important; min-height: 60px !important; flex-wrap: wrap !important; gap: 8px !important; padding-top: 10px !important; padding-bottom: 10px !important; }
           .policies-content { padding: 40px 16px !important; }
@@ -1693,10 +1708,11 @@ function App() {
       )}
 
       <section id="home" className="hero hero-section">
-        <h1 className="hero-headline hero-heading">Beautiful Lashes. Effortless Booking.</h1>
+        <h1 className="hero-headline hero-heading">Effortless Booking. Endless Beauty.</h1>
         <p className="hero-subtext">
-          Extension sets, refills, brow lamination and beauty classes in Vanderbijlpark.
+          Lash extensions, brow lamination & luxe wigs.
         </p>
+        <p className="hero-tagline">Hair so good, it's by her.</p>
         <div className="hero-buttons">
           <a
             className="btn btn-primary hero-btn"
@@ -2026,7 +2042,7 @@ function App() {
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
               <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Address</span>
-              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>125 Piet Retief Boulevard, Vanderbijlpark Se1, Gauteng 1911</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>125 Piet Retief Boulevard, SE1<br />Vanderbijlpark, Gauteng</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
@@ -2035,8 +2051,8 @@ function App() {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Hours</span>
-              <span style={{ fontSize: '14px', color: '#2C2C2C' }}>Tuesday to Saturday, 8:00 AM to 7:00 PM</span>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Beauty Hours</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>Tuesday to Saturday<br />8:00 AM to 5:00 PM</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
@@ -2148,9 +2164,9 @@ function App() {
           <button className="footer-policies-link" onClick={() => openPolicies('terms')}>Terms</button>
         </div>
         <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
-          Hair By Her (Pty) Ltd &middot; Reg. No. 2022/273934/07 &middot; 125 Piet Retief Boulevard, Vanderbijlpark SE1, Gauteng, 1911
+          Hair By Her (Pty) Ltd &middot; Reg. No. 2022/273934/07
         </p>
-        <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>&copy; 2026 Hair By Her. All rights reserved.</p>
+        <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>&copy; {new Date().getFullYear()} Hair By Her. All rights reserved.</p>
         </div>
       </footer>
       </>
