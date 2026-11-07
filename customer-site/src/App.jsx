@@ -2164,7 +2164,7 @@ function App() {
           <button className="footer-policies-link" onClick={() => openPolicies('terms')}>Terms</button>
         </div>
         <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
-          Hair By Her (Pty) Ltd &middot; Reg. No. 2022/273934/07 &middot; 125 Piet Retief Boulevard, Vanderbijlpark SE1, Gauteng, 1911
+          Hair By Her (Pty) Ltd &middot; Reg. No. 2022/273934/07
         </p>
         <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>&copy; 2026 Hair By Her. All rights reserved.</p>
         </div>
