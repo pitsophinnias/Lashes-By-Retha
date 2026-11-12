@@ -52,6 +52,16 @@ services:
         value: https://api.ozow.com
       - key: OZOW_TEST_API_BASE
         value: https://stagingapi.ozow.com
+      - key: PAYFLEX_CLIENT_ID
+        sync: false
+      - key: PAYFLEX_CLIENT_SECRET
+        sync: false
+      - key: PAYFLEX_API_URL
+        value: https://api.uat.payflex.co.za
+      - key: PAYFLEX_AUTH_URL
+        value: https://auth-uat.payflex.co.za/auth/merchant
+      - key: PAYFLEX_AUDIENCE
+        value: https://auth-dev.payflex.co.za
 
   # Customer site
   - type: web

@@ -224,6 +224,25 @@ const createTables = async () => {
     ALTER TABLE students ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
   `)
 
+  // Payflex buy-now-pay-later support, mirroring the Ozow payments table.
+  // customer_email is needed for Payflex orders; nullable since Ozow/old EFT
+  // orders never collected one.
+  await pool.query(`
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_email VARCHAR(255);
+
+    CREATE TABLE IF NOT EXISTS payflex_payments (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER REFERENCES orders(id),
+      merchant_reference VARCHAR(50) UNIQUE NOT NULL,
+      payflex_order_id VARCHAR(100),
+      amount NUMERIC(10,2) NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'started',
+      raw_status JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
   // Seed default categories if none exist
   const { rows } = await pool.query('SELECT COUNT(*) FROM categories')
   if (parseInt(rows[0].count) === 0) {
