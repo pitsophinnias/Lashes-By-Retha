@@ -64,6 +64,14 @@ const ordersLimiter = rateLimit({
   message: { error: 'Too many orders from this address. Please try again later.' },
 })
 
+const enrolmentsLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many enrolments from this address. Please try again later.' },
+})
+
 // ── Ozow return & notify ─────────────────────────────────────────────────────
 // Mounted before the CORS middleware below: Ozow's browser redirects come
 // from https://pay.ozow.com and its server-to-server notifications may carry
@@ -78,30 +86,45 @@ const withTimeout = (promise, ms) => Promise.race([
   new Promise((resolve) => setTimeout(resolve, ms)),
 ])
 
+// A payment row belongs to either an order or a student (training
+// enrolment) - looks up whichever public token it resolves to, and which
+// query param name the customer site expects it back under. whereClause
+// must reference the payment row as "p".
+async function lookupPublicToken(table, whereClause, params) {
+  const result = await pool.query(
+    `SELECT o.public_token AS order_token, s.public_token AS student_token
+     FROM ${table} p
+     LEFT JOIN orders o ON o.id = p.order_id
+     LEFT JOIN students s ON s.id = p.student_id
+     WHERE ${whereClause}`,
+    params
+  )
+  const row = result.rows[0]
+  if (row?.order_token) return { param: 'order', token: row.order_token }
+  if (row?.student_token) return { param: 'enrolment', token: row.student_token }
+  return null
+}
+
 const handleOzowReturn = async (req, res) => {
   const { outcome } = req.params
   if (!['success', 'cancel', 'error'].includes(outcome)) return res.status(404).end()
 
   const reference = (req.body && req.body.TransactionReference) || req.query.TransactionReference
-  let publicToken = null
+  let resolved = null
 
   if (reference) {
     await withTimeout(ozow.reconcileOzowPayment(reference), 5000)
     try {
-      const result = await pool.query(
-        `SELECT o.public_token FROM ozow_payments p JOIN orders o ON o.id = p.order_id WHERE p.transaction_reference = $1`,
-        [reference]
-      )
-      if (result.rows[0]) publicToken = result.rows[0].public_token
+      resolved = await lookupPublicToken('ozow_payments', 'p.transaction_reference = $1', [reference])
     } catch (err) {
       console.error('Ozow return lookup failed:', err.message)
     }
   }
 
-  const redirectOutcome = publicToken ? outcome : 'error'
+  const redirectOutcome = resolved ? outcome : 'error'
   const redirectUrl = new URL(`${ozow.CUSTOMER_SITE_URL || 'http://localhost'}/`)
   redirectUrl.searchParams.set('payment', redirectOutcome)
-  if (publicToken) redirectUrl.searchParams.set('order', publicToken)
+  if (resolved) redirectUrl.searchParams.set(resolved.param, resolved.token)
   res.redirect(303, redirectUrl.toString())
 }
 
@@ -150,26 +173,25 @@ const handlePayflexReturn = async (req, res) => {
 
   const source = req.method === 'POST' ? (req.body || {}) : req.query
   const identifier = source.orderId || source.merchantReference
-  let publicToken = null
+  let resolved = null
 
   if (identifier) {
     await withTimeout(payflex.reconcilePayflexPayment(identifier), 5000)
     try {
-      const result = await pool.query(
-        `SELECT o.public_token FROM payflex_payments p JOIN orders o ON o.id = p.order_id
-         WHERE p.merchant_reference = $1 OR p.payflex_order_id = $1`,
+      resolved = await lookupPublicToken(
+        'payflex_payments',
+        'p.merchant_reference = $1 OR p.payflex_order_id = $1',
         [identifier]
       )
-      if (result.rows[0]) publicToken = result.rows[0].public_token
     } catch (err) {
       console.error('Payflex return lookup failed:', err.message)
     }
   }
 
-  const redirectOutcome = publicToken ? outcome : 'error'
+  const redirectOutcome = resolved ? outcome : 'error'
   const redirectUrl = new URL(`${payflex.CUSTOMER_SITE_URL || 'http://localhost'}/`)
   redirectUrl.searchParams.set('payment', redirectOutcome)
-  if (publicToken) redirectUrl.searchParams.set('order', publicToken)
+  if (resolved) redirectUrl.searchParams.set(resolved.param, resolved.token)
   res.redirect(303, redirectUrl.toString())
 }
 
@@ -789,19 +811,35 @@ app.post('/api/admin/products/:productId/variants/:variantId/stock', authenticat
 })
 
 // ── Students ──────────────────────────────────────────────────────────────────
-// Classes are a static list on the frontend (CLASSES), so class_id is just
-// the matching id from that list, not a foreign key.
+// Classes are a static list on the frontend (CLASSES), backed by the courses
+// table now - class_id matches a courses.id, not a foreign key, so an
+// unrecognised id just means course/balance come back null.
+const getCourse = async (classId) => {
+  const result = await pool.query('SELECT * FROM courses WHERE id = $1', [classId])
+  return result.rows[0] || null
+}
+
+const serializeStudent = (s, course) => {
+  const amountPaid = parseFloat(s.amount_paid || 0)
+  const price = course ? parseFloat(course.price) : null
+  return {
+    id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp, email: s.email,
+    preferredStartDate: s.preferred_start_date,
+    paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
+    status: s.status, completedAt: s.completed_at,
+    amountPaid, balance: price !== null ? Math.max(0, price - amountPaid) : null,
+    source: s.source, publicToken: s.public_token,
+  }
+}
+
 app.get('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   try {
+    const course = await getCourse(req.params.classId)
     const result = await pool.query(
       'SELECT * FROM students WHERE class_id = $1 ORDER BY enrolled_at DESC',
       [req.params.classId]
     )
-    res.json(result.rows.map(s => ({
-      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
-      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
-      status: s.status, completedAt: s.completed_at,
-    })))
+    res.json(result.rows.map(s => serializeStudent(s, course)))
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to fetch students' })
@@ -815,17 +853,14 @@ app.post('/api/classes/:classId/students', authenticate, requireRole('sysadmin',
   }
   try {
     const result = await pool.query(
-      `INSERT INTO students (class_id, name, whatsapp, payment_status, notes)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      `INSERT INTO students (class_id, name, whatsapp, payment_status, notes, status, source)
+       VALUES ($1, $2, $3, $4, $5, 'active', 'admin') RETURNING *`,
       [req.params.classId, name.trim(), whatsapp.trim(), paymentStatus || 'unpaid', notes || '']
     )
     const s = result.rows[0]
     await addNotification('section', 'New student enrolled', `${s.name} was added to a Lash Training class.`)
-    res.status(201).json({
-      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
-      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
-      status: s.status, completedAt: s.completed_at,
-    })
+    const course = await getCourse(req.params.classId)
+    res.status(201).json(serializeStudent(s, course))
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to add student' })
@@ -842,15 +877,50 @@ app.patch('/api/classes/:classId/students/:studentId', authenticate, requireRole
       [paymentStatus, notes, req.params.studentId, req.params.classId]
     )
     if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
-    const s = result.rows[0]
-    res.json({
-      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
-      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
-      status: s.status, completedAt: s.completed_at,
-    })
+    const course = await getCourse(req.params.classId)
+    res.json(serializeStudent(result.rows[0], course))
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to update student' })
+  }
+})
+
+// Lets Retha delete an "awaiting payment" enrolment that never completed -
+// these aren't current students, but they're still rows in the same table.
+app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM students WHERE id = $1 AND class_id = $2 RETURNING id',
+      [req.params.studentId, req.params.classId]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    res.json({ success: true })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to remove student' })
+  }
+})
+
+// Admin-added students never get a public_token at creation (orders/website
+// enrolments do) - this creates one on first use, so "Copy balance link"
+// always has something to copy.
+app.post('/api/classes/:classId/students/:studentId/ensure-token', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const existing = await pool.query(
+      'SELECT public_token FROM students WHERE id = $1 AND class_id = $2',
+      [req.params.studentId, req.params.classId]
+    )
+    if (existing.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    let token = existing.rows[0].public_token
+    if (!token) {
+      token = crypto.randomBytes(24).toString('hex')
+      await pool.query('UPDATE students SET public_token = $1 WHERE id = $2', [token, req.params.studentId])
+    }
+    const siteUrl = ozow.CUSTOMER_SITE_URL || payflex.CUSTOMER_SITE_URL || ''
+    res.json({ token, link: `${siteUrl}/?enrolment=${token}` })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to generate link' })
   }
 })
 
@@ -864,12 +934,8 @@ app.patch('/api/classes/:classId/students/:studentId/complete', authenticate, re
       [req.params.studentId, req.params.classId]
     )
     if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
-    const s = result.rows[0]
-    res.json({
-      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
-      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
-      status: s.status, completedAt: s.completed_at,
-    })
+    const course = await getCourse(req.params.classId)
+    res.json(serializeStudent(result.rows[0], course))
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to mark student as finished' })
@@ -885,35 +951,49 @@ app.patch('/api/classes/:classId/students/:studentId/reactivate', authenticate, 
       [req.params.studentId, req.params.classId]
     )
     if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
-    const s = result.rows[0]
-    res.json({
-      id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp,
-      paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
-      status: s.status, completedAt: s.completed_at,
-    })
+    const course = await getCourse(req.params.classId)
+    res.json(serializeStudent(result.rows[0], course))
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to move student back to current students' })
   }
 })
 
-app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
-  try {
-    const result = await pool.query(
-      'DELETE FROM students WHERE id = $1 AND class_id = $2 RETURNING id',
-      [req.params.studentId, req.params.classId]
-    )
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
-    res.json({ success: true })
-  } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Failed to remove student' })
-  }
-})
-
 // ── Orders ────────────────────────────────────────────────────────────────────
 // Public: the customer site has no login and must be able to place orders.
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+
+// Training runs Tuesday to Saturday (same days as pickup) - a preferred
+// start date must be one of those days and strictly in the future, in SA's
+// own timezone rather than the server's.
+function isValidFutureCourseDate(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false
+  // Built from the string's own year/month/day at UTC midnight, not by
+  // parsing "+02:00" - that would shift the instant back into the previous
+  // UTC day and get this calendar date's weekday wrong.
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (isNaN(date.getTime())) return false
+  const nowSAST = new Date(Date.now() + 2 * 60 * 60 * 1000)
+  const todaySAST = new Date(Date.UTC(nowSAST.getUTCFullYear(), nowSAST.getUTCMonth(), nowSAST.getUTCDate()))
+  if (date <= todaySAST) return false
+  const dayOfWeek = date.getUTCDay() // 0 Sun .. 6 Sat
+  return dayOfWeek >= 2 && dayOfWeek <= 6 // Tuesday to Saturday
+}
+
+// ── Courses ───────────────────────────────────────────────────────────────────
+app.get('/api/courses', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM courses WHERE is_active = TRUE ORDER BY id ASC')
+    res.json(result.rows.map(c => ({
+      id: c.id, name: c.name, durationDays: c.duration_days,
+      price: parseFloat(c.price), deposit: parseFloat(c.deposit),
+    })))
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch courses' })
+  }
+})
 
 app.post('/api/orders', ordersLimiter, async (req, res) => {
   const {
@@ -1330,6 +1410,295 @@ app.patch('/api/orders/:token/switch-provider', async (req, res) => {
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to switch payment method' })
+  }
+})
+
+// ── Training enrolment ───────────────────────────────────────────────────────
+app.post('/api/enrolments', enrolmentsLimiter, async (req, res) => {
+  const { courseId, name, phone, email, preferredStartDate, paymentOption } = req.body
+  if (!name || !name.trim() || !phone || !email || !preferredStartDate || !paymentOption) {
+    return res.status(400).json({ error: 'Missing required fields' })
+  }
+  const normalisedPhone = normaliseSaPhone(phone)
+  if (!normalisedPhone) {
+    return res.status(400).json({
+      error: "We're only able to serve customers in South Africa for now, so please use a South African number, for example 082 123 4567."
+    })
+  }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' })
+  }
+  if (!['deposit_ozow', 'full_ozow', 'full_payflex'].includes(paymentOption)) {
+    return res.status(400).json({ error: 'Please choose how you would like to pay.' })
+  }
+  if (!isValidFutureCourseDate(preferredStartDate)) {
+    return res.status(400).json({ error: 'Please choose a future Tuesday to Saturday date for your preferred start.' })
+  }
+  const provider = paymentOption === 'full_payflex' ? 'payflex' : 'ozow'
+  const isProviderConfigured = provider === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
+  if (!isProviderConfigured) {
+    return res.status(503).json({
+      error: "Online payments are taking a short break. Please message us on WhatsApp at 082 685 5399 and we'll gladly help you enrol."
+    })
+  }
+  try {
+    const course = await getCourse(courseId)
+    if (!course || !course.is_active) {
+      return res.status(400).json({ error: 'Please choose a course.' })
+    }
+    const amount = paymentOption === 'deposit_ozow' ? parseFloat(course.deposit) : parseFloat(course.price)
+
+    if (provider === 'payflex') {
+      const config = await payflex.getConfiguration()
+      if (!payflex.isAmountWithinRange(amount, config)) {
+        return res.status(400).json({
+          error: `Payflex is only available for amounts between R${config.minimumAmount} and R${config.maximumAmount}.`
+        })
+      }
+    }
+
+    const publicToken = crypto.randomBytes(24).toString('hex')
+    const studentResult = await pool.query(
+      `INSERT INTO students (class_id, name, whatsapp, email, preferred_start_date, payment_status, status, public_token, source)
+       VALUES ($1, $2, $3, $4, $5, 'unpaid', 'awaiting_payment', $6, 'website') RETURNING *`,
+      [course.id, name.trim(), normalisedPhone, email.trim(), preferredStartDate, publicToken]
+    )
+    const student = studentResult.rows[0]
+
+    if (provider === 'ozow') {
+      const { transactionReference, amountStr, fields } = ozow.buildOzowFields(student.id, amount, {
+        bankReferenceLabel: `HBH Training ${student.id}`,
+      })
+      await pool.query(
+        `INSERT INTO ozow_payments (student_id, transaction_reference, amount, status, is_test, purpose)
+         VALUES ($1, $2, $3, 'started', $4, $5)`,
+        [student.id, transactionReference, amountStr, ozow.OZOW_IS_TEST, paymentOption === 'deposit_ozow' ? 'deposit' : 'full']
+      )
+      await addNotification('section', 'New training enrolment',
+        `${student.name} started enrolling for ${course.name}.`)
+      return res.status(201).json({ success: true, enrolmentToken: publicToken, action: 'https://pay.ozow.com/', fields })
+    }
+
+    const merchantReference = payflex.generateMerchantReference(student.id)
+    const payflexOrder = await payflex.createPayflexOrder({
+      amount,
+      description: `Hair By Her training: ${course.name}`,
+      customerName: name.trim(),
+      customerPhone: normalisedPhone,
+      email: email.trim(),
+      merchantReference,
+      items: [{ name: course.name, sku: course.id, quantity: 1, price: amount }],
+    })
+    await pool.query(
+      `INSERT INTO payflex_payments (student_id, merchant_reference, payflex_order_id, amount, status, purpose)
+       VALUES ($1, $2, $3, $4, 'started', 'full')`,
+      [student.id, merchantReference, payflexOrder.payflexOrderId, amount.toFixed(2)]
+    )
+    await addNotification('section', 'New training enrolment',
+      `${student.name} started enrolling for ${course.name}.`)
+    res.status(201).json({ success: true, enrolmentToken: publicToken, redirectUrl: payflexOrder.redirectUrl })
+  } catch (err) {
+    console.error('Failed to create enrolment:', err.message)
+    res.status(500).json({ error: 'Failed to create enrolment' })
+  }
+})
+
+app.get('/api/enrolments/by-token/:token', async (req, res) => {
+  try {
+    const studentResult = await pool.query('SELECT * FROM students WHERE public_token = $1', [req.params.token])
+    let student = studentResult.rows[0]
+    if (!student) return res.status(404).json({ error: 'Enrolment not found' })
+
+    if (ozow.isOzowConfigured) {
+      const latestResult = await pool.query(
+        'SELECT * FROM ozow_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
+      )
+      const latest = latestResult.rows[0]
+      const isRecent = latest && (Date.now() - new Date(latest.created_at).getTime()) < 24 * 60 * 60 * 1000
+      const lastCheck = lastOzowCheck.get(`student-${student.id}`) || 0
+      if (latest && ['started', 'pending'].includes(latest.status) && isRecent && Date.now() - lastCheck > 30000) {
+        lastOzowCheck.set(`student-${student.id}`, Date.now())
+        await ozow.reconcileOzowPayment(latest.transaction_reference)
+        const refreshed = await pool.query('SELECT * FROM students WHERE id = $1', [student.id])
+        student = refreshed.rows[0]
+      }
+    }
+
+    if (payflex.isPayflexConfigured) {
+      const latestResult = await pool.query(
+        'SELECT * FROM payflex_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
+      )
+      const latest = latestResult.rows[0]
+      const isRecent = latest && (Date.now() - new Date(latest.created_at).getTime()) < 24 * 60 * 60 * 1000
+      const lastCheck = lastPayflexCheck.get(`student-${student.id}`) || 0
+      if (latest && ['started', 'pending'].includes(latest.status) && isRecent && Date.now() - lastCheck > 30000) {
+        lastPayflexCheck.set(`student-${student.id}`, Date.now())
+        await payflex.reconcilePayflexPayment(latest.merchant_reference)
+        const refreshed = await pool.query('SELECT * FROM students WHERE id = $1', [student.id])
+        student = refreshed.rows[0]
+      }
+    }
+
+    const course = await getCourse(student.class_id)
+    const price = course ? parseFloat(course.price) : 0
+    const amountPaid = parseFloat(student.amount_paid)
+    const balance = Math.max(0, price - amountPaid)
+
+    const latestOzowResult = await pool.query(
+      'SELECT status FROM ozow_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
+    )
+    const latestPayflexResult = await pool.query(
+      'SELECT status FROM payflex_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
+    )
+    const latestOzowStatus = latestOzowResult.rows[0]?.status || null
+    const latestPayflexStatus = latestPayflexResult.rows[0]?.status || null
+    const latestIsOzow = latestOzowResult.rows[0] && (!latestPayflexResult.rows[0] ||
+      new Date(latestOzowResult.rows[0].created_at) > new Date(latestPayflexResult.rows[0].created_at))
+
+    let payflexAvailableForBalance = false
+    if (payflex.isPayflexConfigured && balance > 0) {
+      const config = await payflex.getConfiguration()
+      payflexAvailableForBalance = payflex.isAmountWithinRange(balance, config)
+    }
+
+    res.json({
+      courseName: course ? course.name : null,
+      price,
+      amountPaid,
+      balance,
+      paymentStatus: student.payment_status,
+      status: student.status,
+      latestProvider: latestOzowStatus || latestPayflexStatus ? (latestIsOzow ? 'ozow' : 'payflex') : null,
+      latestStatus: latestIsOzow ? latestOzowStatus : latestPayflexStatus,
+      providers: { ozow: ozow.isOzowConfigured && balance > 0, payflex: payflexAvailableForBalance },
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch enrolment' })
+  }
+})
+
+app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, async (req, res) => {
+  const { provider } = req.body
+  if (!['ozow', 'payflex'].includes(provider)) {
+    return res.status(400).json({ error: 'Please choose Ozow or Payflex.' })
+  }
+  const isProviderConfigured = provider === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
+  if (!isProviderConfigured) {
+    return res.status(503).json({ error: 'That payment method is not available right now.' })
+  }
+  try {
+    const studentResult = await pool.query('SELECT * FROM students WHERE public_token = $1', [req.params.token])
+    const student = studentResult.rows[0]
+    if (!student) return res.status(404).json({ error: 'Enrolment not found' })
+    const course = await getCourse(student.class_id)
+    if (!course) return res.status(400).json({ error: 'Course not found' })
+    const balance = parseFloat(course.price) - parseFloat(student.amount_paid)
+    if (balance <= 0) {
+      return res.status(400).json({ error: 'There is nothing left to pay on this enrolment.' })
+    }
+
+    if (provider === 'ozow') {
+      const { transactionReference, amountStr, fields } = ozow.buildOzowFields(student.id, balance, {
+        bankReferenceLabel: `HBH Balance ${student.id}`,
+      })
+      await pool.query(
+        `INSERT INTO ozow_payments (student_id, transaction_reference, amount, status, is_test, purpose)
+         VALUES ($1, $2, $3, 'started', $4, 'balance')`,
+        [student.id, transactionReference, amountStr, ozow.OZOW_IS_TEST]
+      )
+      return res.json({ action: 'https://pay.ozow.com/', fields })
+    }
+
+    const config = await payflex.getConfiguration()
+    if (!payflex.isAmountWithinRange(balance, config)) {
+      return res.status(400).json({
+        error: `Payflex is only available for amounts between R${config.minimumAmount} and R${config.maximumAmount}.`
+      })
+    }
+    const merchantReference = payflex.generateMerchantReference(student.id)
+    const payflexOrder = await payflex.createPayflexOrder({
+      amount: balance,
+      description: `Hair By Her training balance: ${course.name}`,
+      customerName: student.name,
+      customerPhone: student.whatsapp,
+      email: student.email,
+      merchantReference,
+      items: [{ name: `${course.name} balance`, sku: course.id, quantity: 1, price: balance }],
+    })
+    await pool.query(
+      `INSERT INTO payflex_payments (student_id, merchant_reference, payflex_order_id, amount, status, purpose)
+       VALUES ($1, $2, $3, $4, 'started', 'balance')`,
+      [student.id, merchantReference, payflexOrder.payflexOrderId, balance.toFixed(2)]
+    )
+    res.json({ redirectUrl: payflexOrder.redirectUrl })
+  } catch (err) {
+    console.error('Failed to start balance payment:', err.message)
+    res.status(500).json({ error: 'Failed to start balance payment' })
+  }
+})
+
+// Retries the most recent payment attempt exactly as it was (same provider,
+// same amount and purpose) - for when a deposit or full-price attempt was
+// cancelled or failed, before anything has been paid. Pay-balance above is
+// for a *new* balance payment once something already has been.
+app.post('/api/enrolments/:token/retry', enrolmentsLimiter, async (req, res) => {
+  try {
+    const studentResult = await pool.query('SELECT * FROM students WHERE public_token = $1', [req.params.token])
+    const student = studentResult.rows[0]
+    if (!student) return res.status(404).json({ error: 'Enrolment not found' })
+
+    const [latestOzowResult, latestPayflexResult] = await Promise.all([
+      pool.query('SELECT * FROM ozow_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]),
+      pool.query('SELECT * FROM payflex_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]),
+    ])
+    const latestOzow = latestOzowResult.rows[0]
+    const latestPayflex = latestPayflexResult.rows[0]
+    let latest = null, provider = null
+    if (latestOzow && (!latestPayflex || new Date(latestOzow.created_at) > new Date(latestPayflex.created_at))) {
+      latest = latestOzow; provider = 'ozow'
+    } else if (latestPayflex) {
+      latest = latestPayflex; provider = 'payflex'
+    }
+    if (!latest) return res.status(400).json({ error: 'There is no previous payment to retry.' })
+    if (latest.status === 'paid') return res.status(400).json({ error: 'This has already been paid.' })
+
+    const amount = parseFloat(latest.amount)
+    const course = await getCourse(student.class_id)
+
+    if (provider === 'ozow') {
+      if (!ozow.isOzowConfigured) return res.status(503).json({ error: 'Ozow payments are not available right now.' })
+      const { transactionReference, amountStr, fields } = ozow.buildOzowFields(student.id, amount, {
+        bankReferenceLabel: `HBH Training ${student.id}`,
+      })
+      await pool.query(
+        `INSERT INTO ozow_payments (student_id, transaction_reference, amount, status, is_test, purpose)
+         VALUES ($1, $2, $3, 'started', $4, $5)`,
+        [student.id, transactionReference, amountStr, ozow.OZOW_IS_TEST, latest.purpose]
+      )
+      return res.json({ action: 'https://pay.ozow.com/', fields })
+    }
+
+    if (!payflex.isPayflexConfigured) return res.status(503).json({ error: 'Payflex payments are not available right now.' })
+    const merchantReference = payflex.generateMerchantReference(student.id)
+    const payflexOrder = await payflex.createPayflexOrder({
+      amount,
+      description: `Hair By Her training: ${course ? course.name : ''}`,
+      customerName: student.name,
+      customerPhone: student.whatsapp,
+      email: student.email,
+      merchantReference,
+      items: [{ name: course ? course.name : 'Training', sku: student.class_id, quantity: 1, price: amount }],
+    })
+    await pool.query(
+      `INSERT INTO payflex_payments (student_id, merchant_reference, payflex_order_id, amount, status, purpose)
+       VALUES ($1, $2, $3, $4, 'started', $5)`,
+      [student.id, merchantReference, payflexOrder.payflexOrderId, amount.toFixed(2), latest.purpose]
+    )
+    res.json({ redirectUrl: payflexOrder.redirectUrl })
+  } catch (err) {
+    console.error('Failed to retry enrolment payment:', err.message)
+    res.status(500).json({ error: 'Failed to retry payment' })
   }
 })
 
