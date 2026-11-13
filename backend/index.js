@@ -18,6 +18,18 @@ const { cloudinary, isCloudinaryEnabled, uploadBuffer } = require('./cloudinary'
 const ozow = require('./ozow')
 const payflex = require('./payflex')
 const { normaliseSaPhone } = require('./phone')
+const siteSettingsDefaults = require('./src/siteSettings/defaults')
+const {
+  ValidationError: SiteSettingsValidationError,
+  validateAndMergeContent,
+  validateAndMergeTheme,
+  fillMissingWithDefaults,
+} = require('./src/siteSettings/schema')
+const {
+  SITE_SETTINGS_KEYS,
+  siteSettingsRolesForKey,
+  saveSiteSetting,
+} = require('./src/siteSettings/store')
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -607,6 +619,119 @@ app.get('/api/audit-logs', authenticate, requireRole('sysadmin'), async (req, re
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch audit logs' })
+  }
+})
+
+// ── Site settings ─────────────────────────────────────────────────────────────
+// Lets owner/sysadmin edit the customer site's text (content) and colours/
+// fonts (theme) from the admin dashboard, with undo via history. Content can
+// be edited by owner and sysadmin; theme is sysadmin only, same split as the
+// rest of this file's requireRole() calls.
+const requireSiteSettingsRole = (req, res, next) => {
+  if (!SITE_SETTINGS_KEYS.includes(req.params.key)) {
+    return res.status(400).json({ error: 'Unknown settings key' })
+  }
+  if (!siteSettingsRolesForKey(req.params.key).includes(req.user.role)) {
+    return res.status(403).json({ error: 'Insufficient permissions' })
+  }
+  next()
+}
+
+// Public: the customer site reads its own copy and theme from here.
+app.get('/api/site-settings', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT key, value FROM site_settings')
+    const stored = Object.fromEntries(result.rows.map((r) => [r.key, r.value]))
+    res.set('Cache-Control', 'public, max-age=60')
+    res.json({
+      content: fillMissingWithDefaults(stored.content, siteSettingsDefaults.content),
+      theme: fillMissingWithDefaults(stored.theme, siteSettingsDefaults.theme),
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch site settings' })
+  }
+})
+
+app.put('/api/admin/site-settings/content', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT value FROM site_settings WHERE key = $1', ['content'])
+    const current = rows[0] ? rows[0].value : siteSettingsDefaults.content
+    const merged = validateAndMergeContent(current, req.body)
+    await saveSiteSetting('content', merged, req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'SITE_SETTINGS_UPDATED', 'Updated site content', req.ip)
+    res.json(merged)
+  } catch (err) {
+    if (err instanceof SiteSettingsValidationError) {
+      return res.status(400).json({ error: err.message, field: err.field })
+    }
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update site content' })
+  }
+})
+
+app.put('/api/admin/site-settings/theme', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT value FROM site_settings WHERE key = $1', ['theme'])
+    const current = rows[0] ? rows[0].value : siteSettingsDefaults.theme
+    const merged = validateAndMergeTheme(current, req.body)
+    await saveSiteSetting('theme', merged, req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'SITE_SETTINGS_UPDATED', 'Updated site theme', req.ip)
+    res.json(merged)
+  } catch (err) {
+    if (err instanceof SiteSettingsValidationError) {
+      return res.status(400).json({ error: err.message, field: err.field })
+    }
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update site theme' })
+  }
+})
+
+app.get('/api/admin/site-settings/:key/history', authenticate, requireSiteSettingsRole, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT h.id, h.value, h.saved_at, u.username AS saved_by
+       FROM site_settings_history h
+       LEFT JOIN users u ON u.id = h.saved_by
+       WHERE h.key = $1
+       ORDER BY h.saved_at DESC
+       LIMIT 10`,
+      [req.params.key]
+    )
+    res.json(result.rows)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch site settings history' })
+  }
+})
+
+app.post('/api/admin/site-settings/:key/restore/:historyId', authenticate, requireSiteSettingsRole, async (req, res) => {
+  const { key, historyId } = req.params
+  try {
+    const { rows } = await pool.query(
+      'SELECT value FROM site_settings_history WHERE id = $1 AND key = $2',
+      [historyId, key]
+    )
+    if (rows.length === 0) return res.status(404).json({ error: 'History entry not found' })
+    await saveSiteSetting(key, rows[0].value, req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'SITE_SETTINGS_RESTORED',
+      `Restored ${key} from history #${historyId}`, req.ip)
+    res.json({ success: true, value: rows[0].value })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to restore site settings' })
+  }
+})
+
+app.post('/api/admin/site-settings/:key/reset', authenticate, requireSiteSettingsRole, async (req, res) => {
+  const { key } = req.params
+  try {
+    await saveSiteSetting(key, siteSettingsDefaults[key], req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'SITE_SETTINGS_RESET', `Reset ${key} to defaults`, req.ip)
+    res.json({ success: true, value: siteSettingsDefaults[key] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to reset site settings' })
   }
 })
 
