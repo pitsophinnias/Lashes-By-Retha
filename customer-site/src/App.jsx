@@ -210,6 +210,40 @@ const POLICIES = {
   ],
 }
 
+// Mirrors backend/src/siteSettings/defaults.js exactly, so the page renders
+// with these straight away (no blank flash while the API loads) and falls
+// back to them quietly if the API is ever unreachable. Keep this in sync if
+// that file's defaults ever change.
+const DEFAULT_CONTENT = {
+  hero: {
+    heading: 'Effortless Booking. Endless Beauty.',
+    subtext: 'Lash extensions, brow lamination & luxe wigs.',
+    tagline: "Hair so good, it's by her.",
+    bookButtonLabel: 'Book Now',
+    shopButtonLabel: 'Shop Products',
+  },
+  contact: {
+    addressLine1: '125 Piet Retief Boulevard, SE1',
+    addressLine2: 'Vanderbijlpark, Gauteng',
+    phone: '+27 82 685 5399',
+    email: 'lashesbyretha@gmail.com',
+    hoursLabel: 'Beauty Hours',
+    hoursLine1: 'Tuesday to Saturday',
+    hoursLine2: '8:00 AM to 5:00 PM',
+    whatsappLabel: 'WhatsApp',
+    whatsappText: 'Chat with us on WhatsApp',
+  },
+  sectionHeadings: {
+    products: 'Our Products',
+    classes: 'Lash Training',
+    gallery: 'Our Work',
+    contact: 'Contact Us',
+  },
+  footer: {
+    text: '',
+  },
+}
+
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
 // Cloudinary URLs are already absolute; local-disk URLs are relative and
@@ -248,6 +282,13 @@ const normaliseSaPhone = (input) => {
 }
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+
+// Builds the wa.me and tel: link targets from the contact card's display
+// phone number ("+27 82 685 5399"), so changing the number in Website
+// Content updates both links too.
+const phoneDigits = (phone) => String(phone || '').replace(/\D/g, '')
+const whatsAppHref = (phone) => `https://wa.me/${phoneDigits(phone)}`
+const telHref = (phone) => `tel:+${phoneDigits(phone)}`
 
 const ENROL_DATE_ERROR = 'Please choose a future Tuesday to Saturday for your preferred start date.'
 
@@ -386,6 +427,9 @@ function App() {
   // Live name/price/deposit by course id, merged over CLASSES below - the
   // descriptions and curriculum text stay hard-coded here for now.
   const [courseData, setCourseData] = useState({})
+  // Starts as DEFAULT_CONTENT so the page never shows a blank flash while
+  // the API loads, and stays on it quietly if the API fails.
+  const [siteContent, setSiteContent] = useState(DEFAULT_CONTENT)
   const [enrolFormOpenFor, setEnrolFormOpenFor] = useState(null)
   const [enrolName, setEnrolName] = useState('')
   const [enrolPhone, setEnrolPhone] = useState('')
@@ -471,6 +515,12 @@ function App() {
         data.forEach(c => { byId[c.id] = c })
         setCourseData(byId)
       })
+      .catch(() => {})
+    // If this fails, siteContent just stays on DEFAULT_CONTENT - quietly,
+    // with no error shown to the visitor.
+    fetch(`${API}/api/site-settings`)
+      .then(r => r.json())
+      .then(data => { if (data?.content) setSiteContent(data.content) })
       .catch(() => {})
   }, [backendStatus])
 
@@ -2049,11 +2099,11 @@ function App() {
       )}
 
       <section id="home" className="hero hero-section">
-        <h1 className="hero-headline hero-heading">Effortless Booking. Endless Beauty.</h1>
+        <h1 className="hero-headline hero-heading">{siteContent.hero.heading}</h1>
         <p className="hero-subtext">
-          Lash extensions, brow lamination & luxe wigs.
+          {siteContent.hero.subtext}
         </p>
-        <p className="hero-tagline">Hair so good, it's by her.</p>
+        <p className="hero-tagline">{siteContent.hero.tagline}</p>
         <div className="hero-buttons">
           <a
             className="btn btn-primary hero-btn"
@@ -2061,16 +2111,16 @@ function App() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Book Now
+            {siteContent.hero.bookButtonLabel}
           </a>
           <button className="btn btn-secondary hero-btn" onClick={scrollToShop}>
-            Shop Products
+            {siteContent.hero.shopButtonLabel}
           </button>
         </div>
       </section>
 
       <section id="shop" className="section products-section">
-        <h2 className="section-heading">Our Products</h2>
+        <h2 className="section-heading">{siteContent.sectionHeadings.products}</h2>
         {backendStatus !== 'ready' ? renderBackendStatus() : (() => {
           const grouped = []
 
@@ -2126,7 +2176,7 @@ function App() {
       </section>
 
       <section id="classes" className="section section-alt classes-section">
-        <h2 className="section-heading">Lash Training</h2>
+        <h2 className="section-heading">{siteContent.sectionHeadings.classes}</h2>
         <div className="classes-grid">
           {coursesMerged.map((cls) => (
             <div
@@ -2548,7 +2598,7 @@ function App() {
       })()}
 
       <section id="gallery" className="section section-alt gallery-section">
-        <h2 className="section-heading">Our Work</h2>
+        <h2 className="section-heading">{siteContent.sectionHeadings.gallery}</h2>
         <p className="section-text gallery-subheading">A glimpse of the sets we create</p>
         {backendStatus !== 'ready' ? renderBackendStatus() : (
         <div className="gallery-grid">
@@ -2621,7 +2671,7 @@ function App() {
               color: '#2C2C2C',
               marginBottom: '8px',
             }}>
-              Contact Us
+              {siteContent.sectionHeadings.contact}
             </h2>
             <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '8px auto 0 auto' }} />
           </div>
@@ -2633,30 +2683,30 @@ function App() {
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
               <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Address</span>
-              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>125 Piet Retief Boulevard, SE1<br />Vanderbijlpark, Gauteng</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>{siteContent.contact.addressLine1}<br />{siteContent.contact.addressLine2}</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
               <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Phone</span>
-              <span style={{ fontSize: '14px', color: '#2C2C2C' }}>+27 82 685 5399</span>
+              <a href={telHref(siteContent.contact.phone)} style={{ fontSize: '14px', color: '#2C2C2C', textDecoration: 'none' }}>{siteContent.contact.phone}</a>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Beauty Hours</span>
-              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>Tuesday to Saturday<br />8:00 AM to 5:00 PM</span>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{siteContent.contact.hoursLabel}</span>
+              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>{siteContent.contact.hoursLine1}<br />{siteContent.contact.hoursLine2}</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>WhatsApp</span>
-              <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
-                Chat with us on WhatsApp
+              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{siteContent.contact.whatsappLabel}</span>
+              <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
+                {siteContent.contact.whatsappText}
               </a>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Email</span>
-              <a href="mailto:lashesbyretha@gmail.com" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
-                lashesbyretha@gmail.com
+              <a href={`mailto:${siteContent.contact.email}`} style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
+                {siteContent.contact.email}
               </a>
             </div>
           </div>
@@ -2762,6 +2812,11 @@ function App() {
           <button className="footer-policies-link" onClick={() => openPolicies('privacy')}>Privacy</button>
           <button className="footer-policies-link" onClick={() => openPolicies('terms')}>Terms</button>
         </div>
+        {siteContent.footer.text && (
+          <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.5)', textAlign: 'center', maxWidth: '480px' }}>
+            {siteContent.footer.text}
+          </p>
+        )}
         <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>
           Hair By Her (Pty) Ltd &middot; Reg. No. 2022/273934/07
         </p>

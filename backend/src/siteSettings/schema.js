@@ -2,6 +2,8 @@
 // hand-rolled checks, no validation library, matching the rest of this
 // backend (see phone.js).
 
+const { normaliseSaPhone } = require('../../phone')
+
 // Google Fonts that suit a beauty brand. Each list includes the font
 // currently hard-coded on the customer site, so the defaults always validate.
 const HEADING_FONTS = [
@@ -32,6 +34,11 @@ class ValidationError extends Error {
 const text = (maxLength) => ({ type: 'text', maxLength })
 const hexColor = () => ({ type: 'hexColor' })
 const font = (allowed) => ({ type: 'font', allowed })
+// maxLength on these two is informational only (the admin form's character
+// counter) - the real check is the South African phone format / email shape
+// below, not a length limit.
+const phoneField = (maxLength) => ({ type: 'phone', maxLength })
+const emailField = (maxLength) => ({ type: 'email', maxLength })
 
 const CONTENT_SPEC = {
   hero: {
@@ -44,8 +51,8 @@ const CONTENT_SPEC = {
   contact: {
     addressLine1: text(60),
     addressLine2: text(60),
-    phone: text(30),
-    email: text(60),
+    phone: phoneField(20),
+    email: emailField(60),
     hoursLabel: text(30),
     hoursLine1: text(30),
     hoursLine2: text(30),
@@ -112,6 +119,24 @@ const validateLeaf = (fieldSpec, value, path) => {
     return value.trim()
   }
 
+  if (fieldSpec.type === 'phone') {
+    const normalised = typeof value === 'string' ? normaliseSaPhone(value) : null
+    if (!normalised) {
+      throw new ValidationError(path, `${path} must be a South African phone number, for example 082 123 4567`)
+    }
+    // Stored in the same spaced display format shown on the contact card -
+    // +27 82 685 5399, not the bare +27826855399 normaliseSaPhone returns.
+    const digits = normalised.slice(3)
+    return `+27 ${digits.slice(0, 2)} ${digits.slice(2, 5)} ${digits.slice(5, 9)}`
+  }
+
+  if (fieldSpec.type === 'email') {
+    if (typeof value !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) {
+      throw new ValidationError(path, `${path} must be a valid email address`)
+    }
+    return value.trim()
+  }
+
   throw new ValidationError(path, `${path} has an unsupported field type`)
 }
 
@@ -142,6 +167,20 @@ const validateAndMerge = (spec, current, input, pathPrefix) => {
 const validateAndMergeContent = (current, input) => validateAndMerge(CONTENT_SPEC, current, input, 'content')
 const validateAndMergeTheme = (current, input) => validateAndMerge(THEME_SPEC, current, input, 'theme')
 
+// Walks a spec tree, replacing every leaf with its { maxLength } - lets the
+// admin form build its character counters from the backend's own limits
+// instead of duplicating them.
+const specMaxLengths = (spec) => {
+  const result = {}
+  for (const key of Object.keys(spec)) {
+    const node = spec[key]
+    result[key] = isLeaf(node) ? { maxLength: node.maxLength } : specMaxLengths(node)
+  }
+  return result
+}
+
+const contentFieldSpec = () => specMaxLengths(CONTENT_SPEC)
+
 // Recursively fills any field missing from `value` with the matching field
 // from `defaults`, so a stored object that predates a newer field (or is
 // simply incomplete) never reaches the caller partial.
@@ -163,4 +202,5 @@ module.exports = {
   validateAndMergeContent,
   validateAndMergeTheme,
   fillMissingWithDefaults,
+  contentFieldSpec,
 }

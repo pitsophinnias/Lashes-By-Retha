@@ -24,6 +24,7 @@ const {
   validateAndMergeContent,
   validateAndMergeTheme,
   fillMissingWithDefaults,
+  contentFieldSpec,
 } = require('./src/siteSettings/schema')
 const {
   SITE_SETTINGS_KEYS,
@@ -668,6 +669,12 @@ app.put('/api/admin/site-settings/content', authenticate, requireRole('sysadmin'
     console.error(err)
     res.status(500).json({ error: 'Failed to update site content' })
   }
+})
+
+// Lets the admin's content form build its character counters from the
+// backend's own limits, instead of copying them into the frontend by hand.
+app.get('/api/admin/site-settings/content/spec', authenticate, requireRole('sysadmin', 'owner'), (req, res) => {
+  res.json(contentFieldSpec())
 })
 
 app.put('/api/admin/site-settings/theme', authenticate, requireRole('sysadmin'), async (req, res) => {
