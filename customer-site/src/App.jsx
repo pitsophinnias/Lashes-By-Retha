@@ -289,6 +289,13 @@ const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email |
 const phoneDigits = (phone) => String(phone || '').replace(/\D/g, '')
 const whatsAppHref = (phone) => `https://wa.me/${phoneDigits(phone)}`
 const telHref = (phone) => `tel:+${phoneDigits(phone)}`
+// Local format ("082 685 5399") from the same stored number, for the spots
+// that read the number aloud in a sentence rather than only linking it.
+const localPhoneDisplay = (phone) => {
+  const digits = phoneDigits(phone)
+  const national = digits.startsWith('27') ? `0${digits.slice(2)}` : digits
+  return `${national.slice(0, 3)} ${national.slice(3, 6)} ${national.slice(6, 10)}`
+}
 
 const ENROL_DATE_ERROR = 'Please choose a future Tuesday to Saturday for your preferred start date.'
 
@@ -632,7 +639,7 @@ function App() {
       return (
         <p className="backend-status-message is-error">
           We're having trouble loading our products right now. Please refresh the page, or message us on{' '}
-          <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer">WhatsApp at 082 685 5399</a>.
+          <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer">WhatsApp at {localPhoneDisplay(siteContent.contact.phone)}</a>.
         </p>
       )
     }
@@ -2250,7 +2257,7 @@ function App() {
                   </button>
                   <a
                     className="btn-enquire enquire-btn"
-                    href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
+                    href={`${whatsAppHref(siteContent.contact.phone)}?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: '#C47A8A', border: '1px solid #C47A8A' }}
@@ -2352,7 +2359,7 @@ function App() {
                 </button>
                 <a
                   className="btn-enquire enquire-btn"
-                  href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
+                  href={`${whatsAppHref(siteContent.contact.phone)}?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: '#C47A8A', border: '1px solid #C47A8A' }}
@@ -2462,8 +2469,8 @@ function App() {
                 <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '16px 20px', marginTop: '8px', marginBottom: '16px', border: '1px solid #F5DDE2' }}>
                   <p style={{ fontSize: '13px', color: '#2C2C2C', margin: 0, lineHeight: 1.7 }}>
                     Online payments are taking a short break. Please message us on{' '}
-                    <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
-                      WhatsApp at 082 685 5399
+                    <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+                      WhatsApp at {localPhoneDisplay(siteContent.contact.phone)}
                     </a>{' '}and we'll gladly help you enrol.
                   </p>
                 </div>
@@ -3462,8 +3469,8 @@ function App() {
                     >
                       <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
                         Online payments are taking a short break. Please message us on{' '}
-                        <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
-                          WhatsApp at 082 685 5399
+                        <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+                          WhatsApp at {localPhoneDisplay(siteContent.contact.phone)}
                         </a>
                         {' '}and we'll gladly help you place your order.
                       </p>
