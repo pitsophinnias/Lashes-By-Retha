@@ -212,13 +212,40 @@ test('every new preset (other than the historic default) clears the contrast che
   }
 })
 
+// Runs every preset - everyday and occasion alike - through the full theme
+// validation (hex shape, allowed fonts), not just the contrast check above.
+test('every preset passes validateAndMergeTheme', () => {
+  for (const preset of THEME_PRESETS) {
+    assert.doesNotThrow(
+      () => validateAndMergeTheme(defaults.theme, { colors: preset.colors, fonts: preset.fonts }),
+      `${preset.name} should pass full theme validation`
+    )
+  }
+})
+
+test('occasion presets carry a group and a period; everyday presets do not carry a period', () => {
+  const occasionNames = [
+    'New Year', "Valentine's Day", 'Easter', 'Freedom Day', "Mother's Day",
+    "Women's Month", 'Heritage Day', 'Black Friday', 'Festive Season',
+  ]
+  const occasions = THEME_PRESETS.filter(p => occasionNames.includes(p.name))
+  assert.strictEqual(occasions.length, occasionNames.length)
+  for (const preset of occasions) {
+    assert.strictEqual(preset.group, 'occasion')
+    assert.ok(preset.period && preset.period.length > 0, `${preset.name} should have a period`)
+  }
+  for (const preset of THEME_PRESETS.filter(p => !occasionNames.includes(p.name))) {
+    assert.strictEqual(preset.group, 'everyday')
+  }
+})
+
 // ── Theme field spec ─────────────────────────────────────────────────────────
 
-test('themeFieldSpec returns the allowed fonts and the preset list', () => {
+test('themeFieldSpec returns the allowed fonts and the full preset list', () => {
   const spec = themeFieldSpec()
   assert.ok(spec.headingFonts.includes('Cormorant Garamond'))
   assert.ok(spec.bodyFonts.includes('Lato'))
-  assert.strictEqual(spec.presets.length, 4)
+  assert.strictEqual(spec.presets.length, 13)
   assert.ok(spec.presets.some(p => p.name === 'Hair By Her Rose'))
 })
 

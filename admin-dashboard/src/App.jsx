@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
@@ -197,6 +197,320 @@ function SettingsSaveBar({ onSave, dirty, saving, note }) {
   )
 }
 
+// The Website Content page - a single self-contained component so both
+// App.jsx (owner) and SysAdminDashboard.jsx (sysadmin) render the exact
+// same thing rather than two copies. It fetches everything it needs itself;
+// the host only has to supply apiFetch (for its own auth) and
+// onDiscardNavigate (what "leave without saving" should actually do to the
+// host's own page state). The ref exposes isDirty/requestLeave so the
+// host's sidebar can guard navigation without knowing this page's internals.
+const WebsiteContentPage = forwardRef(function WebsiteContentPage({ apiFetch, onDiscardNavigate }, ref) {
+  const [contentSaved, setContentSaved] = useState(DEFAULT_CONTENT)
+  const [contentDraft, setContentDraft] = useState(DEFAULT_CONTENT)
+  const [previewTheme, setPreviewTheme] = useState(DEFAULT_THEME)
+  const [contentSpecLimits, setContentSpecLimits] = useState(null)
+  const [contentSaving, setContentSaving] = useState(false)
+  const [contentFieldErrors, setContentFieldErrors] = useState({})
+  const [contentSaveNote, setContentSaveNote] = useState('')
+  const [contentHistory, setContentHistory] = useState([])
+  const [contentHistoryLoading, setContentHistoryLoading] = useState(false)
+  // { type: 'restore', historyId } | { type: 'reset' } | { type: 'leave', target } | null
+  const [contentConfirm, setContentConfirm] = useState(null)
+  const contentDirty = JSON.stringify(contentDraft) !== JSON.stringify(contentSaved)
+
+  const fetchContentHistory = async () => {
+    setContentHistoryLoading(true)
+    try {
+      const res = await apiFetch('/api/admin/site-settings/content/history')
+      const data = await res.json()
+      if (res.ok && Array.isArray(data)) setContentHistory(data)
+    } catch {
+      // silent fail
+    } finally {
+      setContentHistoryLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    // Public endpoint - also used for the preview's colours/fonts, so this
+    // page never has to depend on the host dashboard's own theme state.
+    fetch(`${API}/api/site-settings`)
+      .then(r => r.json())
+      .then(data => {
+        if (data?.content) {
+          setContentSaved(data.content)
+          setContentDraft(data.content)
+        }
+        if (data?.theme) setPreviewTheme(data.theme)
+      })
+      .catch(() => {})
+    apiFetch('/api/admin/site-settings/content/spec')
+      .then(r => r.json())
+      .then(data => setContentSpecLimits(data))
+      .catch(() => {})
+    fetchContentHistory()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // path is e.g. "hero.heading" or "contact.phone"
+  const updateContentField = (path, value) => {
+    const [section, field] = path.split('.')
+    setContentDraft(prev => ({ ...prev, [section]: { ...prev[section], [field]: value } }))
+    setContentFieldErrors(prev => {
+      if (!prev[path]) return prev
+      const next = { ...prev }
+      delete next[path]
+      return next
+    })
+  }
+
+  const saveContent = async () => {
+    setContentSaving(true)
+    setContentSaveNote('')
+    setContentFieldErrors({})
+    try {
+      const res = await apiFetch('/api/admin/site-settings/content', {
+        method: 'PUT',
+        body: JSON.stringify(contentDraft),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setContentSaved(data)
+        setContentDraft(data)
+        setContentSaveNote('Saved. Changes show on the website within about a minute.')
+        fetchContentHistory()
+      } else if (data.field) {
+        setContentFieldErrors({ [data.field.replace(/^content\./, '')]: data.error })
+      } else {
+        setContentSaveNote(data.error || 'Failed to save changes.')
+      }
+    } catch {
+      setContentSaveNote('Failed to save changes.')
+    } finally {
+      setContentSaving(false)
+    }
+  }
+
+  const restoreContentVersion = async (historyId) => {
+    setContentSaving(true)
+    try {
+      const res = await apiFetch(`/api/admin/site-settings/content/restore/${historyId}`, { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        setContentSaved(data.value)
+        setContentDraft(data.value)
+        setContentSaveNote('Restored. Changes show on the website within about a minute.')
+        fetchContentHistory()
+      } else {
+        setContentSaveNote(data.error || 'Failed to restore that version.')
+      }
+    } catch {
+      setContentSaveNote('Failed to restore that version.')
+    } finally {
+      setContentSaving(false)
+      setContentConfirm(null)
+    }
+  }
+
+  const resetContentToDefaults = async () => {
+    setContentSaving(true)
+    try {
+      const res = await apiFetch('/api/admin/site-settings/content/reset', { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        setContentSaved(data.value)
+        setContentDraft(data.value)
+        setContentSaveNote('Reset to defaults. Changes show on the website within about a minute.')
+        fetchContentHistory()
+      } else {
+        setContentSaveNote(data.error || 'Failed to reset to defaults.')
+      }
+    } catch {
+      setContentSaveNote('Failed to reset to defaults.')
+    } finally {
+      setContentSaving(false)
+      setContentConfirm(null)
+    }
+  }
+
+  useImperativeHandle(ref, () => ({
+    isDirty: () => contentDirty,
+    requestLeave: (target) => {
+      if (contentDirty) setContentConfirm({ type: 'leave', target })
+      else onDiscardNavigate(target)
+    },
+  }))
+
+  const errorFor = (path) => contentFieldErrors[path]
+  const maxLenFor = (section, field) => contentSpecLimits?.[section]?.[field]?.maxLength
+
+  const fieldRow = (label, section, field, { multiline } = {}) => {
+    const path = `${section}.${field}`
+    const value = contentDraft[section][field]
+    const maxLen = maxLenFor(section, field)
+    const error = errorFor(path)
+    const inputStyle = {
+      width: '100%', padding: '10px 14px', borderRadius: 8,
+      border: `1px solid ${error ? '#C47A8A' : '#EDD5DB'}`, fontSize: 13, fontFamily: 'inherit',
+      color: '#2C1A20', background: 'white', outline: 'none', boxSizing: 'border-box',
+    }
+    return (
+      <div key={path} style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</label>
+          {maxLen != null && (
+            <span style={{ fontSize: 11, color: value.length > maxLen ? '#C47A8A' : '#C4A0A8' }}>
+              {value.length}/{maxLen}
+            </span>
+          )}
+        </div>
+        {multiline ? (
+          <textarea
+            value={value}
+            onChange={e => updateContentField(path, e.target.value)}
+            rows={2}
+            style={{ ...inputStyle, resize: 'vertical' }}
+          />
+        ) : (
+          <input type="text" value={value} onChange={e => updateContentField(path, e.target.value)} style={inputStyle} />
+        )}
+        {error && <div style={{ fontSize: 12, color: '#C47A8A', marginTop: 4 }}>{error}</div>}
+      </div>
+    )
+  }
+
+  const panelStyle = { background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)', marginBottom: 20 }
+  const groupTitleStyle = { fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }
+
+  return (
+    <div>
+      <div style={{
+        background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
+        borderRadius: 14, padding: '24px 28px', marginBottom: 20, color: 'white',
+      }}>
+        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Website Content</div>
+        <div style={{ fontSize: 13, opacity: 0.85 }}>Changes show on the website within about a minute.</div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <div style={{ flex: '1 1 420px', minWidth: 320 }}>
+          <div style={panelStyle}>
+            <div style={groupTitleStyle}>Hero</div>
+            {fieldRow('Heading', 'hero', 'heading')}
+            {fieldRow('Subtext', 'hero', 'subtext', { multiline: true })}
+            {fieldRow('Tagline', 'hero', 'tagline')}
+            {fieldRow('Book Button Label', 'hero', 'bookButtonLabel')}
+            {fieldRow('Shop Button Label', 'hero', 'shopButtonLabel')}
+          </div>
+
+          <div style={panelStyle}>
+            <div style={groupTitleStyle}>Contact</div>
+            {fieldRow('Address Line 1', 'contact', 'addressLine1')}
+            {fieldRow('Address Line 2', 'contact', 'addressLine2')}
+            {fieldRow('Phone', 'contact', 'phone')}
+            {fieldRow('Email', 'contact', 'email')}
+            {fieldRow('Hours Label', 'contact', 'hoursLabel')}
+            {fieldRow('Hours Line 1', 'contact', 'hoursLine1')}
+            {fieldRow('Hours Line 2', 'contact', 'hoursLine2')}
+            {fieldRow('WhatsApp Label', 'contact', 'whatsappLabel')}
+            {fieldRow('WhatsApp Text', 'contact', 'whatsappText')}
+          </div>
+
+          <div style={panelStyle}>
+            <div style={groupTitleStyle}>Section Headings</div>
+            {fieldRow('Products', 'sectionHeadings', 'products')}
+            {fieldRow('Classes', 'sectionHeadings', 'classes')}
+            {fieldRow('Gallery', 'sectionHeadings', 'gallery')}
+            {fieldRow('Contact', 'sectionHeadings', 'contact')}
+          </div>
+
+          <div style={panelStyle}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Footer</div>
+            <div style={{ fontSize: 12, color: '#9A8A8E', marginBottom: 16 }}>Optional - only shows on the site if it isn't empty.</div>
+            {fieldRow('Footer Text', 'footer', 'text', { multiline: true })}
+          </div>
+
+          <SettingsSaveBar onSave={saveContent} dirty={contentDirty} saving={contentSaving} note={contentSaveNote} />
+
+          <SettingsHistoryPanel
+            history={contentHistory}
+            loading={contentHistoryLoading}
+            onReset={() => setContentConfirm({ type: 'reset' })}
+            onRestore={(historyId) => setContentConfirm({ type: 'restore', historyId })}
+          />
+        </div>
+
+        <div style={{ flex: '1 1 320px', minWidth: 280 }}>
+          <div style={{ position: 'sticky', top: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+              Preview
+            </div>
+            <div style={{ background: previewTheme.colors.background, borderRadius: 16, padding: 28, border: `1px solid ${previewTheme.colors.navBackground}` }}>
+              <div style={{ fontFamily: `'${previewTheme.fonts.heading}', serif`, fontSize: 26, fontWeight: 700, color: previewTheme.colors.text, marginBottom: 8, lineHeight: 1.2 }}>
+                {contentDraft.hero.heading}
+              </div>
+              <div style={{ fontFamily: `'${previewTheme.fonts.body}', sans-serif`, fontSize: 14, color: previewTheme.colors.mutedText, marginBottom: 6 }}>
+                {contentDraft.hero.subtext}
+              </div>
+              <div style={{ fontFamily: `'${previewTheme.fonts.heading}', serif`, fontStyle: 'italic', fontSize: 14, color: previewTheme.colors.accent, marginBottom: 20 }}>
+                {contentDraft.hero.tagline}
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
+                <span style={{ background: previewTheme.colors.accent, color: 'white', padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
+                  {contentDraft.hero.bookButtonLabel}
+                </span>
+                <span style={{ border: `1px solid ${previewTheme.colors.accent}`, color: previewTheme.colors.accent, padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
+                  {contentDraft.hero.shopButtonLabel}
+                </span>
+              </div>
+
+              <div style={{ background: 'white', borderRadius: 12, padding: 20, border: `1px solid ${previewTheme.colors.navBackground}` }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: previewTheme.colors.accent, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 14 }}>
+                  Get in Touch
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>Address</div>
+                  <div style={{ fontSize: 13, color: previewTheme.colors.text }}>{contentDraft.contact.addressLine1}<br />{contentDraft.contact.addressLine2}</div>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>Phone</div>
+                  <div style={{ fontSize: 13, color: previewTheme.colors.text }}>{contentDraft.contact.phone}</div>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>{contentDraft.contact.hoursLabel}</div>
+                  <div style={{ fontSize: 13, color: previewTheme.colors.text }}>{contentDraft.contact.hoursLine1}<br />{contentDraft.contact.hoursLine2}</div>
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>{contentDraft.contact.whatsappLabel}</div>
+                  <div style={{ fontSize: 13, color: previewTheme.colors.accent, fontWeight: 600 }}>{contentDraft.contact.whatsappText}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>Email</div>
+                  <div style={{ fontSize: 13, color: previewTheme.colors.accent, fontWeight: 600 }}>{contentDraft.contact.email}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <SettingsConfirmModal
+        confirm={contentConfirm}
+        itemLabel="website content"
+        onCancel={() => setContentConfirm(null)}
+        onDiscard={(target) => {
+          setContentDraft(contentSaved)
+          setContentFieldErrors({})
+          setContentConfirm(null)
+          onDiscardNavigate(target)
+        }}
+        onRestore={restoreContentVersion}
+        onReset={resetContentToDefaults}
+      />
+    </div>
+  )
+})
+
 export default function App({ user, onLogout }) {
   const [activePage, setActivePage] = useState('dashboard')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -259,24 +573,10 @@ export default function App({ user, onLogout }) {
   const [courseData, setCourseData] = useState({})
   const coursesMerged = CLASSES.map(c => ({ ...c, ...(courseData[c.id] || {}) }))
 
-  // ── Website Content ──────────────────────────────────────────────────────
-  const [contentSaved, setContentSaved] = useState(DEFAULT_CONTENT) // last known-saved value, for the dirty check
-  const [contentDraft, setContentDraft] = useState(DEFAULT_CONTENT) // what the form is currently showing
-  const [contentSpecLimits, setContentSpecLimits] = useState(null)
-  const [contentLoading, setContentLoading] = useState(true)
-  const [contentSaving, setContentSaving] = useState(false)
-  const [contentFieldErrors, setContentFieldErrors] = useState({})
-  const [contentSaveNote, setContentSaveNote] = useState('')
-  const [contentHistory, setContentHistory] = useState([])
-  const [contentHistoryLoading, setContentHistoryLoading] = useState(false)
-  // { type: 'restore', historyId } | { type: 'reset' } | { type: 'leave', target } | null
-  const [contentConfirm, setContentConfirm] = useState(null)
-  const contentDirty = JSON.stringify(contentDraft) !== JSON.stringify(contentSaved)
-
-  // The Theme page itself lives in SysAdminDashboard.jsx - sysadmin never
-  // renders this component at all (see main.jsx), so it would be unreachable
-  // here. Only the live saved theme stays, for the Website Content preview.
-  const [themeSaved, setThemeSaved] = useState(DEFAULT_THEME)
+  // The Website Content page itself is the shared WebsiteContentPage
+  // component above - only a ref to it lives here, for the sidebar's
+  // unsaved-changes guard.
+  const contentPageRef = useRef(null)
 
   // The amount of an order that is the business's own revenue - excludes
   // the delivery fee, which is passed straight through to the courier.
@@ -432,41 +732,18 @@ export default function App({ user, onLogout }) {
         else setArchivedNotifications([])
       })
       .catch(() => {})
-    // Website Content and Theme - public endpoint, but each page's own spec
-    // and history are owner/sysadmin (content) or sysadmin (theme) only.
-    fetch(`${API}/api/site-settings`)
-      .then(r => r.json())
-      .then(data => {
-        if (data?.content) {
-          setContentSaved(data.content)
-          setContentDraft(data.content)
-        }
-        if (data?.theme) {
-          setThemeSaved(data.theme)
-          setThemeDraft(data.theme)
-        }
-      })
-      .catch(() => {})
-      .finally(() => setContentLoading(false))
-    if (user?.role !== 'staff') {
-      apiFetch('/api/admin/site-settings/content/spec')
-        .then(r => r.json())
-        .then(data => setContentSpecLimits(data))
-        .catch(() => {})
-      fetchContentHistory()
-    }
     fetchOrders()
   }, [])
 
   // Warns before closing the tab or refreshing with unsaved Website Content
   // changes - in-app navigation away is instead caught by navigateTo above.
   useEffect(() => {
-    const dirty = activePage === 'content' && contentDirty
-    if (!dirty) return
-    const handler = (e) => { e.preventDefault(); e.returnValue = '' }
+    const handler = (e) => {
+      if (activePage === 'content' && contentPageRef.current?.isDirty()) { e.preventDefault(); e.returnValue = '' }
+    }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [activePage, contentDirty])
+  }, [activePage])
 
   // Product images and positions depend on the product catalog having loaded.
   useEffect(() => {
@@ -885,107 +1162,12 @@ export default function App({ user, onLogout }) {
     }
   }
 
-  // ── Website Content ──────────────────────────────────────────────────────
-  const fetchContentHistory = async () => {
-    setContentHistoryLoading(true)
-    try {
-      const res = await apiFetch('/api/admin/site-settings/content/history')
-      const data = await res.json()
-      if (res.ok && Array.isArray(data)) setContentHistory(data)
-    } catch {
-      // silent fail
-    } finally {
-      setContentHistoryLoading(false)
-    }
-  }
-
-  // path is e.g. "hero.heading" or "contact.phone"
-  const updateContentField = (path, value) => {
-    const [section, field] = path.split('.')
-    setContentDraft(prev => ({ ...prev, [section]: { ...prev[section], [field]: value } }))
-    setContentFieldErrors(prev => {
-      if (!prev[path]) return prev
-      const next = { ...prev }
-      delete next[path]
-      return next
-    })
-  }
-
-  const saveContent = async () => {
-    setContentSaving(true)
-    setContentSaveNote('')
-    setContentFieldErrors({})
-    try {
-      const res = await apiFetch('/api/admin/site-settings/content', {
-        method: 'PUT',
-        body: JSON.stringify(contentDraft),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setContentSaved(data)
-        setContentDraft(data)
-        setContentSaveNote('Saved. Changes show on the website within about a minute.')
-        fetchContentHistory()
-      } else if (data.field) {
-        setContentFieldErrors({ [data.field.replace(/^content\./, '')]: data.error })
-      } else {
-        setContentSaveNote(data.error || 'Failed to save changes.')
-      }
-    } catch {
-      setContentSaveNote('Failed to save changes.')
-    } finally {
-      setContentSaving(false)
-    }
-  }
-
-  const restoreContentVersion = async (historyId) => {
-    setContentSaving(true)
-    try {
-      const res = await apiFetch(`/api/admin/site-settings/content/restore/${historyId}`, { method: 'POST' })
-      const data = await res.json()
-      if (res.ok) {
-        setContentSaved(data.value)
-        setContentDraft(data.value)
-        setContentSaveNote('Restored. Changes show on the website within about a minute.')
-        fetchContentHistory()
-      } else {
-        setContentSaveNote(data.error || 'Failed to restore that version.')
-      }
-    } catch {
-      setContentSaveNote('Failed to restore that version.')
-    } finally {
-      setContentSaving(false)
-      setContentConfirm(null)
-    }
-  }
-
-  const resetContentToDefaults = async () => {
-    setContentSaving(true)
-    try {
-      const res = await apiFetch('/api/admin/site-settings/content/reset', { method: 'POST' })
-      const data = await res.json()
-      if (res.ok) {
-        setContentSaved(data.value)
-        setContentDraft(data.value)
-        setContentSaveNote('Reset to defaults. Changes show on the website within about a minute.')
-        fetchContentHistory()
-      } else {
-        setContentSaveNote(data.error || 'Failed to reset to defaults.')
-      }
-    } catch {
-      setContentSaveNote('Failed to reset to defaults.')
-    } finally {
-      setContentSaving(false)
-      setContentConfirm(null)
-    }
-  }
-
   // Intercepts sidebar navigation away from an unsaved Website Content page -
-  // goes through the in-page confirmation rather than switching pages
-  // straight away.
+  // delegates to the page's own ref, which shows its in-page confirmation
+  // rather than switching pages straight away if there's anything unsaved.
   const navigateTo = (value) => {
-    if (activePage === 'content' && contentDirty && value !== 'content') {
-      setContentConfirm({ type: 'leave', target: value })
+    if (activePage === 'content' && value !== 'content' && contentPageRef.current) {
+      contentPageRef.current.requestLeave(value)
       return
     }
     setActivePage(value)
@@ -3111,177 +3293,13 @@ export default function App({ user, onLogout }) {
               )
             })()}
 
-            {activePage === 'content' && user?.role !== 'staff' && (() => {
-              const errorFor = (path) => contentFieldErrors[path]
-              const maxLenFor = (section, field) => contentSpecLimits?.[section]?.[field]?.maxLength
-
-              const fieldRow = (label, section, field, { multiline } = {}) => {
-                const path = `${section}.${field}`
-                const value = contentDraft[section][field]
-                const maxLen = maxLenFor(section, field)
-                const error = errorFor(path)
-                const inputStyle = {
-                  width: '100%', padding: '10px 14px', borderRadius: 8,
-                  border: `1px solid ${error ? '#C47A8A' : '#EDD5DB'}`, fontSize: 13, fontFamily: 'inherit',
-                  color: '#2C1A20', background: 'white', outline: 'none', boxSizing: 'border-box',
-                }
-                return (
-                  <div key={path} style={{ marginBottom: 16 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</label>
-                      {maxLen != null && (
-                        <span style={{ fontSize: 11, color: value.length > maxLen ? '#C47A8A' : '#C4A0A8' }}>
-                          {value.length}/{maxLen}
-                        </span>
-                      )}
-                    </div>
-                    {multiline ? (
-                      <textarea
-                        value={value}
-                        onChange={e => updateContentField(path, e.target.value)}
-                        rows={2}
-                        style={{ ...inputStyle, resize: 'vertical' }}
-                      />
-                    ) : (
-                      <input type="text" value={value} onChange={e => updateContentField(path, e.target.value)} style={inputStyle} />
-                    )}
-                    {error && <div style={{ fontSize: 12, color: '#C47A8A', marginTop: 4 }}>{error}</div>}
-                  </div>
-                )
-              }
-
-              const panelStyle = { background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)', marginBottom: 20 }
-              const groupTitleStyle = { fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }
-
-              return (
-                <div>
-                  <div style={{
-                    background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
-                    borderRadius: 14, padding: '24px 28px', marginBottom: 20, color: 'white',
-                  }}>
-                    <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Website Content</div>
-                    <div style={{ fontSize: 13, opacity: 0.85 }}>Changes show on the website within about a minute.</div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                    <div style={{ flex: '1 1 420px', minWidth: 320 }}>
-                      <div style={panelStyle}>
-                        <div style={groupTitleStyle}>Hero</div>
-                        {fieldRow('Heading', 'hero', 'heading')}
-                        {fieldRow('Subtext', 'hero', 'subtext', { multiline: true })}
-                        {fieldRow('Tagline', 'hero', 'tagline')}
-                        {fieldRow('Book Button Label', 'hero', 'bookButtonLabel')}
-                        {fieldRow('Shop Button Label', 'hero', 'shopButtonLabel')}
-                      </div>
-
-                      <div style={panelStyle}>
-                        <div style={groupTitleStyle}>Contact</div>
-                        {fieldRow('Address Line 1', 'contact', 'addressLine1')}
-                        {fieldRow('Address Line 2', 'contact', 'addressLine2')}
-                        {fieldRow('Phone', 'contact', 'phone')}
-                        {fieldRow('Email', 'contact', 'email')}
-                        {fieldRow('Hours Label', 'contact', 'hoursLabel')}
-                        {fieldRow('Hours Line 1', 'contact', 'hoursLine1')}
-                        {fieldRow('Hours Line 2', 'contact', 'hoursLine2')}
-                        {fieldRow('WhatsApp Label', 'contact', 'whatsappLabel')}
-                        {fieldRow('WhatsApp Text', 'contact', 'whatsappText')}
-                      </div>
-
-                      <div style={panelStyle}>
-                        <div style={groupTitleStyle}>Section Headings</div>
-                        {fieldRow('Products', 'sectionHeadings', 'products')}
-                        {fieldRow('Classes', 'sectionHeadings', 'classes')}
-                        {fieldRow('Gallery', 'sectionHeadings', 'gallery')}
-                        {fieldRow('Contact', 'sectionHeadings', 'contact')}
-                      </div>
-
-                      <div style={panelStyle}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Footer</div>
-                        <div style={{ fontSize: 12, color: '#9A8A8E', marginBottom: 16 }}>Optional - only shows on the site if it isn't empty.</div>
-                        {fieldRow('Footer Text', 'footer', 'text', { multiline: true })}
-                      </div>
-
-                      <SettingsSaveBar onSave={saveContent} dirty={contentDirty} saving={contentSaving} note={contentSaveNote} />
-
-                      <SettingsHistoryPanel
-                        history={contentHistory}
-                        loading={contentHistoryLoading}
-                        onReset={() => setContentConfirm({ type: 'reset' })}
-                        onRestore={(historyId) => setContentConfirm({ type: 'restore', historyId })}
-                      />
-                    </div>
-
-                    <div style={{ flex: '1 1 320px', minWidth: 280 }}>
-                      <div style={{ position: 'sticky', top: 20 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-                          Preview
-                        </div>
-                        <div style={{ background: themeSaved.colors.background, borderRadius: 16, padding: 28, border: `1px solid ${themeSaved.colors.navBackground}` }}>
-                          <div style={{ fontFamily: `'${themeSaved.fonts.heading}', serif`, fontSize: 26, fontWeight: 700, color: themeSaved.colors.text, marginBottom: 8, lineHeight: 1.2 }}>
-                            {contentDraft.hero.heading}
-                          </div>
-                          <div style={{ fontFamily: `'${themeSaved.fonts.body}', sans-serif`, fontSize: 14, color: themeSaved.colors.mutedText, marginBottom: 6 }}>
-                            {contentDraft.hero.subtext}
-                          </div>
-                          <div style={{ fontFamily: `'${themeSaved.fonts.heading}', serif`, fontStyle: 'italic', fontSize: 14, color: themeSaved.colors.accent, marginBottom: 20 }}>
-                            {contentDraft.hero.tagline}
-                          </div>
-                          <div style={{ display: 'flex', gap: 10, marginBottom: 28, flexWrap: 'wrap' }}>
-                            <span style={{ background: themeSaved.colors.accent, color: 'white', padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
-                              {contentDraft.hero.bookButtonLabel}
-                            </span>
-                            <span style={{ border: `1px solid ${themeSaved.colors.accent}`, color: themeSaved.colors.accent, padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
-                              {contentDraft.hero.shopButtonLabel}
-                            </span>
-                          </div>
-
-                          <div style={{ background: 'white', borderRadius: 12, padding: 20, border: `1px solid ${themeSaved.colors.navBackground}` }}>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: themeSaved.colors.accent, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 14 }}>
-                              Get in Touch
-                            </div>
-                            <div style={{ marginBottom: 10 }}>
-                              <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>Address</div>
-                              <div style={{ fontSize: 13, color: themeSaved.colors.text }}>{contentDraft.contact.addressLine1}<br />{contentDraft.contact.addressLine2}</div>
-                            </div>
-                            <div style={{ marginBottom: 10 }}>
-                              <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>Phone</div>
-                              <div style={{ fontSize: 13, color: themeSaved.colors.text }}>{contentDraft.contact.phone}</div>
-                            </div>
-                            <div style={{ marginBottom: 10 }}>
-                              <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>{contentDraft.contact.hoursLabel}</div>
-                              <div style={{ fontSize: 13, color: themeSaved.colors.text }}>{contentDraft.contact.hoursLine1}<br />{contentDraft.contact.hoursLine2}</div>
-                            </div>
-                            <div style={{ marginBottom: 10 }}>
-                              <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>{contentDraft.contact.whatsappLabel}</div>
-                              <div style={{ fontSize: 13, color: themeSaved.colors.accent, fontWeight: 600 }}>{contentDraft.contact.whatsappText}</div>
-                            </div>
-                            <div>
-                              <div style={{ fontSize: 9, fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase' }}>Email</div>
-                              <div style={{ fontSize: 13, color: themeSaved.colors.accent, fontWeight: 600 }}>{contentDraft.contact.email}</div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <SettingsConfirmModal
-                    confirm={contentConfirm}
-                    itemLabel="website content"
-                    onCancel={() => setContentConfirm(null)}
-                    onDiscard={(target) => {
-                      setContentDraft(contentSaved)
-                      setContentFieldErrors({})
-                      setContentConfirm(null)
-                      setActivePage(target)
-                      setMobileNavOpen(false)
-                    }}
-                    onRestore={restoreContentVersion}
-                    onReset={resetContentToDefaults}
-                  />
-                </div>
-              )
-            })()}
+            {activePage === 'content' && user?.role !== 'staff' && (
+              <WebsiteContentPage
+                ref={contentPageRef}
+                apiFetch={apiFetch}
+                onDiscardNavigate={(target) => { setActivePage(target); setMobileNavOpen(false) }}
+              />
+            )}
 
             {activePage === 'orders' && (
               <div>
@@ -3961,11 +3979,11 @@ export default function App({ user, onLogout }) {
   )
 }
 
-// Shared with SysAdminDashboard.jsx's Theme page - sysadmin never renders
-// this component (see main.jsx), so the Theme page itself lives there, but
-// these pieces (and the Website Content page here) stay in sync by using
-// the exact same components, constants and contrast maths.
+// Shared with SysAdminDashboard.jsx - sysadmin never renders this component
+// (see main.jsx), so its Theme page lives there, and it renders this exact
+// same WebsiteContentPage rather than a copy of it.
 export {
+  WebsiteContentPage,
   SettingsConfirmModal,
   SettingsHistoryPanel,
   SettingsSaveBar,

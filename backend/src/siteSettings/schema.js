@@ -87,28 +87,97 @@ const THEME_SPEC = {
 
 // Curated starting points for the Theme page - each one's own colours
 // clear the contrast check below on their own. "Hair By Her Rose" is the
-// current default; the others are soft beauty palettes picked to suit the
+// current default; the rest are soft beauty palettes picked to suit the
 // same brand. Fonts are included so a preset button fills the whole form.
+// "everyday" presets suit any time of year; "occasion" presets are tied to
+// a date or month, shown as `period` under the preset's name in the admin.
 const THEME_PRESETS = [
   {
     name: 'Hair By Her Rose',
+    group: 'everyday',
     colors: { background: '#FFFAF8', accent: '#C47A8A', navBackground: '#FDF0F3', text: '#2C2C2C', mutedText: '#7A6670' },
     fonts: { heading: 'Cormorant Garamond', body: 'Lato' },
   },
   {
     name: 'Nude Blush',
+    group: 'everyday',
     colors: { background: '#FBF4EF', accent: '#8C5A4A', navBackground: '#F3E3D8', text: '#3A2B23', mutedText: '#7D6356' },
     fonts: { heading: 'Playfair Display', body: 'Nunito Sans' },
   },
   {
     name: 'Lavender Dusk',
+    group: 'everyday',
     colors: { background: '#F7F5FC', accent: '#7E6A9C', navBackground: '#ECE6F5', text: '#2E2A38', mutedText: '#6B6178' },
     fonts: { heading: 'Italiana', body: 'Jost' },
   },
   {
     name: 'Champagne Gold',
+    group: 'everyday',
     colors: { background: '#FFFBF2', accent: '#8A6324', navBackground: '#F6EDD8', text: '#2E2A1F', mutedText: '#7A6F56' },
     fonts: { heading: 'Marcellus', body: 'Work Sans' },
+  },
+  {
+    name: 'New Year',
+    group: 'occasion',
+    period: '1 January',
+    colors: { background: '#FFFCF5', accent: '#7A5F20', navBackground: '#F7EFD9', text: '#332B1A', mutedText: '#7A6A42' },
+    fonts: { heading: 'Prata', body: 'Quicksand' },
+  },
+  {
+    name: "Valentine's Day",
+    group: 'occasion',
+    period: '14 February',
+    colors: { background: '#FFF5F6', accent: '#9E2A42', navBackground: '#FBE0E6', text: '#3A1620', mutedText: '#8A5560' },
+    fonts: { heading: 'Cormorant', body: 'Mulish' },
+  },
+  {
+    name: 'Easter',
+    group: 'occasion',
+    period: 'March or April',
+    colors: { background: '#FFFDF2', accent: '#6E5586', navBackground: '#EAF5EC', text: '#332E3D', mutedText: '#7A7488' },
+    fonts: { heading: 'Marcellus', body: 'Quicksand' },
+  },
+  {
+    name: 'Freedom Day',
+    group: 'occasion',
+    period: '27 April',
+    colors: { background: '#FBFAF4', accent: '#5C7A52', navBackground: '#EDF0E2', text: '#26301F', mutedText: '#6B7560' },
+    fonts: { heading: 'Playfair Display', body: 'Mulish' },
+  },
+  {
+    name: "Mother's Day",
+    group: 'occasion',
+    period: '2nd Sunday of May',
+    colors: { background: '#FFF8F3', accent: '#9C5A42', navBackground: '#FBE8DD', text: '#3A2821', mutedText: '#8A6A5C' },
+    fonts: { heading: 'Cormorant Garamond', body: 'Nunito Sans' },
+  },
+  {
+    name: "Women's Month",
+    group: 'occasion',
+    period: 'August - 9 August',
+    colors: { background: '#FAF7FC', accent: '#6B4A8A', navBackground: '#ECE3F3', text: '#2A2033', mutedText: '#6E5E80' },
+    fonts: { heading: 'Italiana', body: 'Jost' },
+  },
+  {
+    name: 'Heritage Day',
+    group: 'occasion',
+    period: '24 September',
+    colors: { background: '#FBF6EE', accent: '#A85A32', navBackground: '#F0E4D2', text: '#2E2418', mutedText: '#7A6248' },
+    fonts: { heading: 'Cormorant', body: 'Work Sans' },
+  },
+  {
+    name: 'Black Friday',
+    group: 'occasion',
+    period: 'Late November',
+    colors: { background: '#FAF8F7', accent: '#3A3632', navBackground: '#EDE3DD', text: '#211F1D', mutedText: '#70645C' },
+    fonts: { heading: 'Prata', body: 'Jost' },
+  },
+  {
+    name: 'Festive Season',
+    group: 'occasion',
+    period: 'December',
+    colors: { background: '#FFFAF6', accent: '#8C2A33', navBackground: '#E3EADD', text: '#2A1F1A', mutedText: '#7A6A5C' },
+    fonts: { heading: 'Playfair Display', body: 'Lato' },
   },
 ]
 

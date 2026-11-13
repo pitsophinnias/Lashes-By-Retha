@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
+  WebsiteContentPage,
   SettingsConfirmModal,
   SettingsHistoryPanel,
   SettingsSaveBar,
@@ -15,6 +16,10 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [users, setUsers] = useState([])
   const [roles, setRoles] = useState([])
+  // The Website Content page itself is the shared WebsiteContentPage
+  // component - only a ref to it lives here, for the sidebar's
+  // unsaved-changes guard.
+  const contentPageRef = useRef(null)
   // ── Theme ─────────────────────────────────────────────────────────────────
   const [themeSaved, setThemeSaved] = useState(DEFAULT_THEME)
   const [themeDraft, setThemeDraft] = useState(DEFAULT_THEME)
@@ -49,6 +54,11 @@ export default function SysAdminDashboard({ user, onLogout }) {
     Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
   })
 
+  // Matches App.jsx's own apiFetch signature, so WebsiteContentPage (shared
+  // with App.jsx) works here without knowing which dashboard hosts it.
+  const apiFetch = (path, options = {}) =>
+    fetch(`${API}${path}`, { ...options, headers: { ...getHeaders(), ...(options.headers || {}) } })
+
   useEffect(() => {
     fetchUsers()
     fetchRoles()
@@ -74,14 +84,18 @@ export default function SysAdminDashboard({ user, onLogout }) {
     if (activePage === 'audit') fetchAuditLogs(auditPage)
   }, [activePage, auditPage])
 
-  // Warns before closing the tab or refreshing with unsaved Theme changes -
-  // in-app navigation away is instead caught by navigateTo below.
+  // Warns before closing the tab or refreshing with unsaved Theme or
+  // Website Content changes - in-app navigation away is instead caught by
+  // navigateTo below.
   useEffect(() => {
-    if (!themeDirty) return
-    const handler = (e) => { e.preventDefault(); e.returnValue = '' }
+    const handler = (e) => {
+      const dirty = (activePage === 'theme' && themeDirty) ||
+        (activePage === 'content' && contentPageRef.current?.isDirty())
+      if (dirty) { e.preventDefault(); e.returnValue = '' }
+    }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [themeDirty])
+  }, [activePage, themeDirty])
 
   const fetchUsers = async () => {
     try {
@@ -202,11 +216,16 @@ export default function SysAdminDashboard({ user, onLogout }) {
     return { bg: '#F0FAF4', color: '#2C6E52' }
   }
 
-  // Intercepts sidebar navigation away from an unsaved Theme page - goes
-  // through the in-page confirmation rather than switching pages straight away.
+  // Intercepts sidebar navigation away from an unsaved Theme or Website
+  // Content page - goes through the in-page confirmation rather than
+  // switching pages straight away.
   const navigateTo = (value) => {
     if (activePage === 'theme' && themeDirty && value !== 'theme') {
       setThemeConfirm({ type: 'leave', target: value })
+      return
+    }
+    if (activePage === 'content' && value !== 'content' && contentPageRef.current) {
+      contentPageRef.current.requestLeave(value)
       return
     }
     setActivePage(value)
@@ -321,6 +340,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
     { label: 'Overview', value: 'overview' },
     { label: 'Users', value: 'users' },
     { label: 'Roles', value: 'roles' },
+    { label: 'Website Content', value: 'content' },
     { label: 'Theme', value: 'theme' },
     { label: 'Audit Log', value: 'audit' },
     { label: 'Settings', value: 'settings' },
@@ -330,6 +350,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
     overview: 'System Overview',
     users: 'User Management',
     roles: 'Roles and Permissions',
+    content: 'Website Content',
     theme: 'Theme',
     audit: 'Audit Log',
     settings: 'Settings',
@@ -681,6 +702,15 @@ export default function SysAdminDashboard({ user, onLogout }) {
               </div>
             )}
 
+            {/* Website Content */}
+            {activePage === 'content' && (
+              <WebsiteContentPage
+                ref={contentPageRef}
+                apiFetch={apiFetch}
+                onDiscardNavigate={(target) => { setActivePage(target); setMobileNavOpen(false) }}
+              />
+            )}
+
             {/* Theme */}
             {activePage === 'theme' && (() => {
               const colors = themeDraft.colors
@@ -746,6 +776,34 @@ export default function SysAdminDashboard({ user, onLogout }) {
 
               const groupTitleStyle = { fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }
 
+              const everydayPresets = presets.filter(p => p.group === 'everyday')
+              const occasionPresets = presets.filter(p => p.group === 'occasion')
+              const rosePreset = presets.find(p => p.name === 'Hair By Her Rose')
+                || { name: 'Hair By Her Rose', colors: DEFAULT_THEME.colors, fonts: DEFAULT_THEME.fonts }
+
+              const presetSwatches = (preset) => (
+                <div style={{ display: 'flex', gap: 3 }}>
+                  {[preset.colors.background, preset.colors.accent, preset.colors.navBackground].map((hex, i) => (
+                    <span key={i} style={{ width: 14, height: 14, borderRadius: 4, background: hex, display: 'inline-block', border: '1px solid rgba(0,0,0,0.12)' }} />
+                  ))}
+                </div>
+              )
+
+              const presetButton = (preset) => (
+                <button
+                  key={preset.name}
+                  className="sa-btn-secondary"
+                  onClick={() => applyThemePreset(preset)}
+                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, textAlign: 'left', minWidth: 140 }}
+                >
+                  <span style={{ fontWeight: 700 }}>{preset.name}</span>
+                  {preset.period && (
+                    <span style={{ fontSize: 11, color: '#9A8A8E', fontWeight: 500 }}>{preset.period}</span>
+                  )}
+                  {presetSwatches(preset)}
+                </button>
+              )
+
               return (
                 <div>
                   <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
@@ -755,24 +813,31 @@ export default function SysAdminDashboard({ user, onLogout }) {
                   <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                     <div style={{ flex: '1 1 420px', minWidth: 320 }}>
                       <div className="sa-panel">
-                        <div style={groupTitleStyle}>Presets</div>
-                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                          {presets.map(preset => (
-                            <button
-                              key={preset.name}
-                              className="sa-btn-secondary"
-                              onClick={() => applyThemePreset(preset)}
-                              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                            >
-                              <span style={{ width: 14, height: 14, borderRadius: '50%', background: preset.colors.accent, display: 'inline-block', border: '1px solid rgba(0,0,0,0.1)' }} />
-                              {preset.name}
-                            </button>
-                          ))}
-                          {presets.length === 0 && (
-                            <div style={{ fontSize: 13, color: '#9A8A8E' }}>Loading presets...</div>
-                          )}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20' }}>Presets</div>
+                          <button className="sa-btn-secondary" onClick={() => applyThemePreset(rosePreset)}>
+                            Back to everyday
+                          </button>
                         </div>
-                        <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 10 }}>
+
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                          Everyday
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
+                          {everydayPresets.map(presetButton)}
+                        </div>
+
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                          Occasions
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          {occasionPresets.map(presetButton)}
+                        </div>
+
+                        {presets.length === 0 && (
+                          <div style={{ fontSize: 13, color: '#9A8A8E' }}>Loading presets...</div>
+                        )}
+                        <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 16 }}>
                           Choosing a preset fills the form below - nothing is saved until "Save changes".
                         </div>
                       </div>
