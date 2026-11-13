@@ -2804,14 +2804,6 @@ function App() {
             </svg>
           </a>
         </div>
-        {paymentOptions.ozow && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px' }}>
-              We accept
-            </span>
-            <img src="/ozow-logo.png" alt="Ozow" style={{ height: '20px', width: 'auto' }} />
-          </div>
-        )}
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
           <button className="footer-policies-link" onClick={() => openPolicies('booking')}>Policies</button>
           <button className="footer-policies-link" onClick={() => openPolicies('returns')}>Returns</button>
