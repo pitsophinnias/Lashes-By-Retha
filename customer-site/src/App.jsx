@@ -954,15 +954,6 @@ function App() {
               <span style={{ color: '#9A7A82', fontWeight: 400 }}>In stock</span>
             )}
           </div>
-          {paymentOptions.payflex.enabled &&
-            (paymentOptions.payflex.minimumAmount == null || product.price >= paymentOptions.payflex.minimumAmount) &&
-            (paymentOptions.payflex.maximumAmount == null || product.price <= paymentOptions.payflex.maximumAmount) && (
-            <PayflexWidget
-              amount={product.price}
-              min={paymentOptions.payflex.minimumAmount}
-              max={paymentOptions.payflex.maximumAmount}
-            />
-          )}
           <button
             className="btn-add-cart add-to-cart-btn"
             onClick={handleAdd}
@@ -2856,15 +2847,17 @@ function App() {
                         How Would You Like To Pay
                       </div>
 
-                      {paymentOptions.ozow && (
-                        <div style={{ marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                        {paymentOptions.ozow && (
                           <button
                             type="button"
                             onClick={() => setPaymentMethod('ozow')}
                             style={{
-                              width: '100%',
-                              textAlign: 'left',
-                              padding: '12px 14px',
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '16px 12px',
                               borderRadius: '10px',
                               border: `1px solid ${paymentMethod === 'ozow' ? '#C47A8A' : '#F5DDE2'}`,
                               background: paymentMethod === 'ozow' ? '#C47A8A' : 'white',
@@ -2882,22 +2875,19 @@ function App() {
                               <img src="/ozow-logo.png" alt="Ozow" style={{ height: '22px', width: 'auto', display: 'block' }} />
                             </span>
                           </button>
-                          <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '6px', lineHeight: 1.6 }}>
-                            Pay securely from your own banking app.
-                          </p>
-                        </div>
-                      )}
+                        )}
 
-                      {paymentOptions.payflex.enabled && (
-                        <div>
+                        {paymentOptions.payflex.enabled && (
                           <button
                             type="button"
                             onClick={() => payflexAvailableForAmount && setPaymentMethod('payflex')}
                             disabled={!payflexAvailableForAmount}
                             style={{
-                              width: '100%',
-                              textAlign: 'left',
-                              padding: '12px 14px',
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '16px 12px',
                               borderRadius: '10px',
                               fontSize: '16px',
                               fontWeight: 700,
@@ -2911,7 +2901,18 @@ function App() {
                           >
                             Payflex
                           </button>
-                          <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '6px', lineHeight: 1.6 }}>
+                        )}
+                      </div>
+
+                      {paymentOptions.ozow && (
+                        <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', marginBottom: '6px', lineHeight: 1.6 }}>
+                          Pay securely from your own banking app.
+                        </p>
+                      )}
+
+                      {paymentOptions.payflex.enabled && (
+                        <>
+                          <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', lineHeight: 1.6 }}>
                             {payflexAvailableForAmount
                               ? 'Pay in 4 interest-free instalments.'
                               : `Available for orders between R${paymentOptions.payflex.minimumAmount} and R${paymentOptions.payflex.maximumAmount}.`}
@@ -2923,7 +2924,7 @@ function App() {
                               max={paymentOptions.payflex.maximumAmount}
                             />
                           )}
-                        </div>
+                        </>
                       )}
                     </div>
                   )}
