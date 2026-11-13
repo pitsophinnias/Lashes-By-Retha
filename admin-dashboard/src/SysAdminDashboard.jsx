@@ -1,4 +1,12 @@
 import React, { useState, useEffect } from 'react'
+import {
+  SettingsConfirmModal,
+  SettingsHistoryPanel,
+  SettingsSaveBar,
+  DEFAULT_THEME,
+  contrastRatio,
+  MIN_CONTRAST_RATIO,
+} from './App.jsx'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
@@ -7,6 +15,18 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [users, setUsers] = useState([])
   const [roles, setRoles] = useState([])
+  // ── Theme ─────────────────────────────────────────────────────────────────
+  const [themeSaved, setThemeSaved] = useState(DEFAULT_THEME)
+  const [themeDraft, setThemeDraft] = useState(DEFAULT_THEME)
+  const [themeSpec, setThemeSpec] = useState(null) // { headingFonts, bodyFonts, presets }
+  const [themeSaving, setThemeSaving] = useState(false)
+  const [themeFieldErrors, setThemeFieldErrors] = useState({})
+  const [themeSaveNote, setThemeSaveNote] = useState('')
+  const [themeHistory, setThemeHistory] = useState([])
+  const [themeHistoryLoading, setThemeHistoryLoading] = useState(false)
+  // { type: 'restore', historyId } | { type: 'reset' } | { type: 'leave', target } | null
+  const [themeConfirm, setThemeConfirm] = useState(null)
+  const themeDirty = JSON.stringify(themeDraft) !== JSON.stringify(themeSaved)
   const [systemNotifications, setSystemNotifications] = useState([])
   const [auditLogs, setAuditLogs] = useState([])
   const [auditPage, setAuditPage] = useState(1)
@@ -33,11 +53,35 @@ export default function SysAdminDashboard({ user, onLogout }) {
     fetchUsers()
     fetchRoles()
     fetchSystemNotifications()
+    // Public endpoint - current theme, for the form baseline.
+    fetch(`${API}/api/site-settings`)
+      .then(r => r.json())
+      .then(data => {
+        if (data?.theme) {
+          setThemeSaved(data.theme)
+          setThemeDraft(data.theme)
+        }
+      })
+      .catch(() => {})
+    fetch(`${API}/api/admin/site-settings/theme/spec`, { headers: getHeaders() })
+      .then(r => r.json())
+      .then(data => setThemeSpec(data))
+      .catch(() => {})
+    fetchThemeHistory()
   }, [])
 
   useEffect(() => {
     if (activePage === 'audit') fetchAuditLogs(auditPage)
   }, [activePage, auditPage])
+
+  // Warns before closing the tab or refreshing with unsaved Theme changes -
+  // in-app navigation away is instead caught by navigateTo below.
+  useEffect(() => {
+    if (!themeDirty) return
+    const handler = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [themeDirty])
 
   const fetchUsers = async () => {
     try {
@@ -158,10 +202,126 @@ export default function SysAdminDashboard({ user, onLogout }) {
     return { bg: '#F0FAF4', color: '#2C6E52' }
   }
 
+  // Intercepts sidebar navigation away from an unsaved Theme page - goes
+  // through the in-page confirmation rather than switching pages straight away.
+  const navigateTo = (value) => {
+    if (activePage === 'theme' && themeDirty && value !== 'theme') {
+      setThemeConfirm({ type: 'leave', target: value })
+      return
+    }
+    setActivePage(value)
+    setMobileNavOpen(false)
+  }
+
+  const fetchThemeHistory = async () => {
+    setThemeHistoryLoading(true)
+    try {
+      const res = await fetch(`${API}/api/admin/site-settings/theme/history`, { headers: getHeaders() })
+      const data = await res.json()
+      if (res.ok && Array.isArray(data)) setThemeHistory(data)
+    } catch {
+      // silent fail
+    } finally {
+      setThemeHistoryLoading(false)
+    }
+  }
+
+  const updateThemeColor = (key, value) => {
+    setThemeDraft(prev => ({ ...prev, colors: { ...prev.colors, [key]: value } }))
+    setThemeFieldErrors(prev => {
+      const field = `colors.${key}`
+      if (!prev[field]) return prev
+      const next = { ...prev }
+      delete next[field]
+      return next
+    })
+  }
+
+  const updateThemeFont = (key, value) => {
+    setThemeDraft(prev => ({ ...prev, fonts: { ...prev.fonts, [key]: value } }))
+  }
+
+  // Fills the form from a preset - not saved until "Save changes".
+  const applyThemePreset = (preset) => {
+    setThemeDraft(prev => ({ ...prev, colors: { ...preset.colors }, fonts: { ...preset.fonts }, preset: preset.name }))
+    setThemeFieldErrors({})
+  }
+
+  const saveTheme = async () => {
+    setThemeSaving(true)
+    setThemeSaveNote('')
+    setThemeFieldErrors({})
+    try {
+      const res = await fetch(`${API}/api/admin/site-settings/theme`, {
+        method: 'PUT',
+        headers: getHeaders(),
+        body: JSON.stringify(themeDraft),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setThemeSaved(data)
+        setThemeDraft(data)
+        setThemeSaveNote('Saved. Changes show on the website within about a minute.')
+        fetchThemeHistory()
+      } else if (data.field) {
+        setThemeFieldErrors({ [data.field.replace(/^theme\./, '')]: data.error })
+      } else {
+        setThemeSaveNote(data.error || 'Failed to save changes.')
+      }
+    } catch {
+      setThemeSaveNote('Failed to save changes.')
+    } finally {
+      setThemeSaving(false)
+    }
+  }
+
+  const restoreThemeVersion = async (historyId) => {
+    setThemeSaving(true)
+    try {
+      const res = await fetch(`${API}/api/admin/site-settings/theme/restore/${historyId}`, { method: 'POST', headers: getHeaders() })
+      const data = await res.json()
+      if (res.ok) {
+        setThemeSaved(data.value)
+        setThemeDraft(data.value)
+        setThemeSaveNote('Restored. Changes show on the website within about a minute.')
+        fetchThemeHistory()
+      } else {
+        setThemeSaveNote(data.error || 'Failed to restore that version.')
+      }
+    } catch {
+      setThemeSaveNote('Failed to restore that version.')
+    } finally {
+      setThemeSaving(false)
+      setThemeConfirm(null)
+    }
+  }
+
+  const resetThemeToDefaults = async () => {
+    setThemeSaving(true)
+    try {
+      const res = await fetch(`${API}/api/admin/site-settings/theme/reset`, { method: 'POST', headers: getHeaders() })
+      const data = await res.json()
+      if (res.ok) {
+        setThemeSaved(data.value)
+        setThemeDraft(data.value)
+        setThemeSaveNote('Reset to defaults. Changes show on the website within about a minute.')
+        fetchThemeHistory()
+      } else {
+        setThemeSaveNote(data.error || 'Failed to reset to defaults.')
+      }
+    } catch {
+      setThemeSaveNote('Failed to reset to defaults.')
+    } finally {
+      setThemeSaving(false)
+      setThemeConfirm(null)
+    }
+  }
+
   const navItems = [
     { label: 'Overview', value: 'overview' },
     { label: 'Users', value: 'users' },
     { label: 'Roles', value: 'roles' },
+    { label: 'Theme', value: 'theme' },
     { label: 'Audit Log', value: 'audit' },
     { label: 'Settings', value: 'settings' },
   ]
@@ -170,6 +330,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
     overview: 'System Overview',
     users: 'User Management',
     roles: 'Roles and Permissions',
+    theme: 'Theme',
     audit: 'Audit Log',
     settings: 'Settings',
   }
@@ -260,7 +421,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
             {navItems.map(item => (
               <button
                 key={item.value}
-                onClick={() => { setActivePage(item.value); setMobileNavOpen(false) }}
+                onClick={() => navigateTo(item.value)}
                 style={{
                   display: 'flex', alignItems: 'center', width: '100%',
                   padding: '10px 14px', borderRadius: 8, border: 'none',
@@ -519,6 +680,204 @@ export default function SysAdminDashboard({ user, onLogout }) {
                 ))}
               </div>
             )}
+
+            {/* Theme */}
+            {activePage === 'theme' && (() => {
+              const colors = themeDraft.colors
+              const fonts = themeDraft.fonts
+              const headingFonts = themeSpec?.headingFonts || [fonts.heading]
+              const bodyFonts = themeSpec?.bodyFonts || [fonts.body]
+              const presets = themeSpec?.presets || []
+
+              const colorRow = (label, key) => {
+                const path = `colors.${key}`
+                const error = themeFieldErrors[path]
+                return (
+                  <div key={key} style={{ marginBottom: 16 }}>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>
+                      {label}
+                    </label>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input
+                        type="color"
+                        value={colors[key]}
+                        onChange={e => updateThemeColor(key, e.target.value.toUpperCase())}
+                        style={{ width: 40, height: 36, padding: 0, border: `1px solid ${error ? '#C47A8A' : '#EDD5DB'}`, borderRadius: 8, cursor: 'pointer', background: 'none' }}
+                      />
+                      <input
+                        type="text"
+                        value={colors[key]}
+                        onChange={e => updateThemeColor(key, e.target.value.toUpperCase())}
+                        className="sa-input"
+                        style={{ flex: 1, marginBottom: 0, border: `1px solid ${error ? '#C47A8A' : '#EDD5DB'}` }}
+                      />
+                    </div>
+                    {error && <div style={{ fontSize: 12, color: '#C47A8A', marginTop: 4 }}>{error}</div>}
+                  </div>
+                )
+              }
+
+              const fontRow = (label, key, options) => (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>
+                    {label}
+                  </label>
+                  <select
+                    value={fonts[key]}
+                    onChange={e => updateThemeFont(key, e.target.value)}
+                    className="sa-input"
+                    style={{ marginBottom: 0 }}
+                  >
+                    {options.map(name => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                </div>
+              )
+
+              const textBgRatio = contrastRatio(colors.text, colors.background)
+              const whiteAccentRatio = contrastRatio('#FFFFFF', colors.accent)
+              const contrastRow = (label, ratio) => (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, marginBottom: 6 }}>
+                  <span style={{ color: '#9A8A8E' }}>{label}</span>
+                  <span style={{ fontWeight: 700, color: ratio >= MIN_CONTRAST_RATIO ? '#2E7D32' : '#C47A8A' }}>
+                    {ratio.toFixed(2)}:1 {ratio >= MIN_CONTRAST_RATIO ? '(pass)' : '(fail)'}
+                  </span>
+                </div>
+              )
+
+              const groupTitleStyle = { fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }
+
+              return (
+                <div>
+                  <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
+                    Changes show on the website within about a minute.
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    <div style={{ flex: '1 1 420px', minWidth: 320 }}>
+                      <div className="sa-panel">
+                        <div style={groupTitleStyle}>Presets</div>
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          {presets.map(preset => (
+                            <button
+                              key={preset.name}
+                              className="sa-btn-secondary"
+                              onClick={() => applyThemePreset(preset)}
+                              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                            >
+                              <span style={{ width: 14, height: 14, borderRadius: '50%', background: preset.colors.accent, display: 'inline-block', border: '1px solid rgba(0,0,0,0.1)' }} />
+                              {preset.name}
+                            </button>
+                          ))}
+                          {presets.length === 0 && (
+                            <div style={{ fontSize: 13, color: '#9A8A8E' }}>Loading presets...</div>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 10 }}>
+                          Choosing a preset fills the form below - nothing is saved until "Save changes".
+                        </div>
+                      </div>
+
+                      <div className="sa-panel">
+                        <div style={groupTitleStyle}>Colours</div>
+                        {colorRow('Background', 'background')}
+                        {colorRow('Accent', 'accent')}
+                        {colorRow('Nav Background', 'navBackground')}
+                        {colorRow('Text', 'text')}
+                        {colorRow('Muted Text', 'mutedText')}
+                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #F0E8EA' }}>
+                          {contrastRow('Text on background', textBgRatio)}
+                          {contrastRow('White button text on accent', whiteAccentRatio)}
+                        </div>
+                      </div>
+
+                      <div className="sa-panel">
+                        <div style={groupTitleStyle}>Fonts</div>
+                        {fontRow('Heading Font', 'heading', headingFonts)}
+                        {fontRow('Body Font', 'body', bodyFonts)}
+                      </div>
+
+                      <SettingsSaveBar onSave={saveTheme} dirty={themeDirty} saving={themeSaving} note={themeSaveNote} />
+
+                      <SettingsHistoryPanel
+                        history={themeHistory}
+                        loading={themeHistoryLoading}
+                        onReset={() => setThemeConfirm({ type: 'reset' })}
+                        onRestore={(historyId) => setThemeConfirm({ type: 'restore', historyId })}
+                      />
+                    </div>
+
+                    <div style={{ flex: '1 1 320px', minWidth: 280 }}>
+                      <div style={{ position: 'sticky', top: 20 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                          Preview
+                        </div>
+                        <div style={{ background: colors.background, borderRadius: 16, overflow: 'hidden', border: `1px solid ${colors.navBackground}` }}>
+                          <div style={{ background: colors.navBackground, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 16, fontWeight: 700, color: colors.text }}>Hair By Her</span>
+                            <span style={{ background: colors.accent, color: 'white', padding: '6px 14px', borderRadius: 16, fontSize: 12, fontWeight: 700 }}>Book Now</span>
+                          </div>
+
+                          <div style={{ padding: 24 }}>
+                            <div style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 24, fontWeight: 700, color: colors.text, marginBottom: 8, lineHeight: 1.2 }}>
+                              Effortless Booking. Endless Beauty.
+                            </div>
+                            <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 13, color: colors.mutedText, marginBottom: 16 }}>
+                              Lash extensions, brow lamination & luxe wigs.
+                            </div>
+                            <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
+                              <span style={{ background: colors.accent, color: 'white', padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
+                                Book Now
+                              </span>
+                              <span style={{ border: `1px solid ${colors.accent}`, color: colors.accent, padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
+                                Shop Products
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                              <div style={{ flex: '1 1 140px', background: 'white', borderRadius: 12, overflow: 'hidden', border: `1px solid ${colors.navBackground}` }}>
+                                <div style={{ height: 80, background: colors.navBackground }} />
+                                <div style={{ padding: 12 }}>
+                                  <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 12, fontWeight: 700, color: colors.text, marginBottom: 4 }}>Classic Lash Trays</div>
+                                  <div style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 16, fontWeight: 700, color: colors.accent }}>R 150</div>
+                                </div>
+                              </div>
+                              <div style={{ flex: '1 1 140px', background: 'white', borderRadius: 12, overflow: 'hidden', border: `1px solid ${colors.navBackground}` }}>
+                                <div style={{ height: 80, background: colors.navBackground }} />
+                                <div style={{ padding: 12 }}>
+                                  <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 12, fontWeight: 700, color: colors.text, marginBottom: 4 }}>Classic Lash Training</div>
+                                  <div style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 16, fontWeight: 700, color: colors.accent }}>R 2 500</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ background: '#2C1A20', padding: '18px 20px', textAlign: 'center' }}>
+                            <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 11, color: colors.mutedText }}>
+                              &copy; {new Date().getFullYear()} Hair By Her. All rights reserved.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <SettingsConfirmModal
+                    confirm={themeConfirm}
+                    itemLabel="theme"
+                    onCancel={() => setThemeConfirm(null)}
+                    onDiscard={(target) => {
+                      setThemeDraft(themeSaved)
+                      setThemeFieldErrors({})
+                      setThemeConfirm(null)
+                      setActivePage(target)
+                      setMobileNavOpen(false)
+                    }}
+                    onRestore={restoreThemeVersion}
+                    onReset={resetThemeToDefaults}
+                  />
+                </div>
+              )
+            })()}
 
             {/* Audit Log */}
             {activePage === 'audit' && (

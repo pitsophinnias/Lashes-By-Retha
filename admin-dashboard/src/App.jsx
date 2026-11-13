@@ -273,17 +273,10 @@ export default function App({ user, onLogout }) {
   const [contentConfirm, setContentConfirm] = useState(null)
   const contentDirty = JSON.stringify(contentDraft) !== JSON.stringify(contentSaved)
 
-  // ── Theme ─────────────────────────────────────────────────────────────────
-  const [themeSaved, setThemeSaved] = useState(DEFAULT_THEME) // also used by the Website Content preview above
-  const [themeDraft, setThemeDraft] = useState(DEFAULT_THEME)
-  const [themeSpec, setThemeSpec] = useState(null) // { headingFonts, bodyFonts, presets }
-  const [themeSaving, setThemeSaving] = useState(false)
-  const [themeFieldErrors, setThemeFieldErrors] = useState({})
-  const [themeSaveNote, setThemeSaveNote] = useState('')
-  const [themeHistory, setThemeHistory] = useState([])
-  const [themeHistoryLoading, setThemeHistoryLoading] = useState(false)
-  const [themeConfirm, setThemeConfirm] = useState(null)
-  const themeDirty = JSON.stringify(themeDraft) !== JSON.stringify(themeSaved)
+  // The Theme page itself lives in SysAdminDashboard.jsx - sysadmin never
+  // renders this component at all (see main.jsx), so it would be unreachable
+  // here. Only the live saved theme stays, for the Website Content preview.
+  const [themeSaved, setThemeSaved] = useState(DEFAULT_THEME)
 
   // The amount of an order that is the business's own revenue - excludes
   // the delivery fee, which is passed straight through to the courier.
@@ -462,26 +455,18 @@ export default function App({ user, onLogout }) {
         .catch(() => {})
       fetchContentHistory()
     }
-    if (user?.role === 'sysadmin') {
-      apiFetch('/api/admin/site-settings/theme/spec')
-        .then(r => r.json())
-        .then(data => setThemeSpec(data))
-        .catch(() => {})
-      fetchThemeHistory()
-    }
     fetchOrders()
   }, [])
 
   // Warns before closing the tab or refreshing with unsaved Website Content
-  // or Theme changes - in-app navigation away is instead caught by
-  // navigateTo above.
+  // changes - in-app navigation away is instead caught by navigateTo above.
   useEffect(() => {
-    const dirty = (activePage === 'content' && contentDirty) || (activePage === 'theme' && themeDirty)
+    const dirty = activePage === 'content' && contentDirty
     if (!dirty) return
     const handler = (e) => { e.preventDefault(); e.returnValue = '' }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [activePage, contentDirty, themeDirty])
+  }, [activePage, contentDirty])
 
   // Product images and positions depend on the product catalog having loaded.
   useEffect(() => {
@@ -995,124 +980,16 @@ export default function App({ user, onLogout }) {
     }
   }
 
-  // Intercepts sidebar navigation away from an unsaved Website Content or
-  // Theme page - goes through the in-page confirmation rather than
-  // switching pages straight away.
+  // Intercepts sidebar navigation away from an unsaved Website Content page -
+  // goes through the in-page confirmation rather than switching pages
+  // straight away.
   const navigateTo = (value) => {
     if (activePage === 'content' && contentDirty && value !== 'content') {
       setContentConfirm({ type: 'leave', target: value })
       return
     }
-    if (activePage === 'theme' && themeDirty && value !== 'theme') {
-      setThemeConfirm({ type: 'leave', target: value })
-      return
-    }
     setActivePage(value)
     setMobileNavOpen(false)
-  }
-
-  // ── Theme ─────────────────────────────────────────────────────────────────
-  const fetchThemeHistory = async () => {
-    setThemeHistoryLoading(true)
-    try {
-      const res = await apiFetch('/api/admin/site-settings/theme/history')
-      const data = await res.json()
-      if (res.ok && Array.isArray(data)) setThemeHistory(data)
-    } catch {
-      // silent fail
-    } finally {
-      setThemeHistoryLoading(false)
-    }
-  }
-
-  const updateThemeColor = (key, value) => {
-    setThemeDraft(prev => ({ ...prev, colors: { ...prev.colors, [key]: value } }))
-    setThemeFieldErrors(prev => {
-      const field = `colors.${key}`
-      if (!prev[field]) return prev
-      const next = { ...prev }
-      delete next[field]
-      return next
-    })
-  }
-
-  const updateThemeFont = (key, value) => {
-    setThemeDraft(prev => ({ ...prev, fonts: { ...prev.fonts, [key]: value } }))
-  }
-
-  // Fills the form from a preset - not saved until "Save changes".
-  const applyThemePreset = (preset) => {
-    setThemeDraft(prev => ({ ...prev, colors: { ...preset.colors }, fonts: { ...preset.fonts }, preset: preset.name }))
-    setThemeFieldErrors({})
-  }
-
-  const saveTheme = async () => {
-    setThemeSaving(true)
-    setThemeSaveNote('')
-    setThemeFieldErrors({})
-    try {
-      const res = await apiFetch('/api/admin/site-settings/theme', {
-        method: 'PUT',
-        body: JSON.stringify(themeDraft),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setThemeSaved(data)
-        setThemeDraft(data)
-        setThemeSaveNote('Saved. Changes show on the website within about a minute.')
-        fetchThemeHistory()
-      } else if (data.field) {
-        setThemeFieldErrors({ [data.field.replace(/^theme\./, '')]: data.error })
-      } else {
-        setThemeSaveNote(data.error || 'Failed to save changes.')
-      }
-    } catch {
-      setThemeSaveNote('Failed to save changes.')
-    } finally {
-      setThemeSaving(false)
-    }
-  }
-
-  const restoreThemeVersion = async (historyId) => {
-    setThemeSaving(true)
-    try {
-      const res = await apiFetch(`/api/admin/site-settings/theme/restore/${historyId}`, { method: 'POST' })
-      const data = await res.json()
-      if (res.ok) {
-        setThemeSaved(data.value)
-        setThemeDraft(data.value)
-        setThemeSaveNote('Restored. Changes show on the website within about a minute.')
-        fetchThemeHistory()
-      } else {
-        setThemeSaveNote(data.error || 'Failed to restore that version.')
-      }
-    } catch {
-      setThemeSaveNote('Failed to restore that version.')
-    } finally {
-      setThemeSaving(false)
-      setThemeConfirm(null)
-    }
-  }
-
-  const resetThemeToDefaults = async () => {
-    setThemeSaving(true)
-    try {
-      const res = await apiFetch('/api/admin/site-settings/theme/reset', { method: 'POST' })
-      const data = await res.json()
-      if (res.ok) {
-        setThemeSaved(data.value)
-        setThemeDraft(data.value)
-        setThemeSaveNote('Reset to defaults. Changes show on the website within about a minute.')
-        fetchThemeHistory()
-      } else {
-        setThemeSaveNote(data.error || 'Failed to reset to defaults.')
-      }
-    } catch {
-      setThemeSaveNote('Failed to reset to defaults.')
-    } finally {
-      setThemeSaving(false)
-      setThemeConfirm(null)
-    }
   }
 
   const changeBusinessPassword = async () => {
@@ -1889,7 +1766,6 @@ export default function App({ user, onLogout }) {
                 { label: 'Lash Training', value: 'training' },
                 { label: 'Website Content', value: 'content' },
               ] : []),
-              ...(user?.role === 'sysadmin' ? [{ label: 'Theme', value: 'theme' }] : []),
               { label: 'Orders', value: 'orders' },
               { label: 'Notifications', value: 'notifications' },
               { label: 'Settings', value: 'settings' },
@@ -3407,207 +3283,6 @@ export default function App({ user, onLogout }) {
               )
             })()}
 
-            {activePage === 'theme' && user?.role === 'sysadmin' && (() => {
-              const colors = themeDraft.colors
-              const fonts = themeDraft.fonts
-              const headingFonts = themeSpec?.headingFonts || [fonts.heading]
-              const bodyFonts = themeSpec?.bodyFonts || [fonts.body]
-              const presets = themeSpec?.presets || []
-
-              const colorRow = (label, key) => {
-                const path = `colors.${key}`
-                const error = themeFieldErrors[path]
-                return (
-                  <div key={key} style={{ marginBottom: 16 }}>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>
-                      {label}
-                    </label>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input
-                        type="color"
-                        value={colors[key]}
-                        onChange={e => updateThemeColor(key, e.target.value.toUpperCase())}
-                        style={{ width: 40, height: 36, padding: 0, border: `1px solid ${error ? '#C47A8A' : '#EDD5DB'}`, borderRadius: 8, cursor: 'pointer', background: 'none' }}
-                      />
-                      <input
-                        type="text"
-                        value={colors[key]}
-                        onChange={e => updateThemeColor(key, e.target.value.toUpperCase())}
-                        style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: `1px solid ${error ? '#C47A8A' : '#EDD5DB'}`, fontSize: 13, fontFamily: 'inherit', color: '#2C1A20', background: 'white', outline: 'none', boxSizing: 'border-box' }}
-                      />
-                    </div>
-                    {error && <div style={{ fontSize: 12, color: '#C47A8A', marginTop: 4 }}>{error}</div>}
-                  </div>
-                )
-              }
-
-              const fontRow = (label, key, options) => (
-                <div style={{ marginBottom: 16 }}>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>
-                    {label}
-                  </label>
-                  <select
-                    value={fonts[key]}
-                    onChange={e => updateThemeFont(key, e.target.value)}
-                    className="category-select"
-                    style={{ width: '100%', padding: '10px 14px' }}
-                  >
-                    {options.map(name => <option key={name} value={name}>{name}</option>)}
-                  </select>
-                </div>
-              )
-
-              const textBgRatio = contrastRatio(colors.text, colors.background)
-              const whiteAccentRatio = contrastRatio('#FFFFFF', colors.accent)
-              const contrastRow = (label, ratio) => (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, marginBottom: 6 }}>
-                  <span style={{ color: '#9A8A8E' }}>{label}</span>
-                  <span style={{ fontWeight: 700, color: ratio >= MIN_CONTRAST_RATIO ? '#2E7D32' : '#C47A8A' }}>
-                    {ratio.toFixed(2)}:1 {ratio >= MIN_CONTRAST_RATIO ? '(pass)' : '(fail)'}
-                  </span>
-                </div>
-              )
-
-              const panelStyle = { background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)', marginBottom: 20 }
-              const groupTitleStyle = { fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 20 }
-
-              return (
-                <div>
-                  <div style={{
-                    background: 'linear-gradient(135deg, #C47A8A 0%, #8C5A6A 100%)',
-                    borderRadius: 14, padding: '24px 28px', marginBottom: 20, color: 'white',
-                  }}>
-                    <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Theme</div>
-                    <div style={{ fontSize: 13, opacity: 0.85 }}>Changes show on the website within about a minute.</div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                    <div style={{ flex: '1 1 420px', minWidth: 320 }}>
-                      <div style={panelStyle}>
-                        <div style={groupTitleStyle}>Presets</div>
-                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                          {presets.map(preset => (
-                            <button
-                              key={preset.name}
-                              className="secondary-btn"
-                              onClick={() => applyThemePreset(preset)}
-                              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                            >
-                              <span style={{ width: 14, height: 14, borderRadius: '50%', background: preset.colors.accent, display: 'inline-block', border: '1px solid rgba(0,0,0,0.1)' }} />
-                              {preset.name}
-                            </button>
-                          ))}
-                          {presets.length === 0 && (
-                            <div style={{ fontSize: 13, color: '#9A8A8E' }}>Loading presets...</div>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 10 }}>
-                          Choosing a preset fills the form below - nothing is saved until "Save changes".
-                        </div>
-                      </div>
-
-                      <div style={panelStyle}>
-                        <div style={groupTitleStyle}>Colours</div>
-                        {colorRow('Background', 'background')}
-                        {colorRow('Accent', 'accent')}
-                        {colorRow('Nav Background', 'navBackground')}
-                        {colorRow('Text', 'text')}
-                        {colorRow('Muted Text', 'mutedText')}
-                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #F7EEF0' }}>
-                          {contrastRow('Text on background', textBgRatio)}
-                          {contrastRow('White button text on accent', whiteAccentRatio)}
-                        </div>
-                      </div>
-
-                      <div style={panelStyle}>
-                        <div style={groupTitleStyle}>Fonts</div>
-                        {fontRow('Heading Font', 'heading', headingFonts)}
-                        {fontRow('Body Font', 'body', bodyFonts)}
-                      </div>
-
-                      <SettingsSaveBar onSave={saveTheme} dirty={themeDirty} saving={themeSaving} note={themeSaveNote} />
-
-                      <SettingsHistoryPanel
-                        history={themeHistory}
-                        loading={themeHistoryLoading}
-                        onReset={() => setThemeConfirm({ type: 'reset' })}
-                        onRestore={(historyId) => setThemeConfirm({ type: 'restore', historyId })}
-                      />
-                    </div>
-
-                    <div style={{ flex: '1 1 320px', minWidth: 280 }}>
-                      <div style={{ position: 'sticky', top: 20 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-                          Preview
-                        </div>
-                        <div style={{ background: colors.background, borderRadius: 16, overflow: 'hidden', border: `1px solid ${colors.navBackground}` }}>
-                          <div style={{ background: colors.navBackground, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 16, fontWeight: 700, color: colors.text }}>Hair By Her</span>
-                            <span style={{ background: colors.accent, color: 'white', padding: '6px 14px', borderRadius: 16, fontSize: 12, fontWeight: 700 }}>Book Now</span>
-                          </div>
-
-                          <div style={{ padding: 24 }}>
-                            <div style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 24, fontWeight: 700, color: colors.text, marginBottom: 8, lineHeight: 1.2 }}>
-                              {contentSaved.hero.heading}
-                            </div>
-                            <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 13, color: colors.mutedText, marginBottom: 16 }}>
-                              {contentSaved.hero.subtext}
-                            </div>
-                            <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
-                              <span style={{ background: colors.accent, color: 'white', padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
-                                {contentSaved.hero.bookButtonLabel}
-                              </span>
-                              <span style={{ border: `1px solid ${colors.accent}`, color: colors.accent, padding: '8px 16px', borderRadius: 20, fontSize: 13, fontWeight: 700 }}>
-                                {contentSaved.hero.shopButtonLabel}
-                              </span>
-                            </div>
-
-                            <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-                              <div style={{ flex: '1 1 140px', background: 'white', borderRadius: 12, overflow: 'hidden', border: `1px solid ${colors.navBackground}` }}>
-                                <div style={{ height: 80, background: colors.navBackground }} />
-                                <div style={{ padding: 12 }}>
-                                  <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 12, fontWeight: 700, color: colors.text, marginBottom: 4 }}>Classic Lash Trays</div>
-                                  <div style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 16, fontWeight: 700, color: colors.accent }}>R 150</div>
-                                </div>
-                              </div>
-                              <div style={{ flex: '1 1 140px', background: 'white', borderRadius: 12, overflow: 'hidden', border: `1px solid ${colors.navBackground}` }}>
-                                <div style={{ height: 80, background: colors.navBackground }} />
-                                <div style={{ padding: 12 }}>
-                                  <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 12, fontWeight: 700, color: colors.text, marginBottom: 4 }}>Classic Lash Training</div>
-                                  <div style={{ fontFamily: `'${fonts.heading}', serif`, fontSize: 16, fontWeight: 700, color: colors.accent }}>R 2 500</div>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div style={{ background: '#2C1A20', padding: '18px 20px', textAlign: 'center' }}>
-                            <div style={{ fontFamily: `'${fonts.body}', sans-serif`, fontSize: 11, color: colors.mutedText }}>
-                              &copy; {new Date().getFullYear()} Hair By Her. All rights reserved.
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <SettingsConfirmModal
-                    confirm={themeConfirm}
-                    itemLabel="theme"
-                    onCancel={() => setThemeConfirm(null)}
-                    onDiscard={(target) => {
-                      setThemeDraft(themeSaved)
-                      setThemeFieldErrors({})
-                      setThemeConfirm(null)
-                      setActivePage(target)
-                      setMobileNavOpen(false)
-                    }}
-                    onRestore={restoreThemeVersion}
-                    onReset={resetThemeToDefaults}
-                  />
-                </div>
-              )
-            })()}
-
             {activePage === 'orders' && (
               <div>
                 <div style={{
@@ -4284,4 +3959,19 @@ export default function App({ user, onLogout }) {
       </div>
     </>
   )
+}
+
+// Shared with SysAdminDashboard.jsx's Theme page - sysadmin never renders
+// this component (see main.jsx), so the Theme page itself lives there, but
+// these pieces (and the Website Content page here) stay in sync by using
+// the exact same components, constants and contrast maths.
+export {
+  SettingsConfirmModal,
+  SettingsHistoryPanel,
+  SettingsSaveBar,
+  DEFAULT_THEME,
+  DEFAULT_THEME_COLORS,
+  DEFAULT_FONTS,
+  contrastRatio,
+  MIN_CONTRAST_RATIO,
 }
