@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 
 const CLASSES = [
   {
@@ -41,7 +41,7 @@ const POLICIES = {
     {
       label: 'Deposit',
       heading: 'Securing Your Appointment',
-      body: 'To secure your booking, we kindly ask for a non-refundable deposit of R100, payable immediately after your appointment is confirmed. Please make payment to FNB account 63093932440 and send your proof of payment via WhatsApp to 082 685 5399. Your slot is only secured once your deposit has been received.',
+      body: "To secure your booking, we kindly ask for a non-refundable deposit of R100, payable immediately after your appointment is confirmed. Once your appointment is confirmed, we'll send you a secure Ozow payment link so you can pay straight from your banking app. Your slot is only secured once your deposit has been received.",
     },
     {
       label: 'Cancellation and Rescheduling',
@@ -123,7 +123,7 @@ const POLICIES = {
   training: [
     {
       heading: 'Securing Your Spot',
-      body: 'A non-refundable deposit of R500 secures your place on a training course. Please pay to FNB account 63093932440 and send your proof of payment on WhatsApp to 082 685 5399.',
+      body: "A non-refundable deposit of R500 secures your place on a training course. We'll send you a secure payment link to pay your deposit online.",
     },
     {
       heading: 'Paying The Balance',
@@ -193,7 +193,7 @@ const POLICIES = {
         items: [
           'Prices: All prices are in South African Rand. We are not VAT registered, so no VAT is added to our prices. Prices may change from time to time, but the price you see when you order is the price you pay.',
           "Orders: Your order is confirmed once we've received your payment. If an item is out of stock after you've paid, we'll let you know and offer you another option or a full refund.",
-          'Payment: You can pay instantly with Ozow at checkout, straight from your banking app, or by EFT to FNB account 63093932440 with your proof of payment sent on WhatsApp to 082 685 5399. Instalment options are available for lash training only.',
+          'Payment: Orders are paid online at checkout with Ozow, straight from your banking app, or in 4 interest-free instalments with Payflex.',
           'Delivery, returns and training: Our Delivery, Returns and Lash Training policies form part of these terms.',
           'Appointments: Appointments are booked through our Setmore booking page and follow our Booking Policy.',
           'Product use: Our products are for professional use. Please follow the care and application guidance provided.',
@@ -228,6 +228,7 @@ const PICKUP_HOURS = 'Tuesday to Saturday, 08:00 to 17:00'
 const BACKEND_WAKE_TIMEOUT_MS = 60000
 
 const SA_PHONE_ERROR = "We're only able to serve customers in South Africa for now, so please use a South African number, for example 082 123 4567."
+const EMAIL_ERROR = 'Please enter a valid email address.'
 
 // Mirrors the backend's own normaliseSaPhone - accepts 082 685 5399,
 // 0826855399, +27 82 685 5399, +27826855399 and 27826855399 (spaces, dashes,
@@ -246,6 +247,30 @@ const normaliseSaPhone = (input) => {
   return `+27${digits.slice(1)}`
 }
 
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+
+// Payflex's official product widget (per their widgets docs) - a small
+// script-rendered calculator showing the "pay in instalments" message. Each
+// instance gets its own <script> tag, appended directly (not via innerHTML,
+// which never executes), so the widget can tell them apart on the page.
+function PayflexWidget({ amount, min, max }) {
+  const containerRef = useRef(null)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || amount == null) return
+    const script = document.createElement('script')
+    script.async = true
+    script.type = 'application/javascript'
+    const params = new URLSearchParams({ type: 'calculator', amount: String(amount) })
+    if (min != null) params.set('min', String(min))
+    if (max != null) params.set('max', String(max))
+    script.src = `https://widgets.payflex.co.za/2.0.3/payflex-widget.min.js?${params.toString()}`
+    el.appendChild(script)
+    return () => { try { el.removeChild(script) } catch {} }
+  }, [amount, min, max])
+  return <div ref={containerRef} />
+}
+
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
   const [cart, setCart] = useState([])
@@ -254,12 +279,13 @@ function App() {
   const [orderName, setOrderName] = useState('')
   const [orderPhone, setOrderPhone] = useState('')
   const [phoneTouched, setPhoneTouched] = useState(false)
-  const [orderSubmitted, setOrderSubmitted] = useState(false)
+  const [orderEmail, setOrderEmail] = useState('')
+  const [emailTouched, setEmailTouched] = useState(false)
   const [orderError, setOrderError] = useState('')
   const [fulfilmentMethod, setFulfilmentMethod] = useState(null)
-  const [paymentOptions, setPaymentOptions] = useState({ ozow: false })
+  const [paymentOptions, setPaymentOptions] = useState({ ozow: false, payflex: { enabled: false, minimumAmount: null, maximumAmount: null } })
   const [paymentMethod, setPaymentMethod] = useState(null)
-  const [ozowSubmitting, setOzowSubmitting] = useState(false)
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false)
   const [paymentResult, setPaymentResult] = useState(null)
   const [paymentResultLoading, setPaymentResultLoading] = useState(false)
   const [pendingPollCount, setPendingPollCount] = useState(0)
@@ -268,8 +294,6 @@ function App() {
   const [deliveryCity, setDeliveryCity] = useState('')
   const [deliveryPostalCode, setDeliveryPostalCode] = useState('')
   const [deliveryNotes, setDeliveryNotes] = useState('')
-  const [lastOrder, setLastOrder] = useState(null)
-  const [copied, setCopied] = useState(false)
   const [policyTab, setPolicyTab] = useState('booking')
   const [products, setProducts] = useState([])
   const [selectedOptions, setSelectedOptions] = useState({})
@@ -339,8 +363,15 @@ function App() {
       .catch(() => setProductCategories({}))
     fetch(`${API}/api/payments/options`)
       .then(r => r.json())
-      .then(data => setPaymentOptions({ ozow: !!data?.ozow }))
-      .catch(() => setPaymentOptions({ ozow: false }))
+      .then(data => setPaymentOptions({
+        ozow: !!data?.ozow,
+        payflex: {
+          enabled: !!data?.payflex?.enabled,
+          minimumAmount: data?.payflex?.minimumAmount ?? null,
+          maximumAmount: data?.payflex?.maximumAmount ?? null,
+        },
+      }))
+      .catch(() => setPaymentOptions({ ozow: false, payflex: { enabled: false, minimumAmount: null, maximumAmount: null } }))
   }, [backendStatus])
 
   // Looks up an order by its token for the payment result panel below.
@@ -375,7 +406,7 @@ function App() {
     if (!paymentResult || !paymentResult.token) return
     const status = paymentResult.order?.paymentStatus
     const isPendingLike = status === 'pending' || status === 'unpaid'
-    const isEft = paymentResult.switchedToEft || paymentResult.order?.paymentMethod === 'eft'
+    const isEft = paymentResult.order?.paymentMethod === 'eft'
     if (!isPendingLike || isEft || pendingPollCount >= 12) return
     const timer = setTimeout(async () => {
       const data = await fetchOrderByToken(paymentResult.token)
@@ -457,15 +488,18 @@ function App() {
   const deliveryAddressComplete = !!(deliveryAddress.trim() && deliverySuburb.trim() && deliveryCity.trim() && deliveryPostalCode.trim())
   const normalisedOrderPhone = normaliseSaPhone(orderPhone)
   const phoneError = (phoneTouched && !normalisedOrderPhone) ? SA_PHONE_ERROR : ''
+  const payflexAvailableForAmount = paymentOptions.payflex.enabled &&
+    (paymentOptions.payflex.minimumAmount == null || orderTotal >= paymentOptions.payflex.minimumAmount) &&
+    (paymentOptions.payflex.maximumAmount == null || orderTotal <= paymentOptions.payflex.maximumAmount)
+  const noWayToPay = !paymentOptions.ozow && !payflexAvailableForAmount
+  const emailRequired = paymentMethod === 'payflex'
+  const emailProvided = !!orderEmail.trim()
+  const emailOk = emailRequired ? (emailProvided && isValidEmail(orderEmail)) : (!emailProvided || isValidEmail(orderEmail))
+  const emailError = (emailTouched && !emailOk) ? EMAIL_ERROR : ''
   const canPlaceOrder = !!(orderName.trim() && normalisedOrderPhone && fulfilmentMethod &&
     (fulfilmentMethod === 'pickup' || deliveryAddressComplete) &&
-    (!paymentOptions.ozow || paymentMethod))
-
-  const copyPaymentDetails = () => {
-    navigator.clipboard.writeText('63093932440')
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2500)
-  }
+    !noWayToPay && emailOk &&
+    ((paymentMethod === 'ozow' && paymentOptions.ozow) || (paymentMethod === 'payflex' && payflexAvailableForAmount)))
 
   const closePaymentResult = () => {
     setPaymentResult(null)
@@ -483,8 +517,8 @@ function App() {
       })
       const data = await res.json().catch(() => null)
       if (!res.ok || !data?.action || !data?.fields) {
-        setOrderError(data?.error || "I couldn't take you to Ozow just now. Please try again, or pay by EFT instead.")
-        setOzowSubmitting(false)
+        setOrderError(data?.error || "I couldn't take you to Ozow just now. Please try again in a moment.")
+        setPaymentSubmitting(false)
         setPaymentResultLoading(false)
         return
       }
@@ -502,28 +536,66 @@ function App() {
       form.submit()
     } catch (err) {
       console.error('Ozow start failed:', err)
-      setOrderError("I couldn't reach the shop just now. Please check your connection and try again, or pay by EFT instead.")
-      setOzowSubmitting(false)
+      setOrderError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setPaymentSubmitting(false)
       setPaymentResultLoading(false)
     }
   }
 
-  const retryOzowPayment = async () => {
-    if (!paymentResult?.token) return
-    setPaymentResultLoading(true)
-    await submitToOzow(paymentResult.token)
+  const submitToPayflex = async (orderToken) => {
+    try {
+      const res = await fetch(`${API}/api/payments/payflex/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderToken }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.redirectUrl) {
+        setOrderError(data?.error || "I couldn't take you to Payflex just now. Please try again in a moment.")
+        setPaymentSubmitting(false)
+        setPaymentResultLoading(false)
+        return
+      }
+      window.location.assign(data.redirectUrl)
+    } catch (err) {
+      console.error('Payflex start failed:', err)
+      setOrderError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setPaymentSubmitting(false)
+      setPaymentResultLoading(false)
+    }
   }
 
-  const switchToEft = async () => {
+  // Retries the same provider the order already used.
+  const retryPayment = async () => {
     if (!paymentResult?.token) return
+    setPaymentResultLoading(true)
+    if (paymentResult.order?.paymentMethod === 'payflex') await submitToPayflex(paymentResult.token)
+    else await submitToOzow(paymentResult.token)
+  }
+
+  // Switches the same order to the other online provider, then immediately
+  // starts that provider's payment flow.
+  const switchProvider = async (toProvider) => {
+    if (!paymentResult?.token) return
+    setPaymentResultLoading(true)
     try {
-      const res = await fetch(`${API}/api/orders/${paymentResult.token}/switch-to-eft`, { method: 'PATCH' })
-      if (res.ok) {
-        const data = await fetchOrderByToken(paymentResult.token)
-        setPaymentResult(prev => (prev ? { ...prev, order: data, switchedToEft: true } : prev))
+      const res = await fetch(`${API}/api/orders/${paymentResult.token}/switch-provider`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: toProvider }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setOrderError(data?.error || "I couldn't switch payment methods just now. Please try again.")
+        setPaymentResultLoading(false)
+        return
       }
+      if (toProvider === 'payflex') await submitToPayflex(paymentResult.token)
+      else await submitToOzow(paymentResult.token)
     } catch (err) {
-      console.error('Switch to EFT failed:', err)
+      console.error('Switch provider failed:', err)
+      setOrderError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setPaymentResultLoading(false)
     }
   }
 
@@ -582,6 +654,7 @@ function App() {
   const buildOrderPayload = () => ({
     customerName: orderName,
     customerPhone: orderPhone,
+    customerEmail: orderEmail.trim() || undefined,
     items: cart.map(i => ({ id: i.id, variantId: i.variantId, name: i.name, qty: i.qty, price: i.price })),
     fulfilmentMethod,
     deliveryAddress: fulfilmentMethod === 'delivery' ? deliveryAddress : undefined,
@@ -591,33 +664,10 @@ function App() {
     deliveryNotes: fulfilmentMethod === 'delivery' ? deliveryNotes : undefined,
   })
 
-  const submitOrder = async () => {
-    if (!canPlaceOrder) return
-    setOrderError('')
-    try {
-      const res = await fetch(`${API}/api/orders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...buildOrderPayload(), paymentMethod: 'eft' }),
-      })
-      const data = await res.json().catch(() => null)
-      if (res.ok) {
-        setLastOrder({ id: data.orderId, total: orderTotal, fulfilmentMethod })
-        setOrderSubmitted(true)
-        setCart([])
-      } else {
-        setOrderError(data?.error || "I couldn't get your order through just now, but don't worry, your cart is still here. Please try again in a moment, or message me on WhatsApp and I'll sort it out for you.")
-      }
-    } catch (err) {
-      console.error('Order submission failed:', err)
-      setOrderError("I couldn't reach the shop just now, but your cart is safe. Please check your connection and try again, or message me on WhatsApp and I'll help right away.")
-    }
-  }
-
   const startOzowPayment = async () => {
     if (!canPlaceOrder) return
     setOrderError('')
-    setOzowSubmitting(true)
+    setPaymentSubmitting(true)
     try {
       const res = await fetch(`${API}/api/orders`, {
         method: 'POST',
@@ -626,8 +676,8 @@ function App() {
       })
       const data = await res.json().catch(() => null)
       if (!res.ok || !data?.orderToken) {
-        setOrderError(data?.error || "I couldn't get your order through just now, but don't worry, your cart is still here. Please try again, or choose to pay by EFT instead.")
-        setOzowSubmitting(false)
+        setOrderError(data?.error || "I couldn't get your order through just now, but don't worry, your cart is still here. Please try again in a moment.")
+        setPaymentSubmitting(false)
         return
       }
       // The cart isn't persisted and this page is about to unload for Ozow,
@@ -636,15 +686,43 @@ function App() {
       await submitToOzow(data.orderToken)
     } catch (err) {
       console.error('Ozow order creation failed:', err)
-      setOrderError("I couldn't reach the shop just now, but your cart is safe. Please check your connection and try again, or choose to pay by EFT instead.")
-      setOzowSubmitting(false)
+      setOrderError("I couldn't reach the shop just now, but your cart is safe. Please check your connection and try again.")
+      setPaymentSubmitting(false)
+    }
+  }
+
+  const startPayflexPayment = async () => {
+    if (!canPlaceOrder) return
+    setOrderError('')
+    setPaymentSubmitting(true)
+    try {
+      const res = await fetch(`${API}/api/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...buildOrderPayload(), paymentMethod: 'payflex' }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.orderToken) {
+        setOrderError(data?.error || "I couldn't get your order through just now, but don't worry, your cart is still here. Please try again in a moment.")
+        setPaymentSubmitting(false)
+        return
+      }
+      // The cart isn't persisted and this page is about to unload for Payflex,
+      // so it's safe to clear it now that the order has been created.
+      setCart([])
+      await submitToPayflex(data.orderToken)
+    } catch (err) {
+      console.error('Payflex order creation failed:', err)
+      setOrderError("I couldn't reach the shop just now, but your cart is safe. Please check your connection and try again.")
+      setPaymentSubmitting(false)
     }
   }
 
   const placeOrder = () => {
     setPhoneTouched(true)
-    if (paymentOptions.ozow && paymentMethod === 'ozow') startOzowPayment()
-    else submitOrder()
+    setEmailTouched(true)
+    if (paymentMethod === 'payflex') startPayflexPayment()
+    else if (paymentMethod === 'ozow') startOzowPayment()
   }
 
   const renderProductCard = (product) => {
@@ -2156,6 +2234,14 @@ function App() {
             </svg>
           </a>
         </div>
+        {paymentOptions.ozow && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px' }}>
+              We accept
+            </span>
+            <img src="/ozow-logo.png" alt="Ozow" style={{ height: '20px', width: 'auto' }} />
+          </div>
+        )}
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
           <button className="footer-policies-link" onClick={() => openPolicies('booking')}>Policies</button>
           <button className="footer-policies-link" onClick={() => openPolicies('returns')}>Returns</button>
@@ -2387,7 +2473,6 @@ function App() {
               onClick={() => {
                 setCartOpen(false)
                 setCheckoutStep(false)
-                setOrderSubmitted(false)
                 setOrderError('')
               }}
             />
@@ -2426,7 +2511,6 @@ function App() {
                 onClick={() => {
                   setCartOpen(false)
                   setCheckoutStep(false)
-                  setOrderSubmitted(false)
                   setOrderError('')
                 }}
                 style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
@@ -2436,51 +2520,7 @@ function App() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
-              {orderSubmitted ? (
-                <div style={{ textAlign: 'center', paddingTop: '40px' }}>
-                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', color: '#2C2C2C', marginBottom: '12px' }}>
-                    Thank you, your order has been placed!
-                  </div>
-                  <p style={{ fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '16px' }}>
-                    {lastOrder?.fulfilmentMethod === 'delivery'
-                      ? "We'll be in touch on WhatsApp to confirm your payment and arrange delivery. We appreciate your support!"
-                      : "We'll let you know on WhatsApp as soon as your order is ready to collect. We appreciate your support!"}
-                  </p>
-                  {lastOrder && (
-                    <p style={{ fontSize: '14px', color: '#2C2C2C', fontWeight: 600, lineHeight: 1.7, marginBottom: '24px' }}>
-                      Your total is R {lastOrder.total}. Please use HBH-{lastOrder.id} as your payment reference.
-                    </p>
-                  )}
-                  <button
-                    onClick={() => {
-                      setCartOpen(false)
-                      setOrderSubmitted(false)
-                      setCheckoutStep(false)
-                      setOrderError('')
-                      setFulfilmentMethod(null)
-                      setPaymentMethod(null)
-                      setDeliveryAddress('')
-                      setDeliverySuburb('')
-                      setDeliveryCity('')
-                      setDeliveryPostalCode('')
-                      setDeliveryNotes('')
-                      setLastOrder(null)
-                    }}
-                    style={{
-                      background: '#C47A8A',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '24px',
-                      padding: '12px 28px',
-                      fontSize: '14px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Continue Shopping
-                  </button>
-                </div>
-              ) : !checkoutStep ? (
+              {!checkoutStep ? (
                 cart.length === 0 ? (
                   <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', marginTop: '40px' }}>
                     Your cart is empty.
@@ -2660,6 +2700,34 @@ function App() {
                     </p>
                   )}
 
+                  <input
+                    type="email"
+                    inputMode="email"
+                    placeholder={emailRequired ? 'Your email address' : 'Your email address (optional)'}
+                    value={orderEmail}
+                    onChange={(e) => setOrderEmail(e.target.value)}
+                    onBlur={() => setEmailTouched(true)}
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      borderRadius: '10px',
+                      border: `1px solid ${emailError ? '#C47A8A' : '#F5DDE2'}`,
+                      fontSize: '14px',
+                      marginBottom: emailError ? '6px' : '12px',
+                      background: 'white',
+                      color: '#2C2C2C',
+                      fontFamily: 'inherit',
+                      boxSizing: 'border-box',
+                      outline: 'none',
+                    }}
+                  />
+
+                  {emailError && (
+                    <p style={{ fontSize: '12px', color: '#C47A8A', margin: '0 0 12px 0', lineHeight: 1.6 }}>
+                      {emailError}
+                    </p>
+                  )}
+
                   <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }}>
                     Delivery or Pickup
                   </div>
@@ -2773,58 +2841,95 @@ function App() {
                     </div>
                   )}
 
-                  {paymentOptions.ozow && (
+                  {(paymentOptions.ozow || paymentOptions.payflex.enabled) && (
                     <div style={{ marginTop: '8px', marginBottom: '16px' }}>
                       <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }}>
                         How Would You Like To Pay
                       </div>
-                      <div style={{ marginBottom: '10px' }}>
-                        <button
-                          type="button"
-                          onClick={() => setPaymentMethod('ozow')}
-                          style={{
-                            width: '100%',
-                            textAlign: 'left',
-                            padding: '12px 14px',
-                            borderRadius: '10px',
-                            fontSize: '14px',
-                            fontWeight: 700,
-                            border: `1px solid ${paymentMethod === 'ozow' ? '#C47A8A' : '#F5DDE2'}`,
-                            background: paymentMethod === 'ozow' ? '#C47A8A' : 'white',
-                            color: paymentMethod === 'ozow' ? 'white' : '#2C2C2C',
-                            cursor: 'pointer',
-                            fontFamily: 'inherit',
-                          }}
-                        >
-                          Pay now with Ozow (instant EFT from your bank app)
-                        </button>
-                        <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '6px', lineHeight: 1.6 }}>
-                          Pay securely from your own banking app. Your order is marked paid straight away.
-                        </p>
+
+                      <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                        {paymentOptions.ozow && (
+                          <button
+                            type="button"
+                            onClick={() => setPaymentMethod('ozow')}
+                            style={{
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '16px 12px',
+                              borderRadius: '10px',
+                              border: `1px solid ${paymentMethod === 'ozow' ? '#C47A8A' : '#F5DDE2'}`,
+                              background: paymentMethod === 'ozow' ? '#C47A8A' : 'white',
+                              cursor: 'pointer',
+                              fontFamily: 'inherit',
+                            }}
+                          >
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: paymentMethod === 'ozow' ? '4px 10px' : '0',
+                              borderRadius: '8px',
+                              background: paymentMethod === 'ozow' ? 'white' : 'transparent',
+                            }}>
+                              <img src="/ozow-logo.png" alt="Ozow" style={{ height: '22px', width: 'auto', display: 'block' }} />
+                            </span>
+                          </button>
+                        )}
+
+                        {paymentOptions.payflex.enabled && (
+                          <button
+                            type="button"
+                            onClick={() => payflexAvailableForAmount && setPaymentMethod('payflex')}
+                            disabled={!payflexAvailableForAmount}
+                            style={{
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '16px 12px',
+                              borderRadius: '10px',
+                              fontSize: '16px',
+                              fontWeight: 700,
+                              fontFamily: 'inherit',
+                              letterSpacing: '0.3px',
+                              border: `1px solid ${paymentMethod === 'payflex' ? '#C47A8A' : '#F5DDE2'}`,
+                              background: paymentMethod === 'payflex' ? '#C47A8A' : 'white',
+                              color: !payflexAvailableForAmount ? '#C8B8BC' : paymentMethod === 'payflex' ? 'white' : '#2C2C2C',
+                              cursor: payflexAvailableForAmount ? 'pointer' : 'not-allowed',
+                            }}
+                          >
+                            Payflex
+                          </button>
+                        )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setPaymentMethod('eft')}
-                        style={{
-                          width: '100%',
-                          textAlign: 'left',
-                          padding: '12px 14px',
-                          borderRadius: '10px',
-                          fontSize: '14px',
-                          fontWeight: 700,
-                          border: `1px solid ${paymentMethod === 'eft' ? '#C47A8A' : '#F5DDE2'}`,
-                          background: paymentMethod === 'eft' ? '#C47A8A' : 'white',
-                          color: paymentMethod === 'eft' ? 'white' : '#2C2C2C',
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        Pay by EFT and send proof of payment on WhatsApp
-                      </button>
+
+                      {paymentOptions.ozow && (
+                        <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', marginBottom: '6px', lineHeight: 1.6 }}>
+                          Pay securely from your own banking app.
+                        </p>
+                      )}
+
+                      {paymentOptions.payflex.enabled && (
+                        <>
+                          <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', lineHeight: 1.6 }}>
+                            {payflexAvailableForAmount
+                              ? 'Pay in 4 interest-free instalments.'
+                              : `Available for orders between R${paymentOptions.payflex.minimumAmount} and R${paymentOptions.payflex.maximumAmount}.`}
+                          </p>
+                          {paymentMethod === 'payflex' && (
+                            <PayflexWidget
+                              amount={orderTotal}
+                              min={paymentOptions.payflex.minimumAmount}
+                              max={paymentOptions.payflex.maximumAmount}
+                            />
+                          )}
+                        </>
+                      )}
                     </div>
                   )}
 
-                  {(!paymentOptions.ozow || paymentMethod === 'eft') && (
+                  {noWayToPay && (
                     <div
                       style={{
                         background: '#FDF0F3',
@@ -2835,35 +2940,17 @@ function App() {
                         border: '1px solid #F5DDE2',
                       }}
                     >
-                      <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '10px' }}>
-                        Payment Details
-                      </div>
-                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
-                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Hair By Her</div>
-                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
-                      <button
-                        onClick={copyPaymentDetails}
-                        style={{
-                          marginTop: '10px',
-                          background: 'none',
-                          border: '1px solid #C47A8A',
-                          color: '#C47A8A',
-                          borderRadius: '20px',
-                          padding: '6px 16px',
-                          fontSize: '12px',
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        {copied ? 'Copied!' : 'Copy payment details'}
-                      </button>
-                      <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', lineHeight: 1.6 }}>
-                        Please send your proof of payment via WhatsApp to 082 685 5399 after making payment.
+                      <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
+                        Online payments are taking a short break. Please message us on{' '}
+                        <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+                          WhatsApp at 082 685 5399
+                        </a>
+                        {' '}and we'll gladly help you place your order.
                       </p>
                     </div>
                   )}
 
-                  {paymentOptions.ozow && paymentMethod === 'ozow' && (
+                  {paymentMethod === 'ozow' && (
                     <div
                       style={{
                         background: '#FDF0F3',
@@ -2877,6 +2964,24 @@ function App() {
                       <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
                         You'll be taken to Ozow to complete your payment securely from your own banking app. Please
                         don't close this page until you're redirected back to us.
+                      </p>
+                    </div>
+                  )}
+
+                  {paymentMethod === 'payflex' && (
+                    <div
+                      style={{
+                        background: '#FDF0F3',
+                        borderRadius: '12px',
+                        padding: '16px 20px',
+                        marginTop: '8px',
+                        marginBottom: '20px',
+                        border: '1px solid #F5DDE2',
+                      }}
+                    >
+                      <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
+                        You'll be taken to Payflex to set up your instalments. Please don't close this page until
+                        you're redirected back to us.
                       </p>
                     </div>
                   )}
@@ -2913,24 +3018,28 @@ function App() {
                     </div>
                   )}
 
-                  <button
-                    onClick={placeOrder}
-                    disabled={!canPlaceOrder || ozowSubmitting}
-                    style={{
-                      width: '100%',
-                      background: '#C47A8A',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '24px',
-                      padding: '14px',
-                      fontSize: '15px',
-                      fontWeight: 700,
-                      cursor: (!canPlaceOrder || ozowSubmitting) ? 'not-allowed' : 'pointer',
-                      opacity: (!canPlaceOrder || ozowSubmitting) ? 0.5 : 1,
-                    }}
-                  >
-                    {ozowSubmitting ? 'Taking you to Ozow...' : 'Place Order'}
-                  </button>
+                  {!noWayToPay && (
+                    <button
+                      onClick={placeOrder}
+                      disabled={!canPlaceOrder || paymentSubmitting}
+                      style={{
+                        width: '100%',
+                        background: '#C47A8A',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '24px',
+                        padding: '14px',
+                        fontSize: '15px',
+                        fontWeight: 700,
+                        cursor: (!canPlaceOrder || paymentSubmitting) ? 'not-allowed' : 'pointer',
+                        opacity: (!canPlaceOrder || paymentSubmitting) ? 0.5 : 1,
+                      }}
+                    >
+                      {paymentSubmitting
+                        ? (paymentMethod === 'payflex' ? 'Taking you to Payflex...' : 'Taking you to Ozow...')
+                        : 'Place Order'}
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -2943,8 +3052,16 @@ function App() {
         const status = !order ? 'error'
           : order.paymentStatus === 'paid' ? 'paid'
           : (order.paymentStatus === 'cancelled' || order.paymentStatus === 'failed') ? order.paymentStatus
-          : (paymentResult.switchedToEft || order.paymentMethod === 'eft') ? 'eft'
+          : order.paymentMethod === 'eft' ? 'eft'
           : 'pending'
+
+        const otherProvider = order?.paymentMethod === 'ozow' ? 'payflex' : 'ozow'
+        const otherProviderAvailable = !order ? false
+          : otherProvider === 'ozow'
+            ? paymentOptions.ozow
+            : paymentOptions.payflex.enabled &&
+              (paymentOptions.payflex.minimumAmount == null || order.total >= paymentOptions.payflex.minimumAmount) &&
+              (paymentOptions.payflex.maximumAmount == null || order.total <= paymentOptions.payflex.maximumAmount)
 
         const btnPrimary = {
           background: '#C47A8A', color: 'white', border: 'none', borderRadius: '24px',
@@ -3011,13 +3128,16 @@ function App() {
                     {status === 'error' ? "We couldn't find that payment" : "It looks like your payment didn't go through"}
                   </div>
                   <p style={body}>
-                    Not to worry, your order is still here for you. Please don't hesitate to try paying again, or
-                    pay by EFT instead.
+                    Not to worry, your order is still here for you. Please don't hesitate to try paying again.
                   </p>
                   {order ? (
                     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                      <button onClick={retryOzowPayment} style={btnPrimary}>Try paying again</button>
-                      <button onClick={switchToEft} style={btnSecondary}>Pay by EFT instead</button>
+                      <button onClick={retryPayment} style={btnPrimary}>Try paying again</button>
+                      {otherProviderAvailable && (
+                        <button onClick={() => switchProvider(otherProvider)} style={btnSecondary}>
+                          Try another way to pay
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <button onClick={closePaymentResult} style={btnPrimary}>Close</button>

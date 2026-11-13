@@ -29,10 +29,14 @@ Copy backend/.env.example to backend/.env and fill in values.
 - OZOW_IS_TEST — true or false; defaults to true (test mode) when unset, so nothing goes live by accident
 - OZOW_API_BASE — defaults to https://api.ozow.com
 - OZOW_TEST_API_BASE — defaults to https://stagingapi.ozow.com; test (IsTest=true) transactions are only queryable there, not on the live API
-- PUBLIC_API_URL — this backend's own public https URL, no trailing slash; used to build the Ozow return and notify URLs
-- CUSTOMER_SITE_URL — the customer site's public URL, no trailing slash; used to redirect the customer back after paying with Ozow
+- PUBLIC_API_URL — this backend's own public https URL, no trailing slash; used to build the Ozow and Payflex return/callback URLs
+- CUSTOMER_SITE_URL — the customer site's public URL, no trailing slash; used to redirect the customer back after paying with Ozow or Payflex
+- PAYFLEX_CLIENT_ID, PAYFLEX_CLIENT_SECRET — issued by the Payflex Integrations Team
+- PAYFLEX_API_URL — defaults to the sandbox (UAT) base, https://api.uat.payflex.co.za; use https://api.payflex.co.za in production
+- PAYFLEX_AUTH_URL — defaults to the sandbox auth endpoint, https://auth-uat.payflex.co.za/auth/merchant; use https://auth.payflex.co.za/auth/merchant in production
+- PAYFLEX_AUDIENCE — defaults to the sandbox audience, https://auth-dev.payflex.co.za; use https://auth-production.payflex.co.za in production
 
-Ozow counts as configured only when OZOW_SITE_CODE, OZOW_PRIVATE_KEY, OZOW_API_KEY, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Leave any of them unset and checkout only offers EFT.
+Ozow counts as configured only when OZOW_SITE_CODE, OZOW_PRIVATE_KEY, OZOW_API_KEY, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Payflex counts as configured only when PAYFLEX_CLIENT_ID, PAYFLEX_CLIENT_SECRET, PAYFLEX_API_URL, PAYFLEX_AUTH_URL, PAYFLEX_AUDIENCE, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Checkout only offers whichever of Ozow/Payflex is configured; if neither is, ordering is blocked with a message to contact Retha on WhatsApp instead.
 
 ### customer-site and admin-dashboard
 
@@ -44,7 +48,7 @@ Copy .env.example to .env in each app and fill in values.
 
 The repo has a `render.yaml` Blueprint. On Render: New, Blueprint, pick this repo, and it creates `hairbyher-db`, `hairbyher-api`, `hairbyher-site` and `hairbyher-admin` in one go.
 
-Render will ask for the secret values on first creation: `ADMIN_DEFAULT_PASSWORD`, `CLOUDINARY_URL`, `OZOW_SITE_CODE`, `OZOW_PRIVATE_KEY`, `OZOW_API_KEY`. `JWT_SECRET` is generated automatically.
+Render will ask for the secret values on first creation: `ADMIN_DEFAULT_PASSWORD`, `CLOUDINARY_URL`, `OZOW_SITE_CODE`, `OZOW_PRIVATE_KEY`, `OZOW_API_KEY`, `PAYFLEX_CLIENT_ID`, `PAYFLEX_CLIENT_SECRET`. `JWT_SECRET` is generated automatically.
 
 If Render gives a service a different `onrender.com` address than its name (because the name was taken), update `PUBLIC_API_URL`, `ALLOWED_ORIGINS` and both `VITE_API_URL` values in the Blueprint to match, then redeploy the static sites with "Clear build cache & deploy".
 

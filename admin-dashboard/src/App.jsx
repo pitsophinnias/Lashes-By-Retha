@@ -104,16 +104,18 @@ export default function App({ user, onLogout }) {
   // Reuses the site's existing badge colour families (green/orange/pink from
   // payment-badge, grey from the order-item qty chip) - no new colours.
   const paymentBadge = (order) => {
-    if (order.paymentMethod !== 'ozow') {
+    if (order.paymentMethod !== 'ozow' && order.paymentMethod !== 'payflex') {
       return { label: 'EFT', background: '#F0F0F0', color: '#888888' }
     }
-    if (order.paymentStatus === 'paid') return { label: 'Paid (Ozow)', background: '#E8F5E9', color: '#2E7D32' }
-    if (order.paymentStatus === 'cancelled') return { label: 'Ozow cancelled', background: '#FDE8EC', color: '#C47A8A' }
-    if (order.paymentStatus === 'failed') return { label: 'Ozow failed', background: '#FDE8EC', color: '#C47A8A' }
-    return { label: 'Ozow pending', background: '#FFF3E0', color: '#E65100' }
+    const providerLabel = order.paymentMethod === 'ozow' ? 'Ozow' : 'Payflex'
+    if (order.paymentStatus === 'paid') return { label: `Paid (${providerLabel})`, background: '#E8F5E9', color: '#2E7D32' }
+    if (order.paymentStatus === 'cancelled') return { label: `${providerLabel} cancelled`, background: '#FDE8EC', color: '#C47A8A' }
+    if (order.paymentStatus === 'failed') return { label: `${providerLabel} failed`, background: '#FDE8EC', color: '#C47A8A' }
+    return { label: `${providerLabel} pending`, background: '#FFF3E0', color: '#E65100' }
   }
 
-  const ozowNotPaid = (order) => order.paymentMethod === 'ozow' && order.paymentStatus !== 'paid'
+  const onlinePaymentNotPaid = (order) =>
+    (order.paymentMethod === 'ozow' || order.paymentMethod === 'payflex') && order.paymentStatus !== 'paid'
 
   // Attaches the auth token to every request and logs the user out on a 401.
   // Never sets Content-Type for FormData bodies (file uploads) - the browser
@@ -2992,9 +2994,21 @@ export default function App({ user, onLogout }) {
                             </span>
                           </div>
                           {order.ozowTransactionId && (
-                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
                               <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Ozow Txn</span>
                               <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{order.ozowTransactionId}</span>
+                            </div>
+                          )}
+                          {order.payflexOrderId && (
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                              <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Payflex Id</span>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{order.payflexOrderId}</span>
+                            </div>
+                          )}
+                          {order.customerEmail && (
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <span style={{ fontSize: 12, color: '#AAAAAA', minWidth: 70 }}>Email</span>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{order.customerEmail}</span>
                             </div>
                           )}
                         </div>
@@ -3003,12 +3017,12 @@ export default function App({ user, onLogout }) {
                         <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #F0F0F0', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                           {order.status !== 'confirmed' && (
                             <div>
-                              {ozowNotPaid(order) && (
+                              {onlinePaymentNotPaid(order) && (
                                 <div style={{ fontSize: 12, color: '#C47A8A', marginBottom: 6 }}>
-                                  This Ozow payment has not come through yet.
+                                  This {order.paymentMethod === 'ozow' ? 'Ozow' : 'Payflex'} payment has not come through yet.
                                 </div>
                               )}
-                              {ozowNotPaid(order) && confirmPromptOrderId === order.id ? (
+                              {onlinePaymentNotPaid(order) && confirmPromptOrderId === order.id ? (
                                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                                   <span style={{ fontSize: 12, color: '#888888' }}>Confirm anyway?</span>
                                   <button className="upload-btn" onClick={() => confirmOrder(order.id)}>
@@ -3027,7 +3041,7 @@ export default function App({ user, onLogout }) {
                               ) : (
                                 <button
                                   className="upload-btn"
-                                  onClick={() => ozowNotPaid(order) ? setConfirmPromptOrderId(order.id) : confirmOrder(order.id)}
+                                  onClick={() => onlinePaymentNotPaid(order) ? setConfirmPromptOrderId(order.id) : confirmOrder(order.id)}
                                 >
                                   Confirm Payment Received
                                 </button>

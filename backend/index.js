@@ -16,6 +16,7 @@ const { authenticate, requireRole, JWT_SECRET } = require('./auth')
 const { pool, createTables } = require('./db')
 const { cloudinary, isCloudinaryEnabled, uploadBuffer } = require('./cloudinary')
 const ozow = require('./ozow')
+const payflex = require('./payflex')
 const { normaliseSaPhone } = require('./phone')
 
 const app = express()
@@ -138,6 +139,55 @@ app.post('/api/payments/ozow/notify', globalLimiter, ozowFormParser, async (req,
   res.status(200).send('OK')
 })
 
+// ── Payflex return & callback ─────────────────────────────────────────────────
+// Mounted before CORS, same reasoning as the Ozow routes above: Payflex's
+// browser redirects and server-to-server callback must never hit the CORS check.
+const payflexJsonParser = express.json({ limit: '100kb' })
+
+const handlePayflexReturn = async (req, res) => {
+  const { outcome } = req.params
+  if (!['confirm', 'cancel'].includes(outcome)) return res.status(404).end()
+
+  const source = req.method === 'POST' ? (req.body || {}) : req.query
+  const identifier = source.orderId || source.merchantReference
+  let publicToken = null
+
+  if (identifier) {
+    await withTimeout(payflex.reconcilePayflexPayment(identifier), 5000)
+    try {
+      const result = await pool.query(
+        `SELECT o.public_token FROM payflex_payments p JOIN orders o ON o.id = p.order_id
+         WHERE p.merchant_reference = $1 OR p.payflex_order_id = $1`,
+        [identifier]
+      )
+      if (result.rows[0]) publicToken = result.rows[0].public_token
+    } catch (err) {
+      console.error('Payflex return lookup failed:', err.message)
+    }
+  }
+
+  const redirectOutcome = publicToken ? outcome : 'error'
+  const redirectUrl = new URL(`${payflex.CUSTOMER_SITE_URL || 'http://localhost'}/`)
+  redirectUrl.searchParams.set('payment', redirectOutcome)
+  if (publicToken) redirectUrl.searchParams.set('order', publicToken)
+  res.redirect(303, redirectUrl.toString())
+}
+
+app.get('/api/payments/payflex/return/:outcome', globalLimiter, handlePayflexReturn)
+app.post('/api/payments/payflex/return/:outcome', globalLimiter, payflexJsonParser, handlePayflexReturn)
+
+app.post('/api/payments/payflex/callback', globalLimiter, payflexJsonParser, async (req, res) => {
+  if (!payflex.isPayflexConfigured) return res.status(503).end()
+  const body = req.body || {}
+  // Never trust this body for status - it's only used to find which payment
+  // attempt to re-check against Payflex's own GET /order/{orderId}.
+  const identifier = body.orderId || body.merchantReference
+  if (identifier) {
+    await payflex.reconcilePayflexPayment(identifier)
+  }
+  res.status(200).send('OK')
+})
+
 // ── CORS — only allow known frontend origins ────────────────────────────────
 // ALLOWED_ORIGINS entries can pick up stray whitespace, quotes or a trailing
 // slash when set through a hosting dashboard - clean each one so a valid
@@ -248,6 +298,7 @@ const addNotification = async (type, title, message) => {
 }
 
 ozow.setNotifier(addNotification)
+payflex.setNotifier(addNotification)
 
 // Lash length/curl options, grouped by product id, for attaching to a
 // product list response. Pass includeInactive to also return deactivated
@@ -862,9 +913,11 @@ app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRol
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 // Public: the customer site has no login and must be able to place orders.
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+
 app.post('/api/orders', ordersLimiter, async (req, res) => {
   const {
-    customerName, customerPhone, items, fulfilmentMethod, paymentMethod,
+    customerName, customerPhone, customerEmail, items, fulfilmentMethod, paymentMethod,
     deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
   } = req.body
   if (!customerName || !customerPhone || !items || !Array.isArray(items) || items.length === 0) {
@@ -883,9 +936,17 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
       (!deliveryAddress?.trim() || !deliverySuburb?.trim() || !deliveryCity?.trim() || !deliveryPostalCode?.trim())) {
     return res.status(400).json({ error: 'Please complete your delivery address.' })
   }
-  const orderPaymentMethod = paymentMethod === 'ozow' ? 'ozow' : 'eft'
-  if (orderPaymentMethod === 'ozow' && !ozow.isOzowConfigured) {
-    return res.status(400).json({ error: 'Ozow payments are not available right now. Please pay by EFT instead.' })
+  if (!['ozow', 'payflex'].includes(paymentMethod)) {
+    return res.status(400).json({ error: "We're only able to take online payments at the moment." })
+  }
+  const isPaymentMethodConfigured = paymentMethod === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
+  if (!isPaymentMethodConfigured) {
+    return res.status(503).json({
+      error: "Online payments are taking a short break. Please message us on WhatsApp at 082 685 5399 and we'll gladly help you place your order."
+    })
+  }
+  if (paymentMethod === 'payflex' && !isValidEmail(customerEmail)) {
+    return res.status(400).json({ error: 'Please enter a valid email address to pay with Payflex.' })
   }
   try {
     // Look up every product server-side - price and total are never trusted
@@ -957,18 +1018,18 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
 
     const orderResult = await pool.query(
       `INSERT INTO orders (
-         customer_name, customer_phone, total, fulfilment_method, subtotal, delivery_fee,
+         customer_name, customer_phone, customer_email, total, fulfilment_method, subtotal, delivery_fee,
          delivery_address, delivery_suburb, delivery_city, delivery_postal_code, delivery_notes,
          payment_method, public_token
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
       [
-        customerName, normalisedPhone, total, fulfilmentMethod, subtotal, deliveryFee,
+        customerName, normalisedPhone, (customerEmail || '').trim() || null, total, fulfilmentMethod, subtotal, deliveryFee,
         fulfilmentMethod === 'delivery' ? deliveryAddress.trim() : null,
         fulfilmentMethod === 'delivery' ? deliverySuburb.trim() : null,
         fulfilmentMethod === 'delivery' ? deliveryCity.trim() : null,
         fulfilmentMethod === 'delivery' ? deliveryPostalCode.trim() : null,
         fulfilmentMethod === 'delivery' ? ((deliveryNotes || '').trim() || null) : null,
-        orderPaymentMethod, publicToken,
+        paymentMethod, publicToken,
       ]
     )
     const order = orderResult.rows[0]
@@ -1017,8 +1078,14 @@ app.get('/api/orders', authenticate, async (req, res) => {
         [order.id]
       )
       const latestOzow = latestOzowResult.rows[0]
+      const latestPayflexResult = await pool.query(
+        'SELECT payflex_order_id, status FROM payflex_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [order.id]
+      )
+      const latestPayflex = latestPayflexResult.rows[0]
       order.customerName = order.customer_name
       order.customerPhone = order.customer_phone
+      order.customerEmail = order.customer_email
       order.createdAt = order.created_at
       order.total = parseFloat(order.total)
       order.fulfilmentMethod = order.fulfilment_method
@@ -1034,6 +1101,8 @@ app.get('/api/orders', authenticate, async (req, res) => {
       order.paidAt = order.paid_at
       order.ozowTransactionId = latestOzow ? latestOzow.ozow_transaction_id : null
       order.ozowStatus = latestOzow ? latestOzow.status : null
+      order.payflexOrderId = latestPayflex ? latestPayflex.payflex_order_id : null
+      order.payflexStatus = latestPayflex ? latestPayflex.status : null
       order.archivedAt = order.archived_at
     }
     res.json(orders)
@@ -1044,13 +1113,25 @@ app.get('/api/orders', authenticate, async (req, res) => {
 })
 
 // ── Ozow payments ─────────────────────────────────────────────────────────────
-app.get('/api/payments/options', (req, res) => {
-  res.json({ ozow: ozow.isOzowConfigured })
+app.get('/api/payments/options', async (req, res) => {
+  const payflexOptions = { enabled: payflex.isPayflexConfigured, minimumAmount: null, maximumAmount: null }
+  if (payflex.isPayflexConfigured) {
+    try {
+      const config = await payflex.getConfiguration()
+      if (config) {
+        payflexOptions.minimumAmount = config.minimumAmount
+        payflexOptions.maximumAmount = config.maximumAmount
+      }
+    } catch (err) {
+      console.error('Failed to fetch Payflex configuration:', err.message)
+    }
+  }
+  res.json({ ozow: ozow.isOzowConfigured, payflex: payflexOptions })
 })
 
 app.post('/api/payments/ozow/start', ordersLimiter, async (req, res) => {
   if (!ozow.isOzowConfigured) {
-    return res.status(503).json({ error: 'Ozow payments are not available right now. Please pay by EFT instead.' })
+    return res.status(503).json({ error: 'Ozow payments are not available right now.' })
   }
   const { orderToken } = req.body
   if (!orderToken) return res.status(400).json({ error: 'Missing order token' })
@@ -1081,9 +1162,68 @@ app.post('/api/payments/ozow/start', ordersLimiter, async (req, res) => {
   }
 })
 
-// In-memory map of orderId -> last reconcile check timestamp, so a customer
-// refreshing the result page repeatedly can't hammer Ozow's status API.
+app.post('/api/payments/payflex/start', ordersLimiter, async (req, res) => {
+  if (!payflex.isPayflexConfigured) {
+    return res.status(503).json({ error: 'Payflex payments are not available right now.' })
+  }
+  const { orderToken } = req.body
+  if (!orderToken) return res.status(400).json({ error: 'Missing order token' })
+  try {
+    const orderResult = await pool.query('SELECT * FROM orders WHERE public_token = $1', [orderToken])
+    const order = orderResult.rows[0]
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    if (order.payment_method !== 'payflex') {
+      return res.status(400).json({ error: 'This order is not set up for Payflex payment.' })
+    }
+    if (order.payment_status === 'paid') {
+      return res.status(400).json({ error: 'This order has already been paid.' })
+    }
+    if (order.status === 'confirmed') {
+      return res.status(400).json({ error: 'This order has already been confirmed.' })
+    }
+
+    const config = await payflex.getConfiguration()
+    const total = parseFloat(order.total)
+    if (!payflex.isAmountWithinRange(total, config)) {
+      return res.status(400).json({
+        error: `Payflex is only available for orders between R${config.minimumAmount} and R${config.maximumAmount}.`
+      })
+    }
+
+    const itemsResult = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [order.id])
+    const merchantReference = payflex.generateMerchantReference(order.id)
+    const payflexOrder = await payflex.createPayflexOrder({
+      orderId: order.id,
+      amount: total,
+      shippingAmount: order.delivery_fee || 0,
+      customerName: order.customer_name,
+      customerPhone: order.customer_phone,
+      email: order.customer_email,
+      merchantReference,
+      items: itemsResult.rows.map(i => ({
+        name: i.product_name,
+        sku: i.product_id,
+        quantity: i.qty,
+        price: i.price,
+      })),
+    })
+
+    await pool.query(
+      `INSERT INTO payflex_payments (order_id, merchant_reference, payflex_order_id, amount, status)
+       VALUES ($1, $2, $3, $4, 'started')`,
+      [order.id, merchantReference, payflexOrder.payflexOrderId, total.toFixed(2)]
+    )
+    res.json({ redirectUrl: payflexOrder.redirectUrl })
+  } catch (err) {
+    console.error('Failed to start Payflex payment:', err.message)
+    res.status(500).json({ error: 'Failed to start Payflex payment' })
+  }
+})
+
+// In-memory maps of orderId -> last reconcile check timestamp, so a customer
+// refreshing the result page repeatedly can't hammer either provider's status API.
 const lastOzowCheck = new Map()
+const lastPayflexCheck = new Map()
 
 app.get('/api/orders/by-token/:token', async (req, res) => {
   try {
@@ -1108,11 +1248,33 @@ app.get('/api/orders/by-token/:token', async (req, res) => {
       }
     }
 
+    if (payflex.isPayflexConfigured && order.payment_method === 'payflex' &&
+        ['unpaid', 'pending'].includes(order.payment_status)) {
+      const latestPaymentResult = await pool.query(
+        'SELECT * FROM payflex_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [order.id]
+      )
+      const latestPayment = latestPaymentResult.rows[0]
+      const isRecent = latestPayment && (Date.now() - new Date(latestPayment.created_at).getTime()) < 24 * 60 * 60 * 1000
+      const lastCheck = lastPayflexCheck.get(order.id) || 0
+      if (latestPayment && isRecent && Date.now() - lastCheck > 30000) {
+        lastPayflexCheck.set(order.id, Date.now())
+        await payflex.reconcilePayflexPayment(latestPayment.merchant_reference)
+        const refreshed = await pool.query('SELECT * FROM orders WHERE id = $1', [order.id])
+        order = refreshed.rows[0]
+      }
+    }
+
     const latestOzowResult = await pool.query(
       'SELECT ozow_transaction_id, status FROM ozow_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
       [order.id]
     )
     const latestOzow = latestOzowResult.rows[0]
+    const latestPayflexResult = await pool.query(
+      'SELECT payflex_order_id, status FROM payflex_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [order.id]
+    )
+    const latestPayflex = latestPayflexResult.rows[0]
 
     res.json({
       id: order.id,
@@ -1123,6 +1285,8 @@ app.get('/api/orders/by-token/:token', async (req, res) => {
       status: order.status,
       ozowTransactionId: latestOzow ? latestOzow.ozow_transaction_id : null,
       ozowStatus: latestOzow ? latestOzow.status : null,
+      payflexOrderId: latestPayflex ? latestPayflex.payflex_order_id : null,
+      payflexStatus: latestPayflex ? latestPayflex.status : null,
     })
   } catch (err) {
     console.error(err)
@@ -1131,6 +1295,20 @@ app.get('/api/orders/by-token/:token', async (req, res) => {
 })
 
 app.patch('/api/orders/:token/switch-to-eft', async (req, res) => {
+  res.status(410).json({ error: 'Paying by EFT is no longer available. Please try paying again online.' })
+})
+
+// Lets a customer switch an unpaid, unconfirmed order to the other online
+// payment provider - e.g. after Ozow was cancelled, try Payflex instead.
+app.patch('/api/orders/:token/switch-provider', async (req, res) => {
+  const { provider } = req.body
+  if (!['ozow', 'payflex'].includes(provider)) {
+    return res.status(400).json({ error: 'Please choose Ozow or Payflex.' })
+  }
+  const isProviderConfigured = provider === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
+  if (!isProviderConfigured) {
+    return res.status(503).json({ error: 'That payment method is not available right now.' })
+  }
   try {
     const orderResult = await pool.query('SELECT * FROM orders WHERE public_token = $1', [req.params.token])
     const order = orderResult.rows[0]
@@ -1141,14 +1319,17 @@ app.patch('/api/orders/:token/switch-to-eft', async (req, res) => {
     if (order.status === 'confirmed') {
       return res.status(400).json({ error: 'This order has already been confirmed.' })
     }
+    if (provider === 'payflex' && !isValidEmail(order.customer_email)) {
+      return res.status(400).json({ error: 'Please provide a valid email address to pay with Payflex.' })
+    }
     await pool.query(
-      `UPDATE orders SET payment_method = 'eft', payment_status = 'unpaid' WHERE id = $1`,
-      [order.id]
+      `UPDATE orders SET payment_method = $1, payment_status = 'unpaid' WHERE id = $2`,
+      [provider, order.id]
     )
     res.json({ success: true })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Failed to switch to EFT' })
+    res.status(500).json({ error: 'Failed to switch payment method' })
   }
 })
 
@@ -1579,14 +1760,19 @@ app.use((err, req, res, next) => {
 })
 
 // ── Start server ──────────────────────────────────────────────────────────────
+let server
 const start = async () => {
   await createTables()
   await archiveOldNotifications()
   await archiveOldOrders()
   await addNotification('system', 'Dashboard ready', 'Hair By Her admin dashboard is live and running.')
-  app.listen(PORT, () => {
+  server = app.listen(PORT, () => {
     console.log(`Lashes By Retha backend listening on port ${PORT}`)
   })
 }
 
 start()
+
+// Exposed only so tests can close the listening server cleanly - nothing in
+// the app itself reads these exports.
+module.exports = { app, getServer: () => server }
