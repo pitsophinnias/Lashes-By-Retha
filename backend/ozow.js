@@ -1,5 +1,6 @@
 const crypto = require('crypto')
 const { pool } = require('./db')
+const { applyOrderOutcome, applyStudentOutcome } = require('./paymentOutcomes')
 
 const OZOW_SITE_CODE = process.env.OZOW_SITE_CODE || ''
 const OZOW_PRIVATE_KEY = process.env.OZOW_PRIVATE_KEY || ''
@@ -66,9 +67,10 @@ const generateTransactionReference = (orderId) => `HBH-${orderId}-${crypto.rando
 
 // Builds the fields + HashCheck for a single Ozow payment attempt. Every
 // attempt gets its own transaction reference, so a customer can retry after
-// cancelling.
-function buildOzowFields(orderId, amount) {
-  const transactionReference = generateTransactionReference(orderId)
+// cancelling. referenceId is an order id unless bankReferenceLabel is given
+// (training payments use a student id instead, with their own label).
+function buildOzowFields(referenceId, amount, { bankReferenceLabel } = {}) {
+  const transactionReference = generateTransactionReference(referenceId)
   const amountStr = Number(amount).toFixed(2)
   const fields = {
     SiteCode: OZOW_SITE_CODE,
@@ -76,8 +78,8 @@ function buildOzowFields(orderId, amount) {
     CurrencyCode: 'ZAR',
     Amount: amountStr,
     TransactionReference: transactionReference,
-    BankReference: `HBH Order ${orderId}`.slice(0, 20),
-    Optional1: String(orderId),
+    BankReference: (bankReferenceLabel || `HBH Order ${referenceId}`).slice(0, 20),
+    Optional1: String(referenceId),
     CancelUrl: `${PUBLIC_API_URL}/api/payments/ozow/return/cancel`,
     ErrorUrl: `${PUBLIC_API_URL}/api/payments/ozow/return/error`,
     SuccessUrl: `${PUBLIC_API_URL}/api/payments/ozow/return/success`,
@@ -177,23 +179,19 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
     const matchStatus = pick(source, 'Status')
     const matchStatusMessage = pick(source, 'StatusMessage')
 
+    const siteMatches = String(matchSiteCode) === String(OZOW_SITE_CODE)
+    const amountMatches = Math.abs(parseFloat(matchAmount) - parseFloat(payment.amount)) < 0.005
+    const isPaid = matchStatus === 'Complete' && siteMatches && amountMatches
+    // A "Complete" status that fails the site/amount check is a mismatch,
+    // not a payment - mapOzowStatus('Complete') is only ever reached here
+    // when isPaid is true, so it's never relied on to produce 'paid'.
+    const newStatus = isPaid ? 'paid' : (matchStatus === 'Complete' ? 'failed' : mapOzowStatus(matchStatus))
+
     const client = await pool.connect()
+    let paidOrder = null
+    let paidStudent = null
     try {
       await client.query('BEGIN')
-      const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [payment.order_id])
-      const order = orderResult.rows[0]
-      if (!order) { await client.query('ROLLBACK'); return }
-
-      // Already paid - a second notification or status check must change nothing.
-      if (order.payment_status === 'paid') { await client.query('ROLLBACK'); return }
-
-      const siteMatches = String(matchSiteCode) === String(OZOW_SITE_CODE)
-      const amountMatches = Math.abs(parseFloat(matchAmount) - parseFloat(payment.amount)) < 0.005
-      const isPaid = matchStatus === 'Complete' && siteMatches && amountMatches
-      // A "Complete" status that fails the site/amount check is a mismatch,
-      // not a payment - mapOzowStatus('Complete') is only ever reached here
-      // when isPaid is true, so it's never relied on to produce 'paid'.
-      const newStatus = isPaid ? 'paid' : (matchStatus === 'Complete' ? 'failed' : mapOzowStatus(matchStatus))
 
       // The status API has no IsTest field - is_test was already set when
       // this payment attempt was created, so it's left untouched here.
@@ -203,33 +201,33 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
         [newStatus, matchStatusMessage || null, matchTransactionId || null, payment.id]
       )
 
-      // Only the latest attempt may move the order's overall payment_status -
-      // a stale result from an older attempt (e.g. a late "Cancelled" after
-      // the customer already succeeded on a retry) must not overwrite it.
-      // A paid result always wins and is never downgraded, regardless of
-      // which attempt it came from.
-      const latestAttemptResult = await client.query(
-        'SELECT id FROM ozow_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
-        [order.id]
-      )
-      const isLatestAttempt = latestAttemptResult.rows[0]?.id === payment.id
-
-      if (isPaid) {
-        await client.query(`UPDATE orders SET payment_status = 'paid', paid_at = NOW() WHERE id = $1`, [order.id])
-      } else if (isLatestAttempt) {
-        await client.query('UPDATE orders SET payment_status = $1 WHERE id = $2', [newStatus, order.id])
+      if (payment.order_id) {
+        paidOrder = await applyOrderOutcome(client, 'ozow_payments', payment, isPaid, newStatus)
+      } else if (payment.student_id && isPaid && payment.status !== 'paid') {
+        // payment.status !== 'paid' guards against crediting the same
+        // attempt twice if Ozow's notification is ever delivered more than
+        // once for an attempt we already marked paid.
+        paidStudent = await applyStudentOutcome(client, payment)
       }
+
       await client.query('COMMIT')
-
-      if (isPaid) {
-        await notifyAdmin('order', 'Ozow payment received',
-          `Order #${order.id} for ${order.customer_name} has been paid via Ozow (R${parseFloat(order.total).toFixed(2)}). Ready to confirm and pack.`)
-      }
     } catch (err) {
       await client.query('ROLLBACK')
       throw err
     } finally {
       client.release()
+    }
+
+    if (paidOrder) {
+      await notifyAdmin('order', 'Ozow payment received',
+        `Order #${paidOrder.id} for ${paidOrder.customer_name} has been paid via Ozow (R${parseFloat(paidOrder.total).toFixed(2)}). Ready to confirm and pack.`)
+    }
+    if (paidStudent) {
+      const startDate = paidStudent.preferred_start_date
+        ? new Date(paidStudent.preferred_start_date).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'not set'
+      await notifyAdmin('section', 'New training payment',
+        `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`)
     }
   } catch (err) {
     console.error('reconcileOzowPayment failed:', err.message)

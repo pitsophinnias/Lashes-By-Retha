@@ -243,6 +243,51 @@ const createTables = async () => {
     );
   `)
 
+  // Online training enrolment. courses mirrors the 3 hard-coded classes both
+  // frontends already show, keyed by the same ids, so uploaded images and
+  // existing students (students.class_id) keep working unchanged.
+  // ozow_payments/payflex_payments are shared between shop orders and
+  // training payments - exactly one of order_id/student_id is set per row,
+  // enforced in application code; purpose defaults to 'order' so every
+  // existing payment row (all of which were for orders) keeps that meaning.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS courses (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      duration_days INTEGER NOT NULL,
+      price NUMERIC(10,2) NOT NULL,
+      deposit NUMERIC(10,2) NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS preferred_start_date DATE;
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(10,2) NOT NULL DEFAULT 0;
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS public_token VARCHAR(64) UNIQUE;
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'admin';
+
+    ALTER TABLE ozow_payments ADD COLUMN IF NOT EXISTS student_id INTEGER REFERENCES students(id);
+    ALTER TABLE ozow_payments ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) NOT NULL DEFAULT 'order';
+    ALTER TABLE payflex_payments ADD COLUMN IF NOT EXISTS student_id INTEGER REFERENCES students(id);
+    ALTER TABLE payflex_payments ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) NOT NULL DEFAULT 'order';
+  `)
+
+  // Seed courses if none exist, using the same ids and values as the
+  // hard-coded CLASSES list both frontends used before this table existed.
+  const { rows: courseRows } = await pool.query('SELECT COUNT(*) FROM courses')
+  if (parseInt(courseRows[0].count) === 0) {
+    await pool.query(`
+      INSERT INTO courses (id, name, duration_days, price, deposit) VALUES
+        (1, 'Classic Individual Lash Training', 1, 2500, 500),
+        (2, 'Classic Individual Lash Training', 2, 4000, 500),
+        (3, 'Advanced Individual Lash Training', 4, 6000, 500)
+      ON CONFLICT (id) DO NOTHING;
+    `)
+    await pool.query(`SELECT setval('courses_id_seq', (SELECT MAX(id) FROM courses))`)
+    console.log('Courses seeded')
+  }
+
   // Seed default categories if none exist
   const { rows } = await pool.query('SELECT COUNT(*) FROM categories')
   if (parseInt(rows[0].count) === 0) {

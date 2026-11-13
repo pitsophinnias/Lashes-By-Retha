@@ -1,5 +1,6 @@
 const crypto = require('crypto')
 const { pool } = require('./db')
+const { applyOrderOutcome, applyStudentOutcome } = require('./paymentOutcomes')
 
 const PAYFLEX_CLIENT_ID = process.env.PAYFLEX_CLIENT_ID || ''
 const PAYFLEX_CLIENT_SECRET = process.env.PAYFLEX_CLIENT_SECRET || ''
@@ -21,7 +22,7 @@ console.log(`Payflex payments: ${isPayflexConfigured ? `enabled (api: ${PAYFLEX_
 let notifyAdmin = async () => {}
 const setNotifier = (fn) => { notifyAdmin = fn }
 
-const generateMerchantReference = (orderId) => `HBH-${orderId}-${crypto.randomBytes(3).toString('hex')}`
+const generateMerchantReference = (referenceId) => `HBH-${referenceId}-${crypto.randomBytes(3).toString('hex')}`
 
 // ── OAuth2 client-credentials token, cached in memory ────────────────────────
 // Refreshed a minute before it actually expires, so a slow request never
@@ -99,7 +100,7 @@ async function createPayflexOrder(params) {
       surname: '',
       email: params.email || undefined,
     },
-    description: `Hair By Her order #${params.orderId}`,
+    description: params.description || `Hair By Her order #${params.orderId}`,
     items: (params.items || []).map(i => ({
       description: i.name,
       name: i.name,
@@ -197,46 +198,43 @@ async function reconcilePayflexPayment(identifier) {
     const newStatus = isPaid ? 'paid' : (orderStatus === 'Approved' ? 'failed' : mapPayflexStatus(orderStatus))
 
     const client = await pool.connect()
+    let paidOrder = null
+    let paidStudent = null
     try {
       await client.query('BEGIN')
-      const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [payment.order_id])
-      const order = orderResult.rows[0]
-      if (!order) { await client.query('ROLLBACK'); return }
-
-      // Already paid - a second callback or status check must change nothing.
-      if (order.payment_status === 'paid') { await client.query('ROLLBACK'); return }
 
       await client.query(
         'UPDATE payflex_payments SET status = $1, raw_status = $2, updated_at = NOW() WHERE id = $3',
         [newStatus, JSON.stringify(remoteOrder), payment.id]
       )
 
-      // Only the latest attempt may move the order's overall payment_status -
-      // a stale result from an older attempt must not overwrite it. A paid
-      // result always wins and is never downgraded, regardless of which
-      // attempt it came from.
-      const latestAttemptResult = await client.query(
-        'SELECT id FROM payflex_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
-        [order.id]
-      )
-      const isLatestAttempt = latestAttemptResult.rows[0]?.id === payment.id
-
-      if (isPaid) {
-        await client.query(`UPDATE orders SET payment_status = 'paid', paid_at = NOW() WHERE id = $1`, [order.id])
-      } else if (isLatestAttempt) {
-        await client.query('UPDATE orders SET payment_status = $1 WHERE id = $2', [newStatus, order.id])
+      if (payment.order_id) {
+        paidOrder = await applyOrderOutcome(client, 'payflex_payments', payment, isPaid, newStatus)
+      } else if (payment.student_id && isPaid && payment.status !== 'paid') {
+        // payment.status !== 'paid' guards against crediting the same
+        // attempt twice if Payflex's callback is ever delivered more than
+        // once for an attempt we already marked paid.
+        paidStudent = await applyStudentOutcome(client, payment)
       }
+
       await client.query('COMMIT')
-
-      if (isPaid) {
-        await notifyAdmin('order', 'Payflex payment received',
-          `Order #${order.id} for ${order.customer_name} has been paid via Payflex (R${parseFloat(order.total).toFixed(2)}).`)
-      }
     } catch (err) {
       await client.query('ROLLBACK')
       throw err
     } finally {
       client.release()
+    }
+
+    if (paidOrder) {
+      await notifyAdmin('order', 'Payflex payment received',
+        `Order #${paidOrder.id} for ${paidOrder.customer_name} has been paid via Payflex (R${parseFloat(paidOrder.total).toFixed(2)}).`)
+    }
+    if (paidStudent) {
+      const startDate = paidStudent.preferred_start_date
+        ? new Date(paidStudent.preferred_start_date).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'not set'
+      await notifyAdmin('section', 'New training payment',
+        `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`)
     }
   } catch (err) {
     console.error('reconcilePayflexPayment failed:', err.message)

@@ -123,11 +123,11 @@ const POLICIES = {
   training: [
     {
       heading: 'Securing Your Spot',
-      body: "A non-refundable deposit of R500 secures your place on a training course. We'll send you a secure payment link to pay your deposit online.",
+      body: 'A non-refundable deposit of R500 secures your place on a training course, paid online when you enrol.',
     },
     {
       heading: 'Paying The Balance',
-      body: 'The remaining balance is due before your training starts. Your certificate will be issued once your course fees have been paid in full.',
+      body: "The remaining balance is due before your training starts, and we'll send you a personal link to pay it online. You're also welcome to pay your course in full when you enrol, in 4 interest-free instalments with Payflex. Your certificate will be issued once your course fees have been paid in full.",
     },
     {
       heading: 'Moving To Another Date',
@@ -249,6 +249,29 @@ const normaliseSaPhone = (input) => {
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
 
+const ENROL_DATE_ERROR = 'Please choose a future Tuesday to Saturday for your preferred start date.'
+
+// Mirrors the backend's own isValidFutureCourseDate - training runs Tuesday
+// to Saturday, same as pickup, and the date must be strictly in the future
+// in South Africa's own timezone rather than the visitor's.
+const isValidFutureCourseDate = (dateStr) => {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const nowSAST = new Date(Date.now() + 2 * 60 * 60 * 1000)
+  const todaySAST = new Date(Date.UTC(nowSAST.getUTCFullYear(), nowSAST.getUTCMonth(), nowSAST.getUTCDate()))
+  if (date <= todaySAST) return false
+  const dayOfWeek = date.getUTCDay()
+  return dayOfWeek >= 2 && dayOfWeek <= 6
+}
+
+// Tomorrow's date (SAST), as yyyy-mm-dd, for the date picker's min attribute.
+const tomorrowSAST = () => {
+  const nowSAST = new Date(Date.now() + 2 * 60 * 60 * 1000)
+  const tomorrow = new Date(Date.UTC(nowSAST.getUTCFullYear(), nowSAST.getUTCMonth(), nowSAST.getUTCDate() + 1))
+  return tomorrow.toISOString().slice(0, 10)
+}
+
 // Payflex's official product widget (per their widgets docs) - a small
 // script-rendered calculator showing the "pay in instalments" message. Each
 // instance gets its own <script> tag, appended directly (not via innerHTML,
@@ -270,6 +293,58 @@ function PayflexWidget({ amount, min, max }) {
   }, [amount, min, max])
   return <div ref={containerRef} />
 }
+
+// A row of square, pill-style buttons for choosing a payment option -
+// shared by checkout, the enrol form and the balance view so every payment
+// choice in the app looks and behaves the same way. Each option is either
+// { key, icon } (e.g. the Ozow logo) or { key, label } (plain text, e.g.
+// "Payflex" or "Pay R500 deposit now"), optionally with disabled: true.
+function PaymentChoiceButtons({ options, selected, onSelect }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '10px' }}>
+      {options.map(opt => (
+        <button
+          key={opt.key}
+          type="button"
+          onClick={() => !opt.disabled && onSelect(opt.key)}
+          disabled={opt.disabled}
+          style={{
+            flex: 1,
+            minWidth: '140px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px 12px',
+            borderRadius: '10px',
+            fontSize: '16px',
+            fontWeight: 700,
+            fontFamily: 'inherit',
+            letterSpacing: '0.3px',
+            textAlign: 'center',
+            border: `1px solid ${selected === opt.key ? '#C47A8A' : '#F5DDE2'}`,
+            background: selected === opt.key ? '#C47A8A' : 'white',
+            color: opt.disabled ? '#C8B8BC' : selected === opt.key ? 'white' : '#2C2C2C',
+            cursor: opt.disabled ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {opt.icon ? (
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: selected === opt.key ? '4px 10px' : '0',
+              borderRadius: '8px',
+              background: selected === opt.key ? 'white' : 'transparent',
+            }}>
+              {opt.icon}
+            </span>
+          ) : opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+const OZOW_ICON = <img src="/ozow-logo.png" alt="Ozow" style={{ height: '22px', width: 'auto', display: 'block' }} />
 
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
@@ -308,6 +383,22 @@ function App() {
   // 'checking' while we wait for a sleeping backend to wake up, 'ready' once
   // it responds, 'unreachable' once it fails to respond within the timeout.
   const [backendStatus, setBackendStatus] = useState('checking')
+  // Live name/price/deposit by course id, merged over CLASSES below - the
+  // descriptions and curriculum text stay hard-coded here for now.
+  const [courseData, setCourseData] = useState({})
+  const [enrolFormOpenFor, setEnrolFormOpenFor] = useState(null)
+  const [enrolName, setEnrolName] = useState('')
+  const [enrolPhone, setEnrolPhone] = useState('')
+  const [enrolPhoneTouched, setEnrolPhoneTouched] = useState(false)
+  const [enrolEmail, setEnrolEmail] = useState('')
+  const [enrolEmailTouched, setEnrolEmailTouched] = useState(false)
+  const [enrolStartDate, setEnrolStartDate] = useState('')
+  const [enrolPaymentOption, setEnrolPaymentOption] = useState(null)
+  const [enrolSubmitting, setEnrolSubmitting] = useState(false)
+  const [enrolError, setEnrolError] = useState('')
+  const [enrolmentResult, setEnrolmentResult] = useState(null)
+  const [enrolmentResultLoading, setEnrolmentResultLoading] = useState(false)
+  const [enrolPendingPollCount, setEnrolPendingPollCount] = useState(0)
   const bookingUrl = 'https://lashesbyretha.setmore.com'
 
   useEffect(() => {
@@ -372,6 +463,15 @@ function App() {
         },
       }))
       .catch(() => setPaymentOptions({ ozow: false, payflex: { enabled: false, minimumAmount: null, maximumAmount: null } }))
+    fetch(`${API}/api/courses`)
+      .then(r => r.json())
+      .then(data => {
+        if (!Array.isArray(data)) return
+        const byId = {}
+        data.forEach(c => { byId[c.id] = c })
+        setCourseData(byId)
+      })
+      .catch(() => {})
   }, [backendStatus])
 
   // Looks up an order by its token for the payment result panel below.
@@ -382,14 +482,34 @@ function App() {
     return data
   }
 
-  // Reads ?payment=&order= left behind by an Ozow redirect, then removes it
-  // from the URL so refreshing the page doesn't re-trigger the lookup.
+  // Looks up an enrolment by its token for the enrolment result/balance panel below.
+  const fetchEnrolmentByToken = async (token) => {
+    const res = await fetch(`${API}/api/enrolments/by-token/${token}`)
+    const data = await res.json().catch(() => null)
+    if (!res.ok || !data) return null
+    return data
+  }
+
+  // Reads ?payment=&order= (shop) or ?payment=&enrolment= left behind by a
+  // provider redirect, or a bare ?enrolment= balance link Retha sends
+  // directly (no payment= - there was no redirect), then removes it from
+  // the URL so refreshing the page doesn't re-trigger the lookup.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const payment = params.get('payment')
     const orderToken = params.get('order')
-    if (!payment) return
+    const enrolmentToken = params.get('enrolment')
+    if (!payment && !enrolmentToken) return
     window.history.replaceState({}, '', window.location.pathname)
+    if (enrolmentToken) {
+      setEnrolmentResultLoading(true)
+      fetchEnrolmentByToken(enrolmentToken).then(data => {
+        setEnrolmentResult({ outcome: payment || null, data, token: enrolmentToken })
+        setEnrolmentResultLoading(false)
+      })
+      return
+    }
+    if (!payment) return
     if (!orderToken) {
       setPaymentResult({ outcome: 'error', order: null, token: null })
       return
@@ -415,6 +535,20 @@ function App() {
     }, 5000)
     return () => clearTimeout(timer)
   }, [paymentResult, pendingPollCount])
+
+  // Same pending re-check, for the enrolment result panel.
+  useEffect(() => {
+    if (!enrolmentResult || !enrolmentResult.token) return
+    const latestStatus = enrolmentResult.data?.latestStatus
+    const isPendingLike = latestStatus === 'pending' || latestStatus === 'started'
+    if (!isPendingLike || enrolPendingPollCount >= 12) return
+    const timer = setTimeout(async () => {
+      const data = await fetchEnrolmentByToken(enrolmentResult.token)
+      if (data) setEnrolmentResult(prev => (prev ? { ...prev, data } : prev))
+      setEnrolPendingPollCount(c => c + 1)
+    }, 5000)
+    return () => clearTimeout(timer)
+  }, [enrolmentResult, enrolPendingPollCount])
 
   // Product images and positions depend on the product list having loaded.
   useEffect(() => {
@@ -501,13 +635,32 @@ function App() {
     !noWayToPay && emailOk &&
     ((paymentMethod === 'ozow' && paymentOptions.ozow) || (paymentMethod === 'payflex' && payflexAvailableForAmount)))
 
+  // CLASSES' hard-coded name/price/deposit are overridden by the live
+  // courses API, matched by id - descriptions and curriculum text stay local.
+  const coursesMerged = CLASSES.map(c => ({ ...c, ...(courseData[c.id] || {}) }))
+
   const closePaymentResult = () => {
     setPaymentResult(null)
     setPendingPollCount(0)
   }
 
-  // Builds a hidden form and submits it to Ozow - the browser navigates away
-  // to pay.ozow.com from here.
+  // Builds a hidden form and submits it - used by both the shop and training
+  // payment flows to hand off to Ozow. The browser navigates away from here.
+  const submitOzowForm = (action, fields) => {
+    const form = document.createElement('form')
+    form.method = 'POST'
+    form.action = action
+    Object.entries(fields).forEach(([key, value]) => {
+      const input = document.createElement('input')
+      input.type = 'hidden'
+      input.name = key
+      input.value = value
+      form.appendChild(input)
+    })
+    document.body.appendChild(form)
+    form.submit()
+  }
+
   const submitToOzow = async (orderToken) => {
     try {
       const res = await fetch(`${API}/api/payments/ozow/start`, {
@@ -522,18 +675,7 @@ function App() {
         setPaymentResultLoading(false)
         return
       }
-      const form = document.createElement('form')
-      form.method = 'POST'
-      form.action = data.action
-      Object.entries(data.fields).forEach(([key, value]) => {
-        const input = document.createElement('input')
-        input.type = 'hidden'
-        input.name = key
-        input.value = value
-        form.appendChild(input)
-      })
-      document.body.appendChild(form)
-      form.submit()
+      submitOzowForm(data.action, data.fields)
     } catch (err) {
       console.error('Ozow start failed:', err)
       setOrderError("I couldn't reach the shop just now. Please check your connection and try again.")
@@ -598,6 +740,127 @@ function App() {
       setPaymentResultLoading(false)
     }
   }
+
+  const openEnrolForm = (courseId) => {
+    setEnrolFormOpenFor(courseId)
+    setEnrolName('')
+    setEnrolPhone('')
+    setEnrolPhoneTouched(false)
+    setEnrolEmail('')
+    setEnrolEmailTouched(false)
+    setEnrolStartDate('')
+    setEnrolPaymentOption(null)
+    setEnrolError('')
+  }
+
+  const closeEnrolmentResult = () => {
+    setEnrolmentResult(null)
+    setEnrolPendingPollCount(0)
+  }
+
+  const openCourse = enrolFormOpenFor != null ? coursesMerged.find(c => c.id === enrolFormOpenFor) : null
+  const normalisedEnrolPhone = normaliseSaPhone(enrolPhone)
+  const enrolPhoneError = (enrolPhoneTouched && !normalisedEnrolPhone) ? SA_PHONE_ERROR : ''
+  const enrolEmailOk = !!enrolEmail.trim() && isValidEmail(enrolEmail)
+  const enrolEmailError = (enrolEmailTouched && !enrolEmailOk) ? EMAIL_ERROR : ''
+  const enrolDateOk = isValidFutureCourseDate(enrolStartDate)
+  const enrolDateError = (enrolStartDate && !enrolDateOk) ? ENROL_DATE_ERROR : ''
+  const enrolPayflexAvailable = !!openCourse && paymentOptions.payflex.enabled &&
+    (paymentOptions.payflex.minimumAmount == null || openCourse.price >= paymentOptions.payflex.minimumAmount) &&
+    (paymentOptions.payflex.maximumAmount == null || openCourse.price <= paymentOptions.payflex.maximumAmount)
+  const enrolNoWayToPay = !!openCourse && !paymentOptions.ozow && !enrolPayflexAvailable
+  const canSubmitEnrolment = !!(openCourse && enrolName.trim() && normalisedEnrolPhone && enrolEmailOk && enrolDateOk &&
+    enrolPaymentOption && !enrolNoWayToPay &&
+    (enrolPaymentOption === 'full_payflex' ? enrolPayflexAvailable : paymentOptions.ozow))
+
+  const submitEnrolment = async () => {
+    setEnrolPhoneTouched(true)
+    setEnrolEmailTouched(true)
+    if (!canSubmitEnrolment) return
+    setEnrolError('')
+    setEnrolSubmitting(true)
+    try {
+      const res = await fetch(`${API}/api/enrolments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          courseId: openCourse.id,
+          name: enrolName,
+          phone: enrolPhone,
+          email: enrolEmail,
+          preferredStartDate: enrolStartDate,
+          paymentOption: enrolPaymentOption,
+        }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.success) {
+        setEnrolError(data?.error || "I couldn't start your enrolment just now. Please try again in a moment.")
+        setEnrolSubmitting(false)
+        return
+      }
+      if (data.redirectUrl) window.location.assign(data.redirectUrl)
+      else if (data.action && data.fields) submitOzowForm(data.action, data.fields)
+    } catch (err) {
+      console.error('Enrolment failed:', err)
+      setEnrolError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setEnrolSubmitting(false)
+    }
+  }
+
+  // Retries the most recent payment attempt exactly as it was (same
+  // provider, amount and purpose) - for a deposit or full-price attempt
+  // that was cancelled or failed.
+  const retryEnrolmentPayment = async () => {
+    if (!enrolmentResult?.token) return
+    setEnrolError('')
+    setEnrolmentResultLoading(true)
+    try {
+      const res = await fetch(`${API}/api/enrolments/${enrolmentResult.token}/retry`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setEnrolError(data?.error || "I couldn't retry that payment just now. Please try again.")
+        setEnrolmentResultLoading(false)
+        return
+      }
+      if (data.redirectUrl) window.location.assign(data.redirectUrl)
+      else if (data.action && data.fields) submitOzowForm(data.action, data.fields)
+    } catch (err) {
+      console.error('Retry enrolment payment failed:', err)
+      setEnrolError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setEnrolmentResultLoading(false)
+    }
+  }
+
+  // Starts a new payment for whatever is still owed - separate from
+  // retrying, since a balance can be paid any time after the deposit.
+  const payEnrolmentBalance = async (provider) => {
+    if (!enrolmentResult?.token) return
+    setEnrolError('')
+    setEnrolmentResultLoading(true)
+    try {
+      const res = await fetch(`${API}/api/enrolments/${enrolmentResult.token}/pay-balance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setEnrolError(data?.error || "I couldn't start that payment just now. Please try again.")
+        setEnrolmentResultLoading(false)
+        return
+      }
+      if (data.redirectUrl) window.location.assign(data.redirectUrl)
+      else if (data.action && data.fields) submitOzowForm(data.action, data.fields)
+    } catch (err) {
+      console.error('Pay balance failed:', err)
+      setEnrolError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setEnrolmentResultLoading(false)
+    }
+  }
+
+  const renderFieldError = (msg) => (
+    <p style={{ fontSize: '12px', color: '#C47A8A', margin: '0 0 12px 0', lineHeight: 1.6 }}>{msg}</p>
+  )
 
   const openPolicies = (tab) => {
     setPolicyTab(tab)
@@ -1865,7 +2128,7 @@ function App() {
       <section id="classes" className="section section-alt classes-section">
         <h2 className="section-heading">Lash Training</h2>
         <div className="classes-grid">
-          {CLASSES.map((cls) => (
+          {coursesMerged.map((cls) => (
             <div
               className="class-card"
               key={cls.id}
@@ -1927,15 +2190,24 @@ function App() {
                 </p>
               )}
               {!isMobile && (
-                <a
-                  className="btn-enquire enquire-btn"
-                  href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}
-                >
-                  Enquire Now
-                </a>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    className="btn-enquire enquire-btn"
+                    onClick={(e) => { e.stopPropagation(); openEnrolForm(cls.id) }}
+                    style={{ flex: 1, display: 'block', textAlign: 'center', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}
+                  >
+                    Enrol Now
+                  </button>
+                  <a
+                    className="btn-enquire enquire-btn"
+                    href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: '#C47A8A', border: '1px solid #C47A8A' }}
+                  >
+                    Enquire Now
+                  </a>
+                </div>
               )}
             </div>
           ))}
@@ -1943,7 +2215,7 @@ function App() {
       </section>
 
       {expandedClassId && isMobile && (() => {
-        const cls = CLASSES.find((c) => c.id === expandedClassId)
+        const cls = coursesMerged.find((c) => c.id === expandedClassId)
         if (!cls) return null
         return (
           <>
@@ -2020,17 +2292,258 @@ function App() {
               </div>
               <p className="class-price">R {cls.price}</p>
               <p className="class-seats">Non-refundable deposit of R{cls.deposit} to secure your spot</p>
-              <a
-                className="btn-enquire enquire-btn"
-                href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ display: 'block', textAlign: 'center', textDecoration: 'none' }}
-              >
-                Enquire Now
-              </a>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="btn-enquire enquire-btn"
+                  onClick={() => { setExpandedClassId(null); openEnrolForm(cls.id) }}
+                  style={{ flex: 1, display: 'block', textAlign: 'center', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  Enrol Now
+                </button>
+                <a
+                  className="btn-enquire enquire-btn"
+                  href={`https://wa.me/27826855399?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: '#C47A8A', border: '1px solid #C47A8A' }}
+                >
+                  Enquire Now
+                </a>
+              </div>
             </div>
           </>
+        )
+      })()}
+
+      {enrolFormOpenFor != null && openCourse && (() => {
+        const fieldStyle = (error, extra) => ({
+          width: '100%',
+          padding: '12px 14px',
+          borderRadius: '10px',
+          border: `1px solid ${error ? '#C47A8A' : '#F5DDE2'}`,
+          fontSize: '14px',
+          marginBottom: error ? '6px' : '12px',
+          background: 'white',
+          color: '#2C2C2C',
+          fontFamily: 'inherit',
+          boxSizing: 'border-box',
+          outline: 'none',
+          ...extra,
+        })
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.5)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+            <div style={{ position: 'relative', background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '440px', width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+              <button
+                onClick={() => setEnrolFormOpenFor(null)}
+                style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
+              >
+                x
+              </button>
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '4px' }}>
+                Enrol in {openCourse.name}
+              </div>
+              <p style={{ fontSize: '13px', color: '#9A7A82', marginTop: 0, marginBottom: '16px' }}>{openCourse.duration}</p>
+
+              <input
+                type="text"
+                placeholder="Full name"
+                value={enrolName}
+                onChange={(e) => setEnrolName(e.target.value)}
+                style={fieldStyle(false)}
+              />
+
+              <input
+                type="tel"
+                inputMode="tel"
+                placeholder="e.g. 082 123 4567"
+                value={enrolPhone}
+                onChange={(e) => setEnrolPhone(e.target.value)}
+                onBlur={() => setEnrolPhoneTouched(true)}
+                style={fieldStyle(enrolPhoneError)}
+              />
+              {enrolPhoneError && renderFieldError(enrolPhoneError)}
+
+              <input
+                type="email"
+                inputMode="email"
+                placeholder="Your email address"
+                value={enrolEmail}
+                onChange={(e) => setEnrolEmail(e.target.value)}
+                onBlur={() => setEnrolEmailTouched(true)}
+                style={fieldStyle(enrolEmailError)}
+              />
+              {enrolEmailError && renderFieldError(enrolEmailError)}
+
+              <input
+                type="date"
+                min={tomorrowSAST()}
+                value={enrolStartDate}
+                onChange={(e) => setEnrolStartDate(e.target.value)}
+                style={fieldStyle(enrolDateError)}
+              />
+              {enrolDateError && renderFieldError(enrolDateError)}
+
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 700, color: '#2C2C2C', margin: '8px 0 12px' }}>
+                How Would You Like To Pay
+              </div>
+
+              <PaymentChoiceButtons
+                options={[
+                  { key: 'deposit_ozow', label: `Pay R${openCourse.deposit} deposit now`, disabled: !paymentOptions.ozow },
+                  { key: 'full_ozow', label: `Pay R${openCourse.price} in full now`, disabled: !paymentOptions.ozow },
+                  paymentOptions.payflex.enabled && {
+                    key: 'full_payflex', label: 'Pay in 4 interest-free instalments', disabled: !enrolPayflexAvailable,
+                  },
+                ].filter(Boolean)}
+                selected={enrolPaymentOption}
+                onSelect={setEnrolPaymentOption}
+              />
+
+              {paymentOptions.payflex.enabled && !enrolPayflexAvailable && (
+                <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', lineHeight: 1.6 }}>
+                  Instalments available for amounts between R{paymentOptions.payflex.minimumAmount} and R{paymentOptions.payflex.maximumAmount}.
+                </p>
+              )}
+              {enrolPaymentOption === 'full_payflex' && (
+                <PayflexWidget amount={openCourse.price} min={paymentOptions.payflex.minimumAmount} max={paymentOptions.payflex.maximumAmount} />
+              )}
+
+              {enrolNoWayToPay && (
+                <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '16px 20px', marginTop: '8px', marginBottom: '16px', border: '1px solid #F5DDE2' }}>
+                  <p style={{ fontSize: '13px', color: '#2C2C2C', margin: 0, lineHeight: 1.7 }}>
+                    Online payments are taking a short break. Please message us on{' '}
+                    <a href="https://wa.me/27826855399" target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+                      WhatsApp at 082 685 5399
+                    </a>{' '}and we'll gladly help you enrol.
+                  </p>
+                </div>
+              )}
+
+              <p style={{ fontSize: '12px', color: '#7A6670', margin: '12px 0', lineHeight: 1.6 }}>
+                Your deposit secures your place. The balance is due before your course starts, and we'll send you a
+                link to pay it.{' '}
+                <button
+                  onClick={() => { setEnrolFormOpenFor(null); openPolicies('training') }}
+                  style={{ background: 'none', border: 'none', padding: 0, color: '#C47A8A', fontWeight: 600, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline', fontFamily: 'inherit' }}
+                >
+                  View our training policy
+                </button>
+              </p>
+
+              {enrolError && renderFieldError(enrolError)}
+
+              <button
+                onClick={submitEnrolment}
+                disabled={!canSubmitEnrolment || enrolSubmitting}
+                style={{
+                  width: '100%',
+                  background: '#C47A8A',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '24px',
+                  padding: '14px 22px',
+                  fontSize: '15px',
+                  fontWeight: 700,
+                  fontFamily: 'inherit',
+                  cursor: (!canSubmitEnrolment || enrolSubmitting) ? 'not-allowed' : 'pointer',
+                  opacity: (!canSubmitEnrolment || enrolSubmitting) ? 0.6 : 1,
+                  marginTop: '8px',
+                }}
+              >
+                {enrolSubmitting
+                  ? (enrolPaymentOption === 'full_payflex' ? 'Taking you to Payflex...' : 'Taking you to Ozow...')
+                  : 'Continue'}
+              </button>
+            </div>
+          </div>
+        )
+      })()}
+
+      {enrolmentResult && (() => {
+        const data = enrolmentResult.data
+        // 'paid' always means balance is 0 (payment_status only becomes
+        // 'paid' once amountPaid >= price) - 'partial' is deposit-paid,
+        // balance-owing, which needs its own framing, not "still confirming".
+        const status = !data ? 'error'
+          : data.paymentStatus === 'paid' ? 'paid'
+          : data.paymentStatus === 'partial' ? 'partial'
+          : (data.latestStatus === 'cancelled' || data.latestStatus === 'failed') ? data.latestStatus
+          : 'pending'
+
+        const btnPrimary = {
+          background: '#C47A8A', color: 'white', border: 'none', borderRadius: '24px',
+          padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+        }
+        const btnSecondary = {
+          background: 'white', color: '#C47A8A', border: '1px solid #C47A8A', borderRadius: '24px',
+          padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+        }
+        const heading = { fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }
+        const body = { fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '20px' }
+
+        const payBalanceOptions = data ? [
+          data.providers?.ozow && { key: 'ozow', icon: OZOW_ICON },
+          data.providers?.payflex && { key: 'payflex', label: 'Payflex' },
+        ].filter(Boolean) : []
+
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.5)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+            <div style={{ background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+              {enrolmentResultLoading ? (
+                <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', margin: 0 }}>
+                  Just a moment while we check on your payment...
+                </p>
+              ) : status === 'paid' ? (
+                <>
+                  <div style={heading}>Thank you, you're all paid up!</div>
+                  <p style={body}>
+                    We've received your full payment for {data.courseName}. We're looking forward to having you on
+                    the course!
+                  </p>
+                  <button onClick={closeEnrolmentResult} style={btnPrimary}>Close</button>
+                </>
+              ) : status === 'partial' ? (
+                <>
+                  <div style={heading}>Your balance is waiting for you</div>
+                  <p style={body}>
+                    We've received R{data.amountPaid.toFixed(2)} for {data.courseName}. The remaining balance of
+                    R{data.balance.toFixed(2)} is due before your course starts - you're welcome to pay it now, or
+                    wait for the link we'll send you closer to the time.
+                  </p>
+                  {enrolError && renderFieldError(enrolError)}
+                  {payBalanceOptions.length > 0 && (
+                    <PaymentChoiceButtons options={payBalanceOptions} selected={null} onSelect={payEnrolmentBalance} />
+                  )}
+                  <button onClick={closeEnrolmentResult} style={{ ...btnSecondary, marginTop: '8px' }}>Close</button>
+                </>
+              ) : status === 'pending' ? (
+                <>
+                  <div style={heading}>We're still confirming your payment</div>
+                  <p style={body}>
+                    This usually only takes a moment. We'll keep checking for you, so please don't close this page
+                    just yet. If you'd rather not wait, you're welcome to close this and we'll update your enrolment
+                    as soon as it's confirmed.
+                  </p>
+                  <button onClick={closeEnrolmentResult} style={btnSecondary}>Close</button>
+                </>
+              ) : (
+                <>
+                  <div style={heading}>
+                    {status === 'error' ? "We couldn't find that enrolment" : "It looks like your payment didn't go through"}
+                  </div>
+                  <p style={body}>
+                    Not to worry, your enrolment is still here for you. Please don't hesitate to try paying again.
+                  </p>
+                  {enrolError && renderFieldError(enrolError)}
+                  {data ? (
+                    <button onClick={retryEnrolmentPayment} style={btnPrimary}>Try paying again</button>
+                  ) : (
+                    <button onClick={closeEnrolmentResult} style={btnPrimary}>Close</button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         )
       })()}
 
@@ -2847,62 +3360,14 @@ function App() {
                         How Would You Like To Pay
                       </div>
 
-                      <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                        {paymentOptions.ozow && (
-                          <button
-                            type="button"
-                            onClick={() => setPaymentMethod('ozow')}
-                            style={{
-                              flex: 1,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: '16px 12px',
-                              borderRadius: '10px',
-                              border: `1px solid ${paymentMethod === 'ozow' ? '#C47A8A' : '#F5DDE2'}`,
-                              background: paymentMethod === 'ozow' ? '#C47A8A' : 'white',
-                              cursor: 'pointer',
-                              fontFamily: 'inherit',
-                            }}
-                          >
-                            <span style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              padding: paymentMethod === 'ozow' ? '4px 10px' : '0',
-                              borderRadius: '8px',
-                              background: paymentMethod === 'ozow' ? 'white' : 'transparent',
-                            }}>
-                              <img src="/ozow-logo.png" alt="Ozow" style={{ height: '22px', width: 'auto', display: 'block' }} />
-                            </span>
-                          </button>
-                        )}
-
-                        {paymentOptions.payflex.enabled && (
-                          <button
-                            type="button"
-                            onClick={() => payflexAvailableForAmount && setPaymentMethod('payflex')}
-                            disabled={!payflexAvailableForAmount}
-                            style={{
-                              flex: 1,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              padding: '16px 12px',
-                              borderRadius: '10px',
-                              fontSize: '16px',
-                              fontWeight: 700,
-                              fontFamily: 'inherit',
-                              letterSpacing: '0.3px',
-                              border: `1px solid ${paymentMethod === 'payflex' ? '#C47A8A' : '#F5DDE2'}`,
-                              background: paymentMethod === 'payflex' ? '#C47A8A' : 'white',
-                              color: !payflexAvailableForAmount ? '#C8B8BC' : paymentMethod === 'payflex' ? 'white' : '#2C2C2C',
-                              cursor: payflexAvailableForAmount ? 'pointer' : 'not-allowed',
-                            }}
-                          >
-                            Payflex
-                          </button>
-                        )}
-                      </div>
+                      <PaymentChoiceButtons
+                        options={[
+                          paymentOptions.ozow && { key: 'ozow', icon: OZOW_ICON },
+                          paymentOptions.payflex.enabled && { key: 'payflex', label: 'Payflex', disabled: !payflexAvailableForAmount },
+                        ].filter(Boolean)}
+                        selected={paymentMethod}
+                        onSelect={setPaymentMethod}
+                      />
 
                       {paymentOptions.ozow && (
                         <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', marginBottom: '6px', lineHeight: 1.6 }}>

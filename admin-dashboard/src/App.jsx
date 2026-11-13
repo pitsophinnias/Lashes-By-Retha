@@ -94,6 +94,12 @@ export default function App({ user, onLogout }) {
   const [newStudent, setNewStudent] = useState({ name: '', whatsapp: '', paymentStatus: 'unpaid', notes: '' })
   const [studentSaving, setStudentSaving] = useState(false)
   const [studentFormError, setStudentFormError] = useState('')
+  const [showAwaitingPayment, setShowAwaitingPayment] = useState(false)
+  const [linkCopyStatus, setLinkCopyStatus] = useState({})
+  // Live name/price/deposit by course id, merged over CLASSES below -
+  // descriptions and curriculum text stay hard-coded here for now.
+  const [courseData, setCourseData] = useState({})
+  const coursesMerged = CLASSES.map(c => ({ ...c, ...(courseData[c.id] || {}) }))
 
   // The amount of an order that is the business's own revenue - excludes
   // the delivery fee, which is passed straight through to the courier.
@@ -164,6 +170,16 @@ export default function App({ user, onLogout }) {
       .then(data => {
         if (Array.isArray(data)) setProducts(data)
         else setProducts([])
+      })
+      .catch(() => {})
+    // Fetch live course name/price/deposit
+    apiFetch('/api/courses')
+      .then(r => r.json())
+      .then(data => {
+        if (!Array.isArray(data)) return
+        const byId = {}
+        data.forEach(c => { byId[c.id] = c })
+        setCourseData(byId)
       })
       .catch(() => {})
     // Fetch class images
@@ -624,6 +640,36 @@ export default function App({ user, onLogout }) {
         const data = await res.json()
         setClassStudents(prev => prev.map(s => s.id === studentId ? data : s))
       }
+    } catch {
+      // silent fail
+    }
+  }
+
+  // Admin-added students never get a public_token until first needed -
+  // ensure-token creates one on demand, then both actions below copy from it.
+  const copyBalanceLink = async (student) => {
+    try {
+      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${student.id}/ensure-token`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || !data.link) return
+      await navigator.clipboard.writeText(data.link)
+      setLinkCopyStatus(prev => ({ ...prev, [student.id]: 'link' }))
+      setTimeout(() => setLinkCopyStatus(prev => ({ ...prev, [student.id]: null })), 2000)
+    } catch {
+      // silent fail
+    }
+  }
+
+  const copyWhatsAppMessage = async (student) => {
+    try {
+      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${student.id}/ensure-token`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || !data.link) return
+      const firstName = student.name.split(' ')[0]
+      const message = `Hi ${firstName}, thank you for enrolling for ${selectedClass.name}. Your balance of R${(student.balance ?? 0).toFixed(2)} is due before your course starts. You can pay it securely here: ${data.link}`
+      await navigator.clipboard.writeText(message)
+      setLinkCopyStatus(prev => ({ ...prev, [student.id]: 'message' }))
+      setTimeout(() => setLinkCopyStatus(prev => ({ ...prev, [student.id]: null })), 2000)
     } catch {
       // silent fail
     }
@@ -2282,7 +2328,7 @@ export default function App({ user, onLogout }) {
                 {imageTab === 'classes' && (
                   <div>
                     <div className="section-heading">Class Images</div>
-                    {CLASSES.map((c, index) => (
+                    {coursesMerged.map((c, index) => (
                       <div
                         key={c.id}
                         className="admin-card"
@@ -2435,7 +2481,7 @@ export default function App({ user, onLogout }) {
                       </div>
                       <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.3, lineHeight: 1 }}>3</div>
                     </div>
-                    {CLASSES.map((c) => (
+                    {coursesMerged.map((c) => (
                       <div
                         key={c.id}
                         onClick={() => openClass(c)}
@@ -2474,10 +2520,13 @@ export default function App({ user, onLogout }) {
                 )
               }
 
-              const currentStudents = classStudents.filter(s => s.status !== 'completed')
+              const currentStudents = classStudents.filter(s => s.status !== 'completed' && s.status !== 'awaiting_payment')
               const pastStudents = classStudents
                 .filter(s => s.status === 'completed')
                 .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+              const awaitingPaymentStudents = classStudents
+                .filter(s => s.status === 'awaiting_payment')
+                .sort((a, b) => new Date(b.enrolledAt) - new Date(a.enrolledAt))
 
               return (
                 <div>
@@ -2590,19 +2639,34 @@ export default function App({ user, onLogout }) {
                       {!studentsLoading && currentStudents.map(student => (
                         <div key={student.id} className="student-row">
                           <div>
-                            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                               {student.name}
+                              {student.source === 'website' && (
+                                <span style={{ fontSize: 10, fontWeight: 700, color: '#8C5A6A', background: '#F5EDEF', borderRadius: 4, padding: '2px 6px' }}>
+                                  Website
+                                </span>
+                              )}
                             </div>
                             <div style={{ fontSize: 12, color: '#9A8A8E' }}>
-                              {student.whatsapp}
+                              {student.whatsapp}{student.email ? ` · ${student.email}` : ''}
                             </div>
+                            {student.preferredStartDate && (
+                              <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 2 }}>
+                                Preferred start: {new Date(student.preferredStartDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              </div>
+                            )}
+                            {student.balance != null && (
+                              <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 2 }}>
+                                Paid R{student.amountPaid.toFixed(2)} · Balance R{student.balance.toFixed(2)}
+                              </div>
+                            )}
                             {student.notes && (
                               <div style={{ fontSize: 11, color: '#C4A0A8', fontStyle: 'italic', marginTop: 2 }}>
                                 {student.notes}
                               </div>
                             )}
                           </div>
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             <select
                               className="category-select"
                               value={student.paymentStatus}
@@ -2623,6 +2687,16 @@ export default function App({ user, onLogout }) {
                             >
                               W
                             </a>
+                            {student.balance > 0 && (
+                              <>
+                                <button className="secondary-btn" onClick={() => copyBalanceLink(student)}>
+                                  {linkCopyStatus[student.id] === 'link' ? 'Copied!' : 'Copy balance link'}
+                                </button>
+                                <button className="secondary-btn" onClick={() => copyWhatsAppMessage(student)}>
+                                  {linkCopyStatus[student.id] === 'message' ? 'Copied!' : 'Copy WhatsApp message'}
+                                </button>
+                              </>
+                            )}
                             <button className="secondary-btn" onClick={() => completeStudent(student.id, student.name)}>
                               Finished course
                             </button>
@@ -2630,6 +2704,49 @@ export default function App({ user, onLogout }) {
                         </div>
                       ))}
                     </div>
+                  </div>
+
+                  <div className="panel" style={{ padding: 0, overflow: 'hidden', marginTop: 20 }}>
+                    <div
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F7EEF0', padding: '12px 20px', color: '#2C1A20', cursor: 'pointer' }}
+                      onClick={() => setShowAwaitingPayment(prev => !prev)}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>Awaiting Payment {showAwaitingPayment ? '▾' : '▸'}</div>
+                      <div style={{ fontSize: 11, color: '#8C5A6A', fontWeight: 600 }}>{awaitingPaymentStudents.length} not yet enrolled</div>
+                    </div>
+
+                    {showAwaitingPayment && (
+                      <div style={{ padding: '0 20px' }}>
+                        {awaitingPaymentStudents.length === 0 && (
+                          <div style={{ padding: '24px 0', fontSize: 13, color: '#9A8A8E', textAlign: 'center' }}>
+                            No enrolments waiting on payment.
+                          </div>
+                        )}
+                        {awaitingPaymentStudents.map(student => (
+                          <div key={student.id} className="student-row">
+                            <div>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
+                                {student.name}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                                {student.whatsapp}{student.email ? ` · ${student.email}` : ''}
+                              </div>
+                              {student.preferredStartDate && (
+                                <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 2 }}>
+                                  Preferred start: {new Date(student.preferredStartDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <span className="payment-badge payment-unpaid">Not yet enrolled</span>
+                              <button className="delete-btn" onClick={() => removeStudent(student.id, student.name)}>
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="panel" style={{ padding: 0, overflow: 'hidden', marginTop: 20 }}>
