@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 
 const CLASSES = [
   {
@@ -322,6 +322,21 @@ const deriveShades = (colors) => ({
 const colorsMatchDefault = (colors) =>
   Object.keys(DEFAULT_THEME_COLORS).every((key) => colors?.[key]?.toUpperCase() === DEFAULT_THEME_COLORS[key])
 
+// A warm greeting and a soft, tasteful particle animation for each occasion
+// preset - keyed by the exact preset name the admin's Theme page saves.
+// Nothing shows for the everyday presets or an unset/unrecognised preset.
+const OCCASION_GREETINGS = {
+  'New Year': { message: "Wishing you a sparkling New Year, from all of us at Hair By Her.", animation: 'sparkle' },
+  "Valentine's Day": { message: "Happy Valentine's Day, with love from Hair By Her.", animation: 'hearts' },
+  'Easter': { message: 'Happy Easter from Hair By Her.', animation: 'petals' },
+  'Freedom Day': { message: 'Happy Freedom Day from Hair By Her.', animation: 'leaves' },
+  "Mother's Day": { message: "Happy Mother's Day to the beautiful mothers in our lives.", animation: 'petals' },
+  "Women's Month": { message: "Celebrating every woman this Women's Month.", animation: 'sparkle' },
+  'Heritage Day': { message: 'Happy Heritage Day from Hair By Her.', animation: 'leaves' },
+  'Black Friday': { message: 'Our Black Friday specials are here for a limited time.', animation: 'sparkle' },
+  'Festive Season': { message: 'Merry Christmas and a joyful festive season from Hair By Her.', animation: 'snow' },
+}
+
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
 // Cloudinary URLs are already absolute; local-disk URLs are relative and
@@ -516,6 +531,11 @@ function App() {
   // the API loads, and stays on it quietly if the API fails.
   const [siteContent, setSiteContent] = useState(DEFAULT_CONTENT)
   const [siteTheme, setSiteTheme] = useState(DEFAULT_THEME)
+  // Remembers which occasion banner was last dismissed, so it stays hidden
+  // for that occasion but reappears the moment a different one goes live.
+  const [dismissedOccasion, setDismissedOccasion] = useState(() => {
+    try { return localStorage.getItem('hbh_dismissed_occasion') || '' } catch { return '' }
+  })
   const [enrolFormOpenFor, setEnrolFormOpenFor] = useState(null)
   const [enrolName, setEnrolName] = useState('')
   const [enrolPhone, setEnrolPhone] = useState('')
@@ -1411,6 +1431,31 @@ function App() {
     )
   }
 
+  const activeOccasion = OCCASION_GREETINGS[siteTheme.preset] || null
+  const showOccasionBanner = !!activeOccasion && dismissedOccasion !== siteTheme.preset
+
+  const dismissOccasionBanner = () => {
+    setDismissedOccasion(siteTheme.preset)
+    try { localStorage.setItem('hbh_dismissed_occasion', siteTheme.preset) } catch {}
+  }
+
+  // A fixed set of particles per animation type, regenerated only when the
+  // occasion itself changes - not on every render.
+  const occasionParticles = useMemo(() => {
+    if (!activeOccasion) return []
+    const counts = { snow: 18, hearts: 14, petals: 14, leaves: 12, sparkle: 16 }
+    const count = counts[activeOccasion.animation] || 14
+    return Array.from({ length: count }, (_, i) => ({
+      id: i,
+      left: Math.random() * 100,
+      size: 6 + Math.random() * 8,
+      duration: 8 + Math.random() * 10,
+      delay: Math.random() * 10,
+      drift: (Math.random() - 0.5) * 80,
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeOccasion?.animation])
+
   return (
     <div className="page">
       <style>{`
@@ -2069,7 +2114,109 @@ function App() {
           .policies-tabs { width: 100% !important; max-width: 100% !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
           .policies-tabs button { flex-shrink: 0 !important; white-space: nowrap !important; }
         }
+
+        /* Occasion banner + particle animation - shown only while an
+           occasion theme preset (e.g. "Festive Season") is active. */
+        .occasion-banner {
+          position: relative;
+          z-index: 500;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 16px;
+          padding: 10px 20px;
+          text-align: center;
+          font-size: 13px;
+          font-weight: 600;
+          background: var(--nav-background);
+          color: var(--text);
+          border-bottom: 1px solid var(--border);
+        }
+
+        .occasion-banner-close {
+          background: none;
+          border: none;
+          color: var(--muted-text);
+          cursor: pointer;
+          font-size: 16px;
+          line-height: 1;
+          padding: 0;
+        }
+
+        .occasion-particles {
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          overflow: hidden;
+          z-index: 1;
+        }
+
+        .occasion-particle {
+          position: absolute;
+          top: -24px;
+          border-radius: 50%;
+          opacity: 0.7;
+          animation-name: occasion-fall;
+          animation-timing-function: linear;
+          animation-iteration-count: infinite;
+        }
+
+        @keyframes occasion-fall {
+          0% { transform: translateY(-10vh) translateX(0) rotate(0deg); }
+          100% { transform: translateY(110vh) translateX(var(--drift, 20px)) rotate(360deg); }
+        }
+
+        @keyframes occasion-twinkle {
+          0%, 100% { opacity: 0; transform: scale(0.6); }
+          50% { opacity: 0.9; transform: scale(1.15); }
+        }
+
+        .occasion-particle.snow { background: #FFFFFF; box-shadow: 0 0 4px rgba(255,255,255,0.8); }
+        .occasion-particle.hearts { background: var(--accent); border-radius: 50% 50% 50% 0; transform: rotate(45deg); }
+        .occasion-particle.petals { background: var(--accent-soft-bg); border-radius: 60% 0 60% 0; }
+        .occasion-particle.leaves { background: var(--accent); border-radius: 0 70% 0 70%; }
+        .occasion-particle.sparkle {
+          background: var(--accent);
+          border-radius: 2px;
+          animation-name: occasion-twinkle;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .occasion-particle { animation: none !important; display: none; }
+        }
+
+        @media (max-width: 600px) {
+          .occasion-banner { font-size: 12px; padding: 8px 14px; gap: 10px; }
+        }
       `}</style>
+
+      {showOccasionBanner && (
+        <div className="occasion-banner">
+          <span>{activeOccasion.message}</span>
+          <button className="occasion-banner-close" onClick={dismissOccasionBanner} aria-label="Dismiss">
+            x
+          </button>
+        </div>
+      )}
+
+      {showOccasionBanner && (
+        <div className="occasion-particles" aria-hidden="true">
+          {occasionParticles.map(p => (
+            <span
+              key={p.id}
+              className={`occasion-particle ${activeOccasion.animation}`}
+              style={{
+                left: `${p.left}%`,
+                width: p.size,
+                height: p.size,
+                animationDuration: `${p.duration}s`,
+                animationDelay: `${p.delay}s`,
+                '--drift': `${p.drift}px`,
+              }}
+            />
+          ))}
+        </div>
+      )}
 
       {!showPolicies && (
       <>

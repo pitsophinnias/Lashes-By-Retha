@@ -102,6 +102,23 @@ const MIN_CONTRAST_RATIO = 4.5
 
 // Shared by the Website Content and Theme admin pages - a leave/restore/
 // reset confirmation, in-page rather than a browser alert/confirm.
+// Inline, not className-based - this and the other shared Settings
+// components below render inside two different dashboards (App.jsx and
+// SysAdminDashboard.jsx), each with its own stylesheet that doesn't define
+// the other's button classes. Inline styles render identically in both.
+const sharedBtnSecondary = {
+  background: '#F7EEF0', color: '#8C5A6A', border: '1px solid #EDD5DB', borderRadius: 8,
+  padding: '8px 16px', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600,
+}
+const sharedBtnPrimary = {
+  background: '#C47A8A', color: 'white', border: 'none', borderRadius: 8,
+  padding: '9px 18px', fontSize: 13, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap',
+}
+const sharedBtnDelete = {
+  background: 'none', border: '1px solid #E8E8E8', color: '#BBBBBB', borderRadius: 6,
+  padding: '7px 14px', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 500,
+}
+
 function SettingsConfirmModal({ confirm, itemLabel, onCancel, onDiscard, onRestore, onReset }) {
   if (!confirm) return null
   return (
@@ -114,8 +131,8 @@ function SettingsConfirmModal({ confirm, itemLabel, onCancel, onDiscard, onResto
               You have unsaved changes to the {itemLabel}. If you leave now, they'll be lost.
             </p>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button className="secondary-btn" onClick={onCancel}>Keep editing</button>
-              <button className="delete-btn" onClick={() => onDiscard(confirm.target)}>Discard changes</button>
+              <button style={sharedBtnSecondary} onClick={onCancel}>Keep editing</button>
+              <button style={sharedBtnDelete} onClick={() => onDiscard(confirm.target)}>Discard changes</button>
             </div>
           </>
         ) : confirm.type === 'restore' ? (
@@ -125,8 +142,8 @@ function SettingsConfirmModal({ confirm, itemLabel, onCancel, onDiscard, onResto
               This replaces the current {itemLabel} with this earlier version. The version it replaces is saved to history too, so you can always restore it back.
             </p>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button className="secondary-btn" onClick={onCancel}>Cancel</button>
-              <button className="upload-btn" onClick={() => onRestore(confirm.historyId)}>Restore</button>
+              <button style={sharedBtnSecondary} onClick={onCancel}>Cancel</button>
+              <button style={sharedBtnPrimary} onClick={() => onRestore(confirm.historyId)}>Restore</button>
             </div>
           </>
         ) : (
@@ -136,8 +153,8 @@ function SettingsConfirmModal({ confirm, itemLabel, onCancel, onDiscard, onResto
               This replaces the {itemLabel} with the original defaults. The current version is saved to history first, so you can restore it back if needed.
             </p>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button className="secondary-btn" onClick={onCancel}>Cancel</button>
-              <button className="delete-btn" onClick={onReset}>Reset</button>
+              <button style={sharedBtnSecondary} onClick={onCancel}>Cancel</button>
+              <button style={sharedBtnDelete} onClick={onReset}>Reset</button>
             </div>
           </>
         )}
@@ -152,7 +169,7 @@ function SettingsHistoryPanel({ history, loading, onReset, onRestore }) {
     <div style={{ background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20' }}>History</div>
-        <button className="secondary-btn" onClick={onReset}>Reset to defaults</button>
+        <button style={sharedBtnSecondary} onClick={onReset}>Reset to defaults</button>
       </div>
       {loading && <div style={{ fontSize: 13, color: '#9A8A8E' }}>Loading history...</div>}
       {!loading && history.length === 0 && <div style={{ fontSize: 13, color: '#9A8A8E' }}>No earlier versions yet.</div>}
@@ -162,7 +179,7 @@ function SettingsHistoryPanel({ history, loading, onReset, onRestore }) {
             {new Date(h.saved_at).toLocaleString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
             <span style={{ color: '#9A8A8E' }}> &middot; {h.saved_by || 'system'}</span>
           </div>
-          <button className="secondary-btn" onClick={() => onRestore(h.id)}>Restore</button>
+          <button style={sharedBtnSecondary} onClick={() => onRestore(h.id)}>Restore</button>
         </div>
       ))}
     </div>
