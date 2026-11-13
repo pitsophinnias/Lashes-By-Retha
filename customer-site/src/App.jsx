@@ -173,7 +173,7 @@ const POLICIES = {
           You may ask us what information we hold about you, ask us to correct it, or ask us to delete it. Please
           email lashesbyretha@gmail.com and we'll gladly help. If you're unhappy with how we've handled your
           information, you may contact the{' '}
-          <a href="https://inforegulator.org.za" target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+          <a href="https://inforegulator.org.za" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', fontWeight: 600 }}>
             Information Regulator
           </a>
           .
@@ -243,6 +243,84 @@ const DEFAULT_CONTENT = {
     text: '',
   },
 }
+
+// Mirrors backend/src/siteSettings/defaults.js's theme exactly.
+const DEFAULT_THEME_COLORS = {
+  background: '#FFFAF8',
+  accent: '#C47A8A',
+  navBackground: '#FDF0F3',
+  text: '#2C2C2C',
+  mutedText: '#7A6670',
+}
+const DEFAULT_FONTS = { heading: 'Cormorant Garamond', body: 'Lato' }
+const DEFAULT_THEME = { colors: DEFAULT_THEME_COLORS, fonts: DEFAULT_FONTS, preset: 'default' }
+
+// Every other colour this page uses today, derived from the 5 theme colours
+// above. When the 5 base colours are still the defaults, deriveShades below
+// returns this object verbatim - its values are exactly what was hard-coded
+// here before theming existed, so the default site stays pixel-identical.
+// Only recomputed by formula once a base colour actually changes.
+const DEFAULT_SHADES = {
+  border: '#F5DDE2',
+  surface: '#FFFFFF',
+  mutedLabel: '#C4A0A8',
+  borderSoft: '#F7EEF0',
+  mutedCaption: '#9A7A82',
+  bodyTextSoft: '#5A4A50',
+  accentSoftBg: '#FADADD',
+  placeholderPink1: '#EDD5DB',
+  accentHover: '#A8606F',
+  accentStrong: '#A0566A',
+  bodyTextDark: '#4A4A4A',
+  placeholderPink2: '#F2E4E8',
+  disabledText: '#C8B8BC',
+  mutedCaption2: '#9A8A8E',
+  placeholderPink3: '#F5EDF0',
+  errorBorder: '#F5C0CC',
+  iconMuted: '#C8A8B0',
+  footerBg: '#2C1A20',
+}
+
+const clamp255 = (n) => Math.max(0, Math.min(255, Math.round(n)))
+const hexToRgb = (hex) => {
+  const h = hex.replace('#', '')
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+}
+const rgbToHex = ([r, g, b]) => `#${[r, g, b].map((v) => clamp255(v).toString(16).padStart(2, '0').toUpperCase()).join('')}`
+// Blends hexB into hexA by weight (0 = all hexA, 1 = all hexB).
+const mix = (hexA, hexB, weight) => {
+  const a = hexToRgb(hexA), b = hexToRgb(hexB)
+  return rgbToHex(a.map((v, i) => v + (b[i] - v) * weight))
+}
+const lighten = (hex, amount) => mix(hex, '#FFFFFF', amount)
+const darken = (hex, amount) => mix(hex, '#000000', amount)
+
+// Computes every derived shade from the 5 base colours - only ever called
+// with customised colours, since the default case is handled by returning
+// DEFAULT_SHADES directly (see useEffect below).
+const deriveShades = (colors) => ({
+  border: lighten(colors.accent, 0.78),
+  surface: '#FFFFFF',
+  mutedLabel: mix(colors.mutedText, colors.accent, 0.35),
+  borderSoft: lighten(colors.accent, 0.90),
+  mutedCaption: mix(colors.mutedText, colors.accent, 0.20),
+  bodyTextSoft: mix(colors.text, colors.mutedText, 0.45),
+  accentSoftBg: lighten(colors.accent, 0.75),
+  placeholderPink1: lighten(colors.accent, 0.82),
+  accentHover: darken(colors.accent, 0.12),
+  accentStrong: darken(colors.accent, 0.16),
+  bodyTextDark: lighten(colors.text, 0.18),
+  placeholderPink2: lighten(colors.accent, 0.80),
+  disabledText: lighten(colors.mutedText, 0.45),
+  mutedCaption2: mix(colors.mutedText, colors.text, 0.30),
+  placeholderPink3: lighten(colors.accent, 0.86),
+  errorBorder: lighten(colors.accent, 0.55),
+  iconMuted: mix(colors.accent, colors.mutedText, 0.5),
+  footerBg: mix(darken(colors.text, 0.05), colors.accent, 0.15),
+})
+
+const colorsMatchDefault = (colors) =>
+  Object.keys(DEFAULT_THEME_COLORS).every((key) => colors?.[key]?.toUpperCase() === DEFAULT_THEME_COLORS[key])
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
@@ -369,9 +447,9 @@ function PaymentChoiceButtons({ options, selected, onSelect }) {
             fontFamily: 'inherit',
             letterSpacing: '0.3px',
             textAlign: 'center',
-            border: `1px solid ${selected === opt.key ? '#C47A8A' : '#F5DDE2'}`,
-            background: selected === opt.key ? '#C47A8A' : 'white',
-            color: opt.disabled ? '#C8B8BC' : selected === opt.key ? 'white' : '#2C2C2C',
+            border: `1px solid ${selected === opt.key ? 'var(--accent)' : 'var(--border)'}`,
+            background: selected === opt.key ? 'var(--accent)' : 'white',
+            color: opt.disabled ? 'var(--disabled-text)' : selected === opt.key ? 'white' : 'var(--text)',
             cursor: opt.disabled ? 'not-allowed' : 'pointer',
           }}
         >
@@ -437,6 +515,7 @@ function App() {
   // Starts as DEFAULT_CONTENT so the page never shows a blank flash while
   // the API loads, and stays on it quietly if the API fails.
   const [siteContent, setSiteContent] = useState(DEFAULT_CONTENT)
+  const [siteTheme, setSiteTheme] = useState(DEFAULT_THEME)
   const [enrolFormOpenFor, setEnrolFormOpenFor] = useState(null)
   const [enrolName, setEnrolName] = useState('')
   const [enrolPhone, setEnrolPhone] = useState('')
@@ -523,13 +602,58 @@ function App() {
         setCourseData(byId)
       })
       .catch(() => {})
-    // If this fails, siteContent just stays on DEFAULT_CONTENT - quietly,
-    // with no error shown to the visitor.
+    // If this fails, siteContent/siteTheme just stay on their defaults -
+    // quietly, with no error shown to the visitor.
     fetch(`${API}/api/site-settings`)
       .then(r => r.json())
-      .then(data => { if (data?.content) setSiteContent(data.content) })
+      .then(data => {
+        if (data?.content) setSiteContent(data.content)
+        if (data?.theme) setSiteTheme(data.theme)
+      })
       .catch(() => {})
   }, [backendStatus])
+
+  // Pushes the 5 base colours, their derived shades and the chosen fonts
+  // onto :root as CSS variables, and the browser chrome colour to match -
+  // every themed colour and font-family in this file reads from these.
+  useEffect(() => {
+    const colors = siteTheme.colors || DEFAULT_THEME_COLORS
+    const shades = colorsMatchDefault(colors) ? DEFAULT_SHADES : deriveShades(colors)
+    const root = document.documentElement.style
+    Object.entries(colors).forEach(([key, value]) => {
+      root.setProperty(`--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`, value)
+    })
+    Object.entries(shades).forEach(([key, value]) => {
+      root.setProperty(`--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`, value)
+    })
+    const fonts = siteTheme.fonts || DEFAULT_FONTS
+    root.setProperty('--font-heading', `'${fonts.heading}', '${DEFAULT_FONTS.heading}', serif`)
+    root.setProperty('--font-body', `'${fonts.body}', '${DEFAULT_FONTS.body}', sans-serif`)
+
+    let meta = document.querySelector('meta[name="theme-color"]')
+    if (!meta) {
+      meta = document.createElement('meta')
+      meta.name = 'theme-color'
+      document.head.appendChild(meta)
+    }
+    meta.content = colors.accent
+  }, [siteTheme])
+
+  // Loads only the two chosen Google Fonts, replacing the previous link -
+  // the font-family stacks above already fall back to the current fonts if
+  // this never loads (offline, or the font name is unrecognised).
+  useEffect(() => {
+    const fonts = siteTheme.fonts || DEFAULT_FONTS
+    const families = [fonts.heading, fonts.body]
+      .filter((name, i, arr) => arr.indexOf(name) === i)
+      .map(name => `family=${encodeURIComponent(name).replace(/%20/g, '+')}:ital,wght@0,400;0,600;0,700;1,400`)
+      .join('&')
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = `https://fonts.googleapis.com/css2?${families}&display=swap`
+    document.head.appendChild(link)
+    return () => { try { document.head.removeChild(link) } catch {} }
+  }, [siteTheme.fonts])
 
   // Looks up an order by its token for the payment result panel below.
   const fetchOrderByToken = async (token) => {
@@ -916,7 +1040,7 @@ function App() {
   }
 
   const renderFieldError = (msg) => (
-    <p style={{ fontSize: '12px', color: '#C47A8A', margin: '0 0 12px 0', lineHeight: 1.6 }}>{msg}</p>
+    <p style={{ fontSize: '12px', color: 'var(--accent)', margin: '0 0 12px 0', lineHeight: 1.6 }}>{msg}</p>
   )
 
   const openPolicies = (tab) => {
@@ -931,38 +1055,38 @@ function App() {
         <div
           key={i}
           style={{
-            background: '#FFFFFF',
+            background: 'var(--surface)',
             borderRadius: '12px',
-            borderLeft: '4px solid #C47A8A',
+            borderLeft: '4px solid var(--accent)',
             padding: '24px 28px',
             boxShadow: '0 2px 12px rgba(196, 122, 138, 0.08)',
           }}
         >
           <div
             style={{
-              fontFamily: "'Cormorant Garamond', serif",
+              fontFamily: 'var(--font-heading)',
               fontSize: '20px',
               fontWeight: 600,
-              color: '#2C2C2C',
+              color: 'var(--text)',
               marginBottom: '10px',
             }}
           >
             {section.heading}
           </div>
           {section.body && (
-            <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>{section.body}</div>
+            <div style={{ fontSize: '14px', lineHeight: 1.8, color: 'var(--body-text-dark)' }}>{section.body}</div>
           )}
           {section.list && section.list.type === 'numbered' && (
             <ol style={{ margin: 0, paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {section.list.items.map((item, idx) => (
-                <li key={idx} style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>{item}</li>
+                <li key={idx} style={{ fontSize: '14px', lineHeight: 1.8, color: 'var(--body-text-dark)' }}>{item}</li>
               ))}
             </ol>
           )}
           {section.list && section.list.type === 'bullet' && (
             <ul style={{ margin: 0, paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {section.list.items.map((item, idx) => (
-                <li key={idx} style={{ fontSize: '14px', lineHeight: 1.8, color: '#4A4A4A' }}>{item}</li>
+                <li key={idx} style={{ fontSize: '14px', lineHeight: 1.8, color: 'var(--body-text-dark)' }}>{item}</li>
               ))}
             </ul>
           )}
@@ -1108,9 +1232,9 @@ function App() {
       borderRadius: '16px',
       fontSize: '12px',
       fontWeight: 600,
-      border: `1px solid ${active ? '#C47A8A' : '#F5DDE2'}`,
-      background: active ? '#C47A8A' : '#FFFFFF',
-      color: disabled ? '#C8B8BC' : active ? '#FFFFFF' : '#2C2C2C',
+      border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+      background: active ? 'var(--accent)' : 'var(--surface)',
+      color: disabled ? 'var(--disabled-text)' : active ? 'var(--surface)' : 'var(--text)',
       cursor: disabled ? 'not-allowed' : 'pointer',
       opacity: disabled ? 0.5 : 1,
       textDecoration: disabled ? 'line-through' : 'none',
@@ -1169,7 +1293,7 @@ function App() {
           {product.badge && <span className="product-badge" style={{ marginBottom: '8px' }}>{product.badge}</span>}
           <h3 className="product-name">{product.name}</h3>
           <p className="product-description">{product.description}</p>
-          <div className="product-detail-line" style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
+          <div className="product-detail-line" style={{ fontSize: '11px', color: 'var(--muted-label)', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
             {product.detail}
           </div>
           <p className="product-price">R {product.price}</p>
@@ -1178,7 +1302,7 @@ function App() {
             <div className="product-options" style={{ marginBottom: '10px' }}>
               {isMobile ? (
                 <>
-                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                     Length
                   </label>
                   <select
@@ -1200,7 +1324,7 @@ function App() {
 
                   {showCurlPicker && (
                     <>
-                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                         Curl
                       </label>
                       <select className="option-select" value={sel.curl ?? ''} onChange={handleCurlSelect}>
@@ -1219,7 +1343,7 @@ function App() {
                 </>
               ) : (
                 <>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                     Length
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: showCurlPicker ? '12px' : '0' }}>
@@ -1238,7 +1362,7 @@ function App() {
 
                   {showCurlPicker && (
                     <>
-                      <div style={{ fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-text)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                         Curl
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -1263,15 +1387,15 @@ function App() {
 
           <div className="product-availability" style={{ fontSize: '12px', marginBottom: '10px', fontWeight: 600 }}>
             {!choiceComplete ? (
-              <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>
+              <span style={{ color: 'var(--muted-caption)', fontStyle: 'italic', fontWeight: 400 }}>
                 Choose a length{showCurlPicker ? ' and curl' : ''} to see availability
               </span>
             ) : effectiveStock <= 0 ? (
-              <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>Sold out for now</span>
+              <span style={{ color: 'var(--muted-caption)', fontStyle: 'italic', fontWeight: 400 }}>Sold out for now</span>
             ) : effectiveStock <= effectiveLowThreshold ? (
-              <span style={{ color: '#C47A8A' }}>Only {effectiveStock} left</span>
+              <span style={{ color: 'var(--accent)' }}>Only {effectiveStock} left</span>
             ) : (
-              <span style={{ color: '#9A7A82', fontWeight: 400 }}>In stock</span>
+              <span style={{ color: 'var(--muted-caption)', fontWeight: 400 }}>In stock</span>
             )}
           </div>
           <button
@@ -1290,7 +1414,6 @@ function App() {
   return (
     <div className="page">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Lato:wght@300;400;700&display=swap');
 
         * {
           box-sizing: border-box;
@@ -1303,15 +1426,15 @@ function App() {
         }
 
         body {
-          font-family: 'Lato', sans-serif;
-          background: #FFFAF8;
-          color: #2C2C2C;
+          font-family: var(--font-body);
+          background: var(--background);
+          color: var(--text);
         }
 
         .page {
-          font-family: 'Lato', sans-serif;
-          color: #2C2C2C;
-          background-color: #FFFAF8;
+          font-family: var(--font-body);
+          color: var(--text);
+          background-color: var(--background);
           min-height: 100vh;
         }
 
@@ -1320,8 +1443,8 @@ function App() {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          background-color: #FDF0F3;
-          color: #2C2C2C;
+          background-color: var(--nav-background);
+          color: var(--text);
           height: 100px;
           padding-left: 2rem;
           padding-right: 2rem;
@@ -1339,33 +1462,33 @@ function App() {
         }
 
         .nav-links a {
-          color: #2C2C2C;
+          color: var(--text);
           text-decoration: none;
           font-size: 0.95rem;
           transition: color 0.2s ease;
         }
 
         .nav-links a:hover {
-          color: #C47A8A;
+          color: var(--accent);
         }
 
         .nav-links .book-now-link {
-          background-color: #C47A8A;
-          color: #FFFFFF;
+          background-color: var(--accent);
+          color: var(--surface);
           padding: 8px 20px;
           border-radius: 24px;
           transition: background-color 0.2s ease;
         }
 
         .nav-links .book-now-link:hover {
-          background-color: #A8606F;
-          color: #FFFFFF;
+          background-color: var(--accent-hover);
+          color: var(--surface);
         }
 
         /* Hero */
         .hero {
           width: 100%;
-          background: radial-gradient(ellipse at 60% 40%, #FADADD 0%, #FFFAF8 70%);
+          background: radial-gradient(ellipse at 60% 40%, var(--accent-soft-bg) 0%, var(--background) 70%);
           padding-top: 6rem;
           padding-bottom: 48px;
           padding-left: 2rem;
@@ -1374,30 +1497,30 @@ function App() {
         }
 
         .hero-headline {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: var(--font-heading);
           font-size: 52px;
           font-weight: 700;
           line-height: 1.2;
           margin-bottom: 1rem;
-          color: #2C2C2C;
+          color: var(--text);
         }
 
         .hero-subtext {
-          font-family: 'Lato', sans-serif;
+          font-family: var(--font-body);
           font-size: 16px;
           font-weight: 300;
           letter-spacing: 0.3px;
-          color: #7A6670;
+          color: var(--muted-text);
           max-width: 600px;
           margin: 0 auto 0.5rem auto;
           line-height: 1.6;
         }
 
         .hero-tagline {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: var(--font-heading);
           font-style: italic;
           font-size: 22px;
-          color: #C47A8A;
+          color: var(--accent);
           max-width: 600px;
           margin: 0 auto 2.5rem auto;
         }
@@ -1423,23 +1546,23 @@ function App() {
         }
 
         .btn-primary {
-          background-color: #C47A8A;
-          color: #FFFFFF;
+          background-color: var(--accent);
+          color: var(--surface);
         }
 
         .btn-primary:hover {
-          background-color: #A8606F;
+          background-color: var(--accent-hover);
         }
 
         .btn-secondary {
           background-color: transparent;
-          color: #C47A8A;
-          border: 2px solid #C47A8A;
+          color: var(--accent);
+          border: 2px solid var(--accent);
         }
 
         .btn-secondary:hover {
-          background-color: #C47A8A;
-          color: #FFFFFF;
+          background-color: var(--accent);
+          color: var(--surface);
         }
 
         /* Generic section */
@@ -1449,31 +1572,31 @@ function App() {
         }
 
         .section-alt {
-          background-color: #FDF0F3;
+          background-color: var(--nav-background);
         }
 
         #shop {
-          background-color: #FFFAF8;
+          background-color: var(--background);
         }
 
         #classes {
-          background-color: #FDF0F3;
+          background-color: var(--nav-background);
         }
 
         #gallery {
-          background-color: #FFFAF8;
+          background-color: var(--background);
         }
 
         #contact {
-          background-color: #FDF0F3;
+          background-color: var(--nav-background);
         }
 
         .section-heading {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: var(--font-heading);
           font-size: 38px;
           font-weight: 700;
           margin-bottom: 0;
-          color: #2C2C2C;
+          color: var(--text);
         }
 
         .section-heading::after {
@@ -1481,13 +1604,13 @@ function App() {
           display: block;
           width: 48px;
           height: 2px;
-          background: #C47A8A;
+          background: var(--accent);
           margin: 8px auto 24px auto;
         }
 
         .section-text {
           font-size: 1.05rem;
-          color: #7A6670;
+          color: var(--muted-text);
         }
 
         /* Backend wake-up / unreachable states */
@@ -1497,7 +1620,7 @@ function App() {
           padding: 48px 20px;
           text-align: center;
           font-size: 1.05rem;
-          color: #7A6670;
+          color: var(--muted-text);
         }
 
         .backend-status-message.is-loading {
@@ -1505,12 +1628,12 @@ function App() {
         }
 
         .backend-status-message.is-error {
-          color: #A0566A;
+          color: var(--accent-strong);
           font-weight: 600;
         }
 
         .backend-status-message a {
-          color: #C47A8A;
+          color: var(--accent);
           text-decoration: underline;
         }
 
@@ -1530,11 +1653,11 @@ function App() {
         }
 
         .product-card {
-          background: #FFFFFF;
+          background: var(--surface);
           border-radius: 16px;
           overflow: hidden;
           box-shadow: 0 2px 16px rgba(196, 122, 138, 0.10);
-          border: 1px solid #F5DDE2;
+          border: 1px solid var(--border);
           display: flex;
           flex-direction: column;
         }
@@ -1545,19 +1668,19 @@ function App() {
 
         .product-image-placeholder {
           height: 240px;
-          background-color: #FADADD;
+          background-color: var(--accent-soft-bg);
           display: flex;
           align-items: center;
           justify-content: center;
-          color: #C47A8A;
+          color: var(--accent);
           font-size: 13px;
           font-style: italic;
         }
 
         .product-badge {
           display: inline-block;
-          background-color: #C47A8A;
-          color: #FFFFFF;
+          background-color: var(--accent);
+          color: var(--surface);
           font-size: 11px;
           padding: 3px 10px;
           border-radius: 20px;
@@ -1566,17 +1689,17 @@ function App() {
         }
 
         .product-name {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: var(--font-heading);
           font-weight: 700;
           font-size: 18px;
-          color: #2C2C2C;
+          color: var(--text);
           margin-bottom: 6px;
           line-height: 1.2;
         }
 
         .product-description {
           font-size: 13px;
-          color: #7A6670;
+          color: var(--muted-text);
           line-height: 1.6;
           margin-bottom: 8px;
           flex: 1;
@@ -1585,7 +1708,7 @@ function App() {
         .product-price {
           font-size: 20px;
           font-weight: 700;
-          color: #C47A8A;
+          color: var(--accent);
           margin-bottom: 14px;
         }
 
@@ -1595,24 +1718,24 @@ function App() {
           min-height: 44px;
           padding: 8px 12px;
           border-radius: 8px;
-          border: 1px solid #F5DDE2;
-          background: #FFFFFF;
-          color: #2C2C2C;
-          font-family: 'Lato', sans-serif;
+          border: 1px solid var(--border);
+          background: var(--surface);
+          color: var(--text);
+          font-family: var(--font-body);
           font-size: 14px;
           cursor: pointer;
         }
 
         .option-select:focus {
           outline: none;
-          border-color: #C47A8A;
+          border-color: var(--accent);
           box-shadow: 0 0 0 2px rgba(196, 122, 138, 0.25);
         }
 
         .btn-add-cart {
           width: 100%;
-          background-color: #C47A8A;
-          color: #FFFFFF;
+          background-color: var(--accent);
+          color: var(--surface);
           border: none;
           padding: 12px;
           border-radius: 10px;
@@ -1624,11 +1747,11 @@ function App() {
         }
 
         .btn-add-cart:hover {
-          background-color: #A8606F;
+          background-color: var(--accent-hover);
         }
 
         .add-to-cart-btn:hover {
-          background: #A0566A !important;
+          background: var(--accent-strong) !important;
         }
 
         /* Classes */
@@ -1642,10 +1765,10 @@ function App() {
         }
 
         .class-card {
-          background-color: #FFFFFF;
+          background-color: var(--surface);
           box-shadow: 0 2px 16px rgba(196, 122, 138, 0.10);
           border-radius: 16px;
-          border: 1px solid #F5DDE2;
+          border: 1px solid var(--border);
           padding: 28px;
           display: flex;
           flex-direction: column;
@@ -1661,16 +1784,16 @@ function App() {
         }
 
         .class-name {
-          font-family: 'Cormorant Garamond', serif;
+          font-family: var(--font-heading);
           font-weight: 700;
           font-size: 20px;
-          color: #2C2C2C;
+          color: var(--text);
           margin-bottom: 4px;
         }
 
         .class-level-badge {
-          background-color: #FADADD;
-          color: #C47A8A;
+          background-color: var(--accent-soft-bg);
+          color: var(--accent);
           font-size: 11px;
           font-weight: 600;
           padding: 4px 12px;
@@ -1680,14 +1803,14 @@ function App() {
 
         .class-duration {
           font-size: 13px;
-          color: #9A8A8E;
+          color: var(--muted-caption2);
           margin-top: 4px;
           margin-bottom: 12px;
         }
 
         .class-description {
           font-size: 13px;
-          color: #5A4A50;
+          color: var(--body-text-soft);
           line-height: 1.7;
           margin-bottom: 16px;
         }
@@ -1695,13 +1818,13 @@ function App() {
         .class-price {
           font-size: 24px;
           font-weight: 700;
-          color: #C47A8A;
+          color: var(--accent);
           margin-bottom: 4px;
         }
 
         .class-seats {
           font-size: 12px;
-          color: #9A8A8E;
+          color: var(--muted-caption2);
           margin-top: 4px;
           margin-bottom: 18px;
           font-style: italic;
@@ -1709,16 +1832,16 @@ function App() {
 
         .class-certification {
           font-size: 13px;
-          color: #7A6670;
+          color: var(--muted-text);
           font-style: italic;
           margin-bottom: 16px;
         }
 
         .btn-enquire {
           width: 100%;
-          border: 2px solid #C47A8A;
+          border: 2px solid var(--accent);
           background-color: transparent;
-          color: #C47A8A;
+          color: var(--accent);
           padding: 12px;
           border-radius: 10px;
           font-size: 13px;
@@ -1730,12 +1853,12 @@ function App() {
         }
 
         .btn-enquire:hover {
-          background-color: #C47A8A;
-          color: #FFFFFF;
+          background-color: var(--accent);
+          color: var(--surface);
         }
 
         .enquire-btn:hover {
-          background: #C47A8A !important;
+          background: var(--accent) !important;
           color: white !important;
         }
 
@@ -1773,8 +1896,8 @@ function App() {
 
         /* Footer */
         .footer {
-          background-color: #2C1A20;
-          color: #C4A0A8;
+          background-color: var(--footer-bg);
+          color: var(--muted-label);
           text-align: center;
           padding: 32px 20px;
           font-size: 13px;
@@ -1784,13 +1907,13 @@ function App() {
         }
 
         .social-icon-link:hover {
-          background: #C47A8A !important;
-          border-color: #C47A8A !important;
+          background: var(--accent) !important;
+          border-color: var(--accent) !important;
         }
 
         .social-icon-link:hover svg {
-          color: #FFFFFF;
-          fill: #FFFFFF;
+          color: var(--surface);
+          fill: var(--surface);
         }
 
         .footer-policies-link {
@@ -1806,14 +1929,14 @@ function App() {
         }
 
         .footer-policies-link:hover {
-          color: #C47A8A;
+          color: var(--accent);
         }
 
         .class-item::before {
           content: '-';
           position: absolute;
           left: 0;
-          color: #C47A8A;
+          color: var(--accent);
         }
 
         @media (max-width: 440px) {
@@ -1928,7 +2051,7 @@ function App() {
           border: none;
           cursor: pointer;
           padding: 4px;
-          color: #2C2C2C;
+          color: var(--text);
           line-height: 1;
         }
 
@@ -1960,7 +2083,7 @@ function App() {
             border: 'none',
             cursor: 'pointer',
             padding: '4px',
-            color: '#2C2C2C',
+            color: 'var(--text)',
           }}
         >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2002,7 +2125,7 @@ function App() {
               position: 'relative',
               padding: '6px',
               marginLeft: '12px',
-              color: '#2C2C2C',
+              color: 'var(--text)',
             }}
           >
             <svg
@@ -2025,7 +2148,7 @@ function App() {
                   position: 'absolute',
                   top: 0,
                   right: 0,
-                  background: '#C47A8A',
+                  background: 'var(--accent)',
                   color: 'white',
                   borderRadius: '50%',
                   width: '16px',
@@ -2050,8 +2173,8 @@ function App() {
           top: '100px',
           left: 0,
           right: 0,
-          background: '#FDF0F3',
-          borderBottom: '1px solid #F5DDE2',
+          background: 'var(--nav-background)',
+          borderBottom: '1px solid var(--border)',
           zIndex: 999,
           padding: '16px 20px',
           display: 'flex',
@@ -2073,9 +2196,9 @@ function App() {
                 padding: '12px 8px',
                 fontSize: '15px',
                 fontWeight: '600',
-                color: '#2C2C2C',
+                color: 'var(--text)',
                 textDecoration: 'none',
-                borderBottom: '1px solid #F5DDE2',
+                borderBottom: '1px solid var(--border)',
               }}
             >
               {link.label}
@@ -2090,7 +2213,7 @@ function App() {
               display: 'block',
               marginTop: '8px',
               padding: '12px',
-              background: '#C47A8A',
+              background: 'var(--accent)',
               color: 'white',
               borderRadius: '10px',
               textAlign: 'center',
@@ -2159,14 +2282,14 @@ function App() {
               {group.name && (
                 <div style={{ marginBottom: '20px', paddingLeft: '8px' }}>
                   <h3 style={{
-                    fontFamily: "'Cormorant Garamond', serif",
+                    fontFamily: 'var(--font-heading)',
                     fontSize: '24px',
                     fontWeight: '700',
-                    color: '#2C2C2C',
+                    color: 'var(--text)',
                     marginBottom: '6px',
                     letterSpacing: '0.3px',
                   }}>{group.name}</h3>
-                  <div style={{ width: '28px', height: '2px', background: '#C47A8A', marginLeft: '2px' }} />
+                  <div style={{ width: '28px', height: '2px', background: 'var(--accent)', marginLeft: '2px' }} />
                 </div>
               )}
               <div className="product-grid" style={{
@@ -2198,7 +2321,7 @@ function App() {
                 right: 0,
                 width: 80,
                 height: 80,
-                background: 'radial-gradient(circle at top right, #F7EEF0 0%, transparent 70%)',
+                background: 'radial-gradient(circle at top right, var(--border-soft) 0%, transparent 70%)',
                 pointerEvents: 'none',
               }} />
               <div className="class-card-top">
@@ -2210,28 +2333,28 @@ function App() {
               {!isMobile && (
                 <div className="scope-grid-customer" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
-                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '8px' }}>
                       What you will learn
                     </div>
                     {cls.learns.map((item) => (
                       <div
                         className="class-item"
                         key={item}
-                        style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
+                        style={{ fontSize: '13px', color: 'var(--body-text-soft)', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
                       >
                         {item}
                       </div>
                     ))}
                   </div>
                   <div>
-                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '8px' }}>
                       What is included
                     </div>
                     {cls.includes.map((item) => (
                       <div
                         className="class-item"
                         key={item}
-                        style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
+                        style={{ fontSize: '13px', color: 'var(--body-text-soft)', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
                       >
                         {item}
                       </div>
@@ -2242,7 +2365,7 @@ function App() {
               <p className="class-price">R {cls.price}</p>
               {!isMobile && <p className="class-seats">Non-refundable deposit of R{cls.deposit} to secure your spot</p>}
               {isMobile && (
-                <p style={{ fontSize: '11px', color: '#C47A8A', fontWeight: 600, textAlign: 'center', marginTop: '4px' }}>
+                <p style={{ fontSize: '11px', color: 'var(--accent)', fontWeight: 600, textAlign: 'center', marginTop: '4px' }}>
                   Tap to view full details
                 </p>
               )}
@@ -2260,7 +2383,7 @@ function App() {
                     href={`${whatsAppHref(siteContent.contact.phone)}?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: '#C47A8A', border: '1px solid #C47A8A' }}
+                    style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: 'var(--accent)', border: '1px solid var(--accent)' }}
                   >
                     Enquire Now
                   </a>
@@ -2298,7 +2421,7 @@ function App() {
                 maxWidth: '380px',
                 maxHeight: '85vh',
                 overflowY: 'auto',
-                background: '#FFFAF8',
+                background: 'var(--background)',
                 borderRadius: '16px',
                 zIndex: 900,
                 padding: '40px 24px 24px 24px',
@@ -2307,7 +2430,7 @@ function App() {
             >
               <button
                 onClick={() => setExpandedClassId(null)}
-                style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
+                style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--muted-text)' }}
               >
                 x
               </button>
@@ -2319,28 +2442,28 @@ function App() {
               <p className="class-description">{cls.description}</p>
               <div className="scope-grid-customer" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
-                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '8px' }}>
                     What you will learn
                   </div>
                   {cls.learns.map((item) => (
                     <div
                       className="class-item"
                       key={item}
-                      style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
+                      style={{ fontSize: '13px', color: 'var(--body-text-soft)', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
                     >
                       {item}
                     </div>
                   ))}
                 </div>
                 <div>
-                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '8px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '1.5px', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '8px' }}>
                     What is included
                   </div>
                   {cls.includes.map((item) => (
                     <div
                       className="class-item"
                       key={item}
-                      style={{ fontSize: '13px', color: '#5A4A50', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
+                      style={{ fontSize: '13px', color: 'var(--body-text-soft)', lineHeight: 1.7, paddingLeft: '12px', position: 'relative' }}
                     >
                       {item}
                     </div>
@@ -2362,7 +2485,7 @@ function App() {
                   href={`${whatsAppHref(siteContent.contact.phone)}?text=Hi%20Retha%2C%20I%20am%20interested%20in%20the%20${encodeURIComponent(cls.name)}%20(${encodeURIComponent(cls.duration)})`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: '#C47A8A', border: '1px solid #C47A8A' }}
+                  style={{ flex: 1, display: 'block', textAlign: 'center', textDecoration: 'none', background: 'white', color: 'var(--accent)', border: '1px solid var(--accent)' }}
                 >
                   Enquire Now
                 </a>
@@ -2377,11 +2500,11 @@ function App() {
           width: '100%',
           padding: '12px 14px',
           borderRadius: '10px',
-          border: `1px solid ${error ? '#C47A8A' : '#F5DDE2'}`,
+          border: `1px solid ${error ? 'var(--accent)' : 'var(--border)'}`,
           fontSize: '14px',
           marginBottom: error ? '6px' : '12px',
           background: 'white',
-          color: '#2C2C2C',
+          color: 'var(--text)',
           fontFamily: 'inherit',
           boxSizing: 'border-box',
           outline: 'none',
@@ -2389,17 +2512,17 @@ function App() {
         })
         return (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.5)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-            <div style={{ position: 'relative', background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '440px', width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+            <div style={{ position: 'relative', background: 'var(--background)', borderRadius: '16px', padding: '32px', maxWidth: '440px', width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
               <button
                 onClick={() => setEnrolFormOpenFor(null)}
-                style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
+                style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--muted-text)' }}
               >
                 x
               </button>
-              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '4px' }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>
                 Enrol in {openCourse.name}
               </div>
-              <p style={{ fontSize: '13px', color: '#9A7A82', marginTop: 0, marginBottom: '16px' }}>{openCourse.duration}</p>
+              <p style={{ fontSize: '13px', color: 'var(--muted-caption)', marginTop: 0, marginBottom: '16px' }}>{openCourse.duration}</p>
 
               <input
                 type="text"
@@ -2440,7 +2563,7 @@ function App() {
               />
               {enrolDateError && renderFieldError(enrolDateError)}
 
-              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 700, color: '#2C2C2C', margin: '8px 0 12px' }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: 700, color: 'var(--text)', margin: '8px 0 12px' }}>
                 How Would You Like To Pay
               </div>
 
@@ -2457,7 +2580,7 @@ function App() {
               />
 
               {paymentOptions.payflex.enabled && !enrolPayflexAvailable && (
-                <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', lineHeight: 1.6 }}>
+                <p style={{ fontSize: '12px', color: 'var(--muted-text)', marginTop: '0', lineHeight: 1.6 }}>
                   Instalments available for amounts between R{paymentOptions.payflex.minimumAmount} and R{paymentOptions.payflex.maximumAmount}.
                 </p>
               )}
@@ -2466,22 +2589,22 @@ function App() {
               )}
 
               {enrolNoWayToPay && (
-                <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '16px 20px', marginTop: '8px', marginBottom: '16px', border: '1px solid #F5DDE2' }}>
-                  <p style={{ fontSize: '13px', color: '#2C2C2C', margin: 0, lineHeight: 1.7 }}>
+                <div style={{ background: 'var(--nav-background)', borderRadius: '12px', padding: '16px 20px', marginTop: '8px', marginBottom: '16px', border: '1px solid var(--border)' }}>
+                  <p style={{ fontSize: '13px', color: 'var(--text)', margin: 0, lineHeight: 1.7 }}>
                     Online payments are taking a short break. Please message us on{' '}
-                    <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+                    <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', fontWeight: 600 }}>
                       WhatsApp at {localPhoneDisplay(siteContent.contact.phone)}
                     </a>{' '}and we'll gladly help you enrol.
                   </p>
                 </div>
               )}
 
-              <p style={{ fontSize: '12px', color: '#7A6670', margin: '12px 0', lineHeight: 1.6 }}>
+              <p style={{ fontSize: '12px', color: 'var(--muted-text)', margin: '12px 0', lineHeight: 1.6 }}>
                 Your deposit secures your place. The balance is due before your course starts, and we'll send you a
                 link to pay it.{' '}
                 <button
                   onClick={() => { setEnrolFormOpenFor(null); openPolicies('training') }}
-                  style={{ background: 'none', border: 'none', padding: 0, color: '#C47A8A', fontWeight: 600, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline', fontFamily: 'inherit' }}
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontWeight: 600, cursor: 'pointer', fontSize: '12px', textDecoration: 'underline', fontFamily: 'inherit' }}
                 >
                   View our training policy
                 </button>
@@ -2494,7 +2617,7 @@ function App() {
                 disabled={!canSubmitEnrolment || enrolSubmitting}
                 style={{
                   width: '100%',
-                  background: '#C47A8A',
+                  background: 'var(--accent)',
                   color: 'white',
                   border: 'none',
                   borderRadius: '24px',
@@ -2528,15 +2651,15 @@ function App() {
           : 'pending'
 
         const btnPrimary = {
-          background: '#C47A8A', color: 'white', border: 'none', borderRadius: '24px',
+          background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '24px',
           padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
         }
         const btnSecondary = {
-          background: 'white', color: '#C47A8A', border: '1px solid #C47A8A', borderRadius: '24px',
+          background: 'white', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: '24px',
           padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
         }
-        const heading = { fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }
-        const body = { fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '20px' }
+        const heading = { fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: 700, color: 'var(--text)', marginBottom: '12px' }
+        const body = { fontSize: '14px', color: 'var(--muted-text)', lineHeight: 1.7, marginBottom: '20px' }
 
         const payBalanceOptions = data ? [
           data.providers?.ozow && { key: 'ozow', icon: OZOW_ICON },
@@ -2545,9 +2668,9 @@ function App() {
 
         return (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.5)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-            <div style={{ background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+            <div style={{ background: 'var(--background)', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
               {enrolmentResultLoading ? (
-                <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', margin: 0 }}>
+                <p style={{ fontSize: '14px', color: 'var(--muted-text)', textAlign: 'center', margin: 0 }}>
                   Just a moment while we check on your payment...
                 </p>
               ) : status === 'paid' ? (
@@ -2635,15 +2758,15 @@ function App() {
             ))
           ) : (
             [
-              { height: 220, background: '#F7EEF0' },
-              { height: 280, background: '#EDD5DB' },
-              { height: 200, background: '#F2E4E8' },
-              { height: 260, background: '#EDD5DB' },
-              { height: 240, background: '#F7EEF0' },
-              { height: 300, background: '#F7EEF0' },
-              { height: 210, background: '#F2E4E8' },
-              { height: 270, background: '#F5EDF0' },
-              { height: 230, background: '#EDD5DB' },
+              { height: 220, background: 'var(--border-soft)' },
+              { height: 280, background: 'var(--placeholder-pink1)' },
+              { height: 200, background: 'var(--placeholder-pink2)' },
+              { height: 260, background: 'var(--placeholder-pink1)' },
+              { height: 240, background: 'var(--border-soft)' },
+              { height: 300, background: 'var(--border-soft)' },
+              { height: 210, background: 'var(--placeholder-pink2)' },
+              { height: 270, background: 'var(--placeholder-pink3)' },
+              { height: 230, background: 'var(--placeholder-pink1)' },
             ].map((tile, i) => (
               <div
                 key={i}
@@ -2660,7 +2783,7 @@ function App() {
                   paddingBottom: '12px',
                 }}
               >
-                <span style={{ fontSize: '11px', fontStyle: 'italic', color: '#C4A0A8', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
+                <span style={{ fontSize: '11px', fontStyle: 'italic', color: 'var(--muted-label)', letterSpacing: '1px', textTransform: 'uppercase' }}>Lash Work</span>
               </div>
             ))
           )}
@@ -2672,47 +2795,47 @@ function App() {
         <div style={{ maxWidth: '900px', margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: '48px' }}>
             <h2 style={{
-              fontFamily: "'Cormorant Garamond', serif",
+              fontFamily: 'var(--font-heading)',
               fontSize: '38px',
               fontWeight: '700',
-              color: '#2C2C2C',
+              color: 'var(--text)',
               marginBottom: '8px',
             }}>
               {siteContent.sectionHeadings.contact}
             </h2>
-            <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '8px auto 0 auto' }} />
+            <div style={{ width: '48px', height: '2px', background: 'var(--accent)', margin: '8px auto 0 auto' }} />
           </div>
 
-          <div className="contact-card" style={{ background: '#FFFFFF', borderRadius: '16px', padding: '32px', boxShadow: '0 2px 16px rgba(196,122,138,0.10)', border: '1px solid #F5DDE2', maxWidth: '560px', margin: '0 auto' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: '#C47A8A', textTransform: 'uppercase', marginBottom: '20px', display: 'block' }}>
+          <div className="contact-card" style={{ background: 'var(--surface)', borderRadius: '16px', padding: '32px', boxShadow: '0 2px 16px rgba(196,122,138,0.10)', border: '1px solid var(--border)', maxWidth: '560px', margin: '0 auto' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '2px', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '20px', display: 'block' }}>
               Get in Touch
             </span>
 
-            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Address</span>
-              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>{siteContent.contact.addressLine1}<br />{siteContent.contact.addressLine2}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border-soft)' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--muted-label)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Address</span>
+              <span style={{ fontSize: '14px', color: 'var(--text)', lineHeight: 1.6 }}>{siteContent.contact.addressLine1}<br />{siteContent.contact.addressLine2}</span>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Phone</span>
-              <a href={telHref(siteContent.contact.phone)} style={{ fontSize: '14px', color: '#2C2C2C', textDecoration: 'none' }}>{siteContent.contact.phone}</a>
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border-soft)' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--muted-label)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Phone</span>
+              <a href={telHref(siteContent.contact.phone)} style={{ fontSize: '14px', color: 'var(--text)', textDecoration: 'none' }}>{siteContent.contact.phone}</a>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{siteContent.contact.hoursLabel}</span>
-              <span style={{ fontSize: '14px', color: '#2C2C2C', lineHeight: 1.6 }}>{siteContent.contact.hoursLine1}<br />{siteContent.contact.hoursLine2}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border-soft)' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--muted-label)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{siteContent.contact.hoursLabel}</span>
+              <span style={{ fontSize: '14px', color: 'var(--text)', lineHeight: 1.6 }}>{siteContent.contact.hoursLine1}<br />{siteContent.contact.hoursLine2}</span>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #F7EEF0' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{siteContent.contact.whatsappLabel}</span>
-              <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border-soft)' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--muted-label)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>{siteContent.contact.whatsappLabel}</span>
+              <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ fontSize: '14px', color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' }}>
                 {siteContent.contact.whatsappText}
               </a>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={{ fontSize: '10px', fontWeight: 700, color: '#C4A0A8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Email</span>
-              <a href={`mailto:${siteContent.contact.email}`} style={{ fontSize: '14px', color: '#C47A8A', fontWeight: 600, textDecoration: 'none' }}>
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--muted-label)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Email</span>
+              <a href={`mailto:${siteContent.contact.email}`} style={{ fontSize: '14px', color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' }}>
                 {siteContent.contact.email}
               </a>
             </div>
@@ -2738,7 +2861,7 @@ function App() {
               borderRadius: '50%',
               background: 'rgba(255,255,255,0.08)',
               border: '1px solid rgba(255,255,255,0.15)',
-              color: '#C4A0A8',
+              color: 'var(--muted-label)',
               transition: 'background 0.2s',
             }}
           >
@@ -2772,7 +2895,7 @@ function App() {
               borderRadius: '50%',
               background: 'rgba(255,255,255,0.08)',
               border: '1px solid rgba(255,255,255,0.15)',
-              color: '#C4A0A8',
+              color: 'var(--muted-label)',
               transition: 'background 0.2s',
             }}
           >
@@ -2795,7 +2918,7 @@ function App() {
               borderRadius: '50%',
               background: 'rgba(255,255,255,0.08)',
               border: '1px solid rgba(255,255,255,0.15)',
-              color: '#C4A0A8',
+              color: 'var(--muted-label)',
               transition: 'background 0.2s',
             }}
           >
@@ -2826,12 +2949,12 @@ function App() {
       )}
 
       {showPolicies && (
-        <div style={{ minHeight: '100vh', background: '#FFFAF8', fontFamily: "'Lato', sans-serif" }}>
+        <div style={{ minHeight: '100vh', background: 'var(--background)', fontFamily: 'var(--font-body)' }}>
           <div
             className="policies-nav"
             style={{
-              background: '#FDF0F3',
-              borderBottom: '1px solid #F5DDE2',
+              background: 'var(--nav-background)',
+              borderBottom: '1px solid var(--border)',
               padding: '0 40px',
               height: '60px',
               display: 'flex',
@@ -2841,10 +2964,10 @@ function App() {
           >
             <span
               style={{
-                fontFamily: "'Cormorant Garamond', serif",
+                fontFamily: 'var(--font-heading)',
                 fontSize: '20px',
                 fontWeight: 700,
-                color: '#C47A8A',
+                color: 'var(--accent)',
               }}
             >
               Hair By Her
@@ -2853,8 +2976,8 @@ function App() {
               onClick={() => setShowPolicies(false)}
               style={{
                 background: 'none',
-                border: '1px solid #C47A8A',
-                color: '#C47A8A',
+                border: '1px solid var(--accent)',
+                color: 'var(--accent)',
                 borderRadius: '20px',
                 padding: '6px 18px',
                 fontSize: '13px',
@@ -2869,19 +2992,19 @@ function App() {
           <div className="policies-content" style={{ maxWidth: '720px', margin: '0 auto', padding: '60px 24px' }}>
             <h1
               style={{
-                fontFamily: "'Cormorant Garamond', serif",
+                fontFamily: 'var(--font-heading)',
                 fontSize: '42px',
                 fontWeight: 700,
-                color: '#2C2C2C',
+                color: 'var(--text)',
                 marginBottom: '8px',
               }}
             >
               Our Policies
             </h1>
-            <p style={{ fontSize: '15px', color: '#7A6670', lineHeight: 1.6, marginBottom: '8px' }}>
+            <p style={{ fontSize: '15px', color: 'var(--muted-text)', lineHeight: 1.6, marginBottom: '8px' }}>
               We want every visit to be a wonderful experience for you. These policies help us make sure things run smoothly for everyone — we truly appreciate your understanding and cooperation.
             </p>
-            <div style={{ width: '48px', height: '2px', background: '#C47A8A', margin: '16px 0 48px 0' }} />
+            <div style={{ width: '48px', height: '2px', background: 'var(--accent)', margin: '16px 0 48px 0' }} />
 
             <div
               className="policies-tabs"
@@ -2890,7 +3013,7 @@ function App() {
                 gap: 0,
                 marginBottom: '32px',
                 borderRadius: '24px',
-                border: '1px solid #F5DDE2',
+                border: '1px solid var(--border)',
                 overflow: 'hidden',
                 width: 'fit-content',
               }}
@@ -2914,8 +3037,8 @@ function App() {
                     border: 'none',
                     fontFamily: 'inherit',
                     transition: 'background 0.2s',
-                    background: policyTab === tab ? '#C47A8A' : '#FFFFFF',
-                    color: policyTab === tab ? '#FFFFFF' : '#7A6670',
+                    background: policyTab === tab ? 'var(--accent)' : 'var(--surface)',
+                    color: policyTab === tab ? 'var(--surface)' : 'var(--muted-text)',
                   }}
                 >
                   {label}
@@ -2929,22 +3052,22 @@ function App() {
               style={{
                 marginTop: '48px',
                 paddingTop: '32px',
-                borderTop: '1px solid #F5DDE2',
+                borderTop: '1px solid var(--border)',
                 textAlign: 'center',
               }}
             >
               <div
                 style={{
-                  fontFamily: "'Cormorant Garamond', serif",
+                  fontFamily: 'var(--font-heading)',
                   fontSize: '22px',
                   fontWeight: 600,
-                  color: '#2C2C2C',
+                  color: 'var(--text)',
                   marginBottom: '8px',
                 }}
               >
                 Download Our Policies
               </div>
-              <p style={{ fontSize: '13px', color: '#7A6670', marginBottom: '20px' }}>
+              <p style={{ fontSize: '13px', color: 'var(--muted-text)', marginBottom: '20px' }}>
                 Prefer to save a copy? Download our policies summary below.
               </p>
               <a
@@ -2952,8 +3075,8 @@ function App() {
                 download="Hair-By-Her-Policies.pdf"
                 style={{
                   display: 'inline-block',
-                  background: '#C47A8A',
-                  color: '#FFFFFF',
+                  background: 'var(--accent)',
+                  color: 'var(--surface)',
                   borderRadius: '24px',
                   padding: '12px 28px',
                   fontSize: '14px',
@@ -2979,7 +3102,7 @@ function App() {
               width: '52px',
               height: '52px',
               borderRadius: '50%',
-              background: '#C47A8A',
+              background: 'var(--accent)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -3006,7 +3129,7 @@ function App() {
                 position: 'absolute',
                 top: '-4px',
                 right: '-4px',
-                background: '#2C2C2C',
+                background: 'var(--text)',
                 color: 'white',
                 borderRadius: '50%',
                 width: '20px',
@@ -3054,7 +3177,7 @@ function App() {
               width: '400px',
               maxWidth: '100vw',
               height: '100%',
-              background: '#FFFAF8',
+              background: 'var(--background)',
               zIndex: 700,
               display: 'flex',
               flexDirection: 'column',
@@ -3065,13 +3188,13 @@ function App() {
             <div
               style={{
                 padding: '20px 24px',
-                borderBottom: '1px solid #F5DDE2',
+                borderBottom: '1px solid var(--border)',
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
               }}
             >
-              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C' }}>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: 700, color: 'var(--text)' }}>
                 Your Cart
               </div>
               <button
@@ -3080,7 +3203,7 @@ function App() {
                   setCheckoutStep(false)
                   setOrderError('')
                 }}
-                style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
+                style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--muted-text)' }}
               >
                 x
               </button>
@@ -3089,7 +3212,7 @@ function App() {
             <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
               {!checkoutStep ? (
                 cart.length === 0 ? (
-                  <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', marginTop: '40px' }}>
+                  <p style={{ fontSize: '14px', color: 'var(--muted-text)', textAlign: 'center', marginTop: '40px' }}>
                     Your cart is empty.
                   </p>
                 ) : (
@@ -3103,14 +3226,14 @@ function App() {
                           alignItems: 'center',
                           paddingBottom: '16px',
                           marginBottom: '16px',
-                          borderBottom: '1px solid #F5DDE2',
+                          borderBottom: '1px solid var(--border)',
                         }}
                       >
                         <div>
-                          <div style={{ fontSize: '14px', fontWeight: 600, color: '#2C2C2C', marginBottom: '4px' }}>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text)', marginBottom: '4px' }}>
                             {item.name}
                           </div>
-                          <div style={{ fontSize: '13px', color: '#9A7A82' }}>R {item.price}</div>
+                          <div style={{ fontSize: '13px', color: 'var(--muted-caption)' }}>R {item.price}</div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <button
@@ -3119,19 +3242,19 @@ function App() {
                               width: '28px',
                               height: '28px',
                               borderRadius: '50%',
-                              border: '1px solid #F5DDE2',
+                              border: '1px solid var(--border)',
                               background: 'white',
                               cursor: 'pointer',
                               fontSize: '16px',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              color: '#2C2C2C',
+                              color: 'var(--text)',
                             }}
                           >
                             -
                           </button>
-                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#2C2C2C', minWidth: '16px', textAlign: 'center' }}>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text)', minWidth: '16px', textAlign: 'center' }}>
                             {item.qty}
                           </span>
                           <button
@@ -3141,7 +3264,7 @@ function App() {
                               width: '28px',
                               height: '28px',
                               borderRadius: '50%',
-                              border: '1px solid #F5DDE2',
+                              border: '1px solid var(--border)',
                               background: 'white',
                               cursor: item.qty >= item.stockQuantity ? 'not-allowed' : 'pointer',
                               opacity: item.qty >= item.stockQuantity ? 0.4 : 1,
@@ -3149,14 +3272,14 @@ function App() {
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              color: '#2C2C2C',
+                              color: 'var(--text)',
                             }}
                           >
                             +
                           </button>
                           <button
                             onClick={() => removeFromCart(item.cartKey)}
-                            style={{ background: 'none', border: 'none', color: '#C8A8B0', fontSize: '14px', cursor: 'pointer', marginLeft: '4px' }}
+                            style={{ background: 'none', border: 'none', color: 'var(--icon-muted)', fontSize: '14px', cursor: 'pointer', marginLeft: '4px' }}
                           >
                             x
                           </button>
@@ -3170,18 +3293,18 @@ function App() {
                         justifyContent: 'space-between',
                         marginTop: '8px',
                         paddingTop: '16px',
-                        borderTop: '2px solid #F5DDE2',
+                        borderTop: '2px solid var(--border)',
                       }}
                     >
-                      <span style={{ fontSize: '14px', fontWeight: 600, color: '#2C2C2C' }}>Subtotal</span>
-                      <span style={{ fontSize: '16px', fontWeight: 700, color: '#C47A8A' }}>R {cartTotal}</span>
+                      <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text)' }}>Subtotal</span>
+                      <span style={{ fontSize: '16px', fontWeight: 700, color: 'var(--accent)' }}>R {cartTotal}</span>
                     </div>
 
                     <button
                       onClick={() => setCheckoutStep(true)}
                       style={{
                         width: '100%',
-                        background: '#C47A8A',
+                        background: 'var(--accent)',
                         color: 'white',
                         border: 'none',
                         borderRadius: '24px',
@@ -3203,7 +3326,7 @@ function App() {
                     style={{
                       background: 'none',
                       border: 'none',
-                      color: '#C47A8A',
+                      color: 'var(--accent)',
                       fontSize: '13px',
                       cursor: 'pointer',
                       padding: 0,
@@ -3215,7 +3338,7 @@ function App() {
                     Back to cart
                   </button>
 
-                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '16px' }}>
+                  <div style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: 700, color: 'var(--text)', marginBottom: '16px' }}>
                     Your Details
                   </div>
 
@@ -3228,11 +3351,11 @@ function App() {
                       width: '100%',
                       padding: '12px 14px',
                       borderRadius: '10px',
-                      border: '1px solid #F5DDE2',
+                      border: '1px solid var(--border)',
                       fontSize: '14px',
                       marginBottom: '12px',
                       background: 'white',
-                      color: '#2C2C2C',
+                      color: 'var(--text)',
                       fontFamily: 'inherit',
                       boxSizing: 'border-box',
                       outline: 'none',
@@ -3250,11 +3373,11 @@ function App() {
                       width: '100%',
                       padding: '12px 14px',
                       borderRadius: '10px',
-                      border: `1px solid ${phoneError ? '#C47A8A' : '#F5DDE2'}`,
+                      border: `1px solid ${phoneError ? 'var(--accent)' : 'var(--border)'}`,
                       fontSize: '14px',
                       marginBottom: phoneError ? '6px' : '12px',
                       background: 'white',
-                      color: '#2C2C2C',
+                      color: 'var(--text)',
                       fontFamily: 'inherit',
                       boxSizing: 'border-box',
                       outline: 'none',
@@ -3262,7 +3385,7 @@ function App() {
                   />
 
                   {phoneError && (
-                    <p style={{ fontSize: '12px', color: '#C47A8A', margin: '0 0 12px 0', lineHeight: 1.6 }}>
+                    <p style={{ fontSize: '12px', color: 'var(--accent)', margin: '0 0 12px 0', lineHeight: 1.6 }}>
                       {phoneError}
                     </p>
                   )}
@@ -3278,11 +3401,11 @@ function App() {
                       width: '100%',
                       padding: '12px 14px',
                       borderRadius: '10px',
-                      border: `1px solid ${emailError ? '#C47A8A' : '#F5DDE2'}`,
+                      border: `1px solid ${emailError ? 'var(--accent)' : 'var(--border)'}`,
                       fontSize: '14px',
                       marginBottom: emailError ? '6px' : '12px',
                       background: 'white',
-                      color: '#2C2C2C',
+                      color: 'var(--text)',
                       fontFamily: 'inherit',
                       boxSizing: 'border-box',
                       outline: 'none',
@@ -3290,12 +3413,12 @@ function App() {
                   />
 
                   {emailError && (
-                    <p style={{ fontSize: '12px', color: '#C47A8A', margin: '0 0 12px 0', lineHeight: 1.6 }}>
+                    <p style={{ fontSize: '12px', color: 'var(--accent)', margin: '0 0 12px 0', lineHeight: 1.6 }}>
                       {emailError}
                     </p>
                   )}
 
-                  <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }}>
+                  <div style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: 700, color: 'var(--text)', marginBottom: '12px' }}>
                     Delivery or Pickup
                   </div>
 
@@ -3312,9 +3435,9 @@ function App() {
                           fontSize: '14px',
                           fontWeight: 700,
                           textTransform: 'capitalize',
-                          border: `1px solid ${fulfilmentMethod === method ? '#C47A8A' : '#F5DDE2'}`,
-                          background: fulfilmentMethod === method ? '#C47A8A' : 'white',
-                          color: fulfilmentMethod === method ? 'white' : '#2C2C2C',
+                          border: `1px solid ${fulfilmentMethod === method ? 'var(--accent)' : 'var(--border)'}`,
+                          background: fulfilmentMethod === method ? 'var(--accent)' : 'white',
+                          color: fulfilmentMethod === method ? 'white' : 'var(--text)',
                           cursor: 'pointer',
                           fontFamily: 'inherit',
                         }}
@@ -3332,8 +3455,8 @@ function App() {
                         value={deliveryAddress}
                         onChange={(e) => setDeliveryAddress(e.target.value)}
                         style={{
-                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
-                          fontSize: '14px', marginBottom: '10px', background: 'white', color: '#2C2C2C',
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border)',
+                          fontSize: '14px', marginBottom: '10px', background: 'white', color: 'var(--text)',
                           fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
                         }}
                       />
@@ -3343,8 +3466,8 @@ function App() {
                         value={deliverySuburb}
                         onChange={(e) => setDeliverySuburb(e.target.value)}
                         style={{
-                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
-                          fontSize: '14px', marginBottom: '10px', background: 'white', color: '#2C2C2C',
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border)',
+                          fontSize: '14px', marginBottom: '10px', background: 'white', color: 'var(--text)',
                           fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
                         }}
                       />
@@ -3355,8 +3478,8 @@ function App() {
                           value={deliveryCity}
                           onChange={(e) => setDeliveryCity(e.target.value)}
                           style={{
-                            flex: 1, padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
-                            fontSize: '14px', background: 'white', color: '#2C2C2C',
+                            flex: 1, padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border)',
+                            fontSize: '14px', background: 'white', color: 'var(--text)',
                             fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
                           }}
                         />
@@ -3366,8 +3489,8 @@ function App() {
                           value={deliveryPostalCode}
                           onChange={(e) => setDeliveryPostalCode(e.target.value)}
                           style={{
-                            width: '120px', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
-                            fontSize: '14px', background: 'white', color: '#2C2C2C',
+                            width: '120px', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border)',
+                            fontSize: '14px', background: 'white', color: 'var(--text)',
                             fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
                           }}
                         />
@@ -3378,8 +3501,8 @@ function App() {
                         value={deliveryNotes}
                         onChange={(e) => setDeliveryNotes(e.target.value)}
                         style={{
-                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2',
-                          fontSize: '14px', background: 'white', color: '#2C2C2C',
+                          width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border)',
+                          fontSize: '14px', background: 'white', color: 'var(--text)',
                           fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
                         }}
                       />
@@ -3389,20 +3512,20 @@ function App() {
                   {fulfilmentMethod === 'pickup' && (
                     <div
                       style={{
-                        background: '#FDF0F3',
+                        background: 'var(--nav-background)',
                         borderRadius: '12px',
                         padding: '14px 18px',
                         marginBottom: '16px',
-                        border: '1px solid #F5DDE2',
+                        border: '1px solid var(--border)',
                       }}
                     >
-                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7 }}>
+                      <div style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.7 }}>
                         Pickup from {PICKUP_ADDRESS}
                       </div>
-                      <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7 }}>
+                      <div style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.7 }}>
                         {PICKUP_HOURS}
                       </div>
-                      <div style={{ fontSize: '12px', color: '#7A6670', marginTop: '6px', lineHeight: 1.6 }}>
+                      <div style={{ fontSize: '12px', color: 'var(--muted-text)', marginTop: '6px', lineHeight: 1.6 }}>
                         We'll let you know on WhatsApp when your order is ready to collect.
                       </div>
                     </div>
@@ -3410,7 +3533,7 @@ function App() {
 
                   {(paymentOptions.ozow || paymentOptions.payflex.enabled) && (
                     <div style={{ marginTop: '8px', marginBottom: '16px' }}>
-                      <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }}>
+                      <div style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: 700, color: 'var(--text)', marginBottom: '12px' }}>
                         How Would You Like To Pay
                       </div>
 
@@ -3424,14 +3547,14 @@ function App() {
                       />
 
                       {paymentOptions.ozow && (
-                        <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', marginBottom: '6px', lineHeight: 1.6 }}>
+                        <p style={{ fontSize: '12px', color: 'var(--muted-text)', marginTop: '0', marginBottom: '6px', lineHeight: 1.6 }}>
                           Pay securely from your own banking app.
                         </p>
                       )}
 
                       {paymentOptions.payflex.enabled && (
                         <>
-                          <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', lineHeight: 1.6 }}>
+                          <p style={{ fontSize: '12px', color: 'var(--muted-text)', marginTop: '0', lineHeight: 1.6 }}>
                             {payflexAvailableForAmount
                               ? 'Pay in 4 interest-free instalments.'
                               : `Available for orders between R${paymentOptions.payflex.minimumAmount} and R${paymentOptions.payflex.maximumAmount}.`}
@@ -3451,17 +3574,17 @@ function App() {
                   {noWayToPay && (
                     <div
                       style={{
-                        background: '#FDF0F3',
+                        background: 'var(--nav-background)',
                         borderRadius: '12px',
                         padding: '16px 20px',
                         marginTop: '8px',
                         marginBottom: '20px',
-                        border: '1px solid #F5DDE2',
+                        border: '1px solid var(--border)',
                       }}
                     >
-                      <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
+                      <p style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.7, margin: 0 }}>
                         Online payments are taking a short break. Please message us on{' '}
-                        <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+                        <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', fontWeight: 600 }}>
                           WhatsApp at {localPhoneDisplay(siteContent.contact.phone)}
                         </a>
                         {' '}and we'll gladly help you place your order.
@@ -3472,15 +3595,15 @@ function App() {
                   {paymentMethod === 'ozow' && (
                     <div
                       style={{
-                        background: '#FDF0F3',
+                        background: 'var(--nav-background)',
                         borderRadius: '12px',
                         padding: '16px 20px',
                         marginTop: '8px',
                         marginBottom: '20px',
-                        border: '1px solid #F5DDE2',
+                        border: '1px solid var(--border)',
                       }}
                     >
-                      <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
+                      <p style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.7, margin: 0 }}>
                         You'll be taken to Ozow to complete your payment securely from your own banking app. Please
                         don't close this page until you're redirected back to us.
                       </p>
@@ -3490,15 +3613,15 @@ function App() {
                   {paymentMethod === 'payflex' && (
                     <div
                       style={{
-                        background: '#FDF0F3',
+                        background: 'var(--nav-background)',
                         borderRadius: '12px',
                         padding: '16px 20px',
                         marginTop: '8px',
                         marginBottom: '20px',
-                        border: '1px solid #F5DDE2',
+                        border: '1px solid var(--border)',
                       }}
                     >
-                      <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7, margin: 0 }}>
+                      <p style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.7, margin: 0 }}>
                         You'll be taken to Payflex to set up your instalments. Please don't close this page until
                         you're redirected back to us.
                       </p>
@@ -3506,17 +3629,17 @@ function App() {
                   )}
 
                   <div style={{ marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#7A6670', marginBottom: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: 'var(--muted-text)', marginBottom: '4px' }}>
                       <span>Subtotal</span>
                       <span>R {cartTotal}</span>
                     </div>
                     {fulfilmentMethod === 'delivery' && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#7A6670', marginBottom: '4px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: 'var(--muted-text)', marginBottom: '4px' }}>
                         <span>Delivery fee</span>
                         <span>R {DELIVERY_FEE}</span>
                       </div>
                     )}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: 700, color: '#2C2C2C', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #F5DDE2' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: 700, color: 'var(--text)', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border)' }}>
                       <span>Total</span>
                       <span>R {orderTotal}</span>
                     </div>
@@ -3524,13 +3647,13 @@ function App() {
 
                   {orderError && (
                     <div style={{
-                      background: '#FDF0F3',
-                      border: '1px solid #F5C0CC',
+                      background: 'var(--nav-background)',
+                      border: '1px solid var(--error-border)',
                       borderRadius: '10px',
                       padding: '12px 14px',
                       marginBottom: '16px',
                       fontSize: '13px',
-                      color: '#A0566A',
+                      color: 'var(--accent-strong)',
                       lineHeight: 1.6,
                     }}>
                       {orderError}
@@ -3543,7 +3666,7 @@ function App() {
                       disabled={!canPlaceOrder || paymentSubmitting}
                       style={{
                         width: '100%',
-                        background: '#C47A8A',
+                        background: 'var(--accent)',
                         color: 'white',
                         border: 'none',
                         borderRadius: '24px',
@@ -3583,15 +3706,15 @@ function App() {
               (paymentOptions.payflex.maximumAmount == null || order.total <= paymentOptions.payflex.maximumAmount)
 
         const btnPrimary = {
-          background: '#C47A8A', color: 'white', border: 'none', borderRadius: '24px',
+          background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '24px',
           padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
         }
         const btnSecondary = {
-          background: 'white', color: '#C47A8A', border: '1px solid #C47A8A', borderRadius: '24px',
+          background: 'white', color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: '24px',
           padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
         }
-        const heading = { fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }
-        const body = { fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '20px' }
+        const heading = { fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: 700, color: 'var(--text)', marginBottom: '12px' }
+        const body = { fontSize: '14px', color: 'var(--muted-text)', lineHeight: 1.7, marginBottom: '20px' }
 
         return (
           <div
@@ -3600,9 +3723,9 @@ function App() {
               zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
             }}
           >
-            <div style={{ background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+            <div style={{ background: 'var(--background)', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
               {paymentResultLoading ? (
-                <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', margin: 0 }}>
+                <p style={{ fontSize: '14px', color: 'var(--muted-text)', textAlign: 'center', margin: 0 }}>
                   Just a moment while we check on your payment...
                 </p>
               ) : status === 'paid' ? (
@@ -3621,11 +3744,11 @@ function App() {
                     Your order is still here and waiting for you. Please use HBH-{order?.id} as your payment
                     reference.
                   </p>
-                  <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '16px 20px', marginBottom: '20px', border: '1px solid #F5DDE2' }}>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Hair By Her</div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
-                    <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', marginBottom: 0, lineHeight: 1.6 }}>
+                  <div style={{ background: 'var(--nav-background)', borderRadius: '12px', padding: '16px 20px', marginBottom: '20px', border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.8 }}>Bank: FNB</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.8 }}>Account name: Hair By Her</div>
+                    <div style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.8 }}>Account number: 63093932440</div>
+                    <p style={{ fontSize: '12px', color: 'var(--muted-text)', marginTop: '8px', marginBottom: 0, lineHeight: 1.6 }}>
                       Please send your proof of payment via WhatsApp to 082 685 5399 after making payment.
                     </p>
                   </div>

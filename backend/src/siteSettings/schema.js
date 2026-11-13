@@ -85,6 +85,33 @@ const THEME_SPEC = {
   preset: text(30),
 }
 
+// Curated starting points for the Theme page - each one's own colours
+// clear the contrast check below on their own. "Hair By Her Rose" is the
+// current default; the others are soft beauty palettes picked to suit the
+// same brand. Fonts are included so a preset button fills the whole form.
+const THEME_PRESETS = [
+  {
+    name: 'Hair By Her Rose',
+    colors: { background: '#FFFAF8', accent: '#C47A8A', navBackground: '#FDF0F3', text: '#2C2C2C', mutedText: '#7A6670' },
+    fonts: { heading: 'Cormorant Garamond', body: 'Lato' },
+  },
+  {
+    name: 'Nude Blush',
+    colors: { background: '#FBF4EF', accent: '#8C5A4A', navBackground: '#F3E3D8', text: '#3A2B23', mutedText: '#7D6356' },
+    fonts: { heading: 'Playfair Display', body: 'Nunito Sans' },
+  },
+  {
+    name: 'Lavender Dusk',
+    colors: { background: '#F7F5FC', accent: '#7E6A9C', navBackground: '#ECE6F5', text: '#2E2A38', mutedText: '#6B6178' },
+    fonts: { heading: 'Italiana', body: 'Jost' },
+  },
+  {
+    name: 'Champagne Gold',
+    colors: { background: '#FFFBF2', accent: '#8A6324', navBackground: '#F6EDD8', text: '#2E2A1F', mutedText: '#7A6F56' },
+    fonts: { heading: 'Marcellus', body: 'Work Sans' },
+  },
+]
+
 const isLeaf = (node) => typeof node.type === 'string'
 
 const validateLeaf = (fieldSpec, value, path) => {
@@ -167,6 +194,53 @@ const validateAndMerge = (spec, current, input, pathPrefix) => {
 const validateAndMergeContent = (current, input) => validateAndMerge(CONTENT_SPEC, current, input, 'content')
 const validateAndMergeTheme = (current, input) => validateAndMerge(THEME_SPEC, current, input, 'theme')
 
+// WCAG 2.x relative luminance / contrast ratio.
+const MIN_CONTRAST_RATIO = 4.5
+const hexToRgbForContrast = (hex) => {
+  const h = hex.replace('#', '')
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+}
+const srgbToLinear = (c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4))
+const relativeLuminance = (hex) => {
+  const [r, g, b] = hexToRgbForContrast(hex).map((v) => srgbToLinear(v / 255))
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+const contrastRatio = (hexA, hexB) => {
+  const a = relativeLuminance(hexA), b = relativeLuminance(hexB)
+  const lighter = Math.max(a, b), darker = Math.min(a, b)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+// Gates a pair only when it's actually changing to something new. The
+// brand's own current colours, and its original defaults, are exempt even
+// though the historic accent (#C47A8A) itself only reaches 3.23:1 against
+// white - re-saving the theme unchanged, or picking the "Hair By Her Rose"
+// preset, must never be blocked by a rule aimed at new colour choices.
+const checkThemeContrast = (merged, current, defaults) => {
+  const pairs = [
+    {
+      label: 'text on background', a: merged.colors.text, b: merged.colors.background,
+      exempt: (a, b) =>
+        (a === current?.colors?.text && b === current?.colors?.background) ||
+        (a === defaults.colors.text && b === defaults.colors.background),
+    },
+    {
+      label: 'white button text on accent', a: '#FFFFFF', b: merged.colors.accent,
+      exempt: (a, b) => b === current?.colors?.accent || b === defaults.colors.accent,
+    },
+  ]
+  for (const { label, a, b, exempt } of pairs) {
+    if (exempt(a, b)) continue
+    const ratio = contrastRatio(a, b)
+    if (ratio < MIN_CONTRAST_RATIO) {
+      throw new ValidationError(
+        'theme.colors',
+        `${label} only reaches a contrast ratio of ${ratio.toFixed(2)}:1 - it must be at least ${MIN_CONTRAST_RATIO}:1`
+      )
+    }
+  }
+}
+
 // Walks a spec tree, replacing every leaf with its { maxLength } - lets the
 // admin form build its character counters from the backend's own limits
 // instead of duplicating them.
@@ -180,6 +254,14 @@ const specMaxLengths = (spec) => {
 }
 
 const contentFieldSpec = () => specMaxLengths(CONTENT_SPEC)
+
+// For GET /api/admin/site-settings/theme/spec - the admin form's allowed
+// fonts and the preset list, from the backend's own source of truth.
+const themeFieldSpec = () => ({
+  headingFonts: HEADING_FONTS,
+  bodyFonts: BODY_FONTS,
+  presets: THEME_PRESETS,
+})
 
 // Recursively fills any field missing from `value` with the matching field
 // from `defaults`, so a stored object that predates a newer field (or is
@@ -199,8 +281,13 @@ module.exports = {
   ValidationError,
   HEADING_FONTS,
   BODY_FONTS,
+  THEME_PRESETS,
   validateAndMergeContent,
   validateAndMergeTheme,
   fillMissingWithDefaults,
   contentFieldSpec,
+  themeFieldSpec,
+  contrastRatio,
+  checkThemeContrast,
+  MIN_CONTRAST_RATIO,
 }

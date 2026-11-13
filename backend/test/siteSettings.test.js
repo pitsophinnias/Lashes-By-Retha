@@ -10,6 +10,11 @@ const {
   validateAndMergeTheme,
   fillMissingWithDefaults,
   contentFieldSpec,
+  themeFieldSpec,
+  THEME_PRESETS,
+  contrastRatio,
+  checkThemeContrast,
+  MIN_CONTRAST_RATIO,
 } = require('../src/siteSettings/schema')
 const { siteSettingsRolesForKey, saveSiteSetting } = require('../src/siteSettings/store')
 const defaults = require('../src/siteSettings/defaults')
@@ -149,6 +154,72 @@ test('validateAndMergeTheme rejects a font outside the allowed list, naming the 
     () => validateAndMergeTheme(defaults.theme, { fonts: { heading: 'Comic Sans MS' } }),
     (err) => err instanceof ValidationError && err.field === 'theme.fonts.heading'
   )
+})
+
+// ── Contrast check ───────────────────────────────────────────────────────────
+
+test('contrastRatio matches a hand-computed WCAG ratio for black on white', () => {
+  // Black on white is the maximum possible ratio, 21:1.
+  assert.ok(Math.abs(contrastRatio('#000000', '#FFFFFF') - 21) < 0.01)
+})
+
+test('checkThemeContrast rejects a new accent that fails white-text contrast, naming the pair and ratio', () => {
+  const current = defaults.theme
+  const merged = { ...current, colors: { ...current.colors, accent: '#F5C6D0' } } // very light pink, fails against white
+  assert.throws(
+    () => checkThemeContrast(merged, current, defaults.theme),
+    (err) => err instanceof ValidationError && /white button text on accent/.test(err.message) && /ratio of \d\.\d\d:1/.test(err.message)
+  )
+})
+
+test('checkThemeContrast rejects new text/background colours with insufficient contrast', () => {
+  const current = defaults.theme
+  const merged = { ...current, colors: { ...current.colors, text: '#D8D0D2', background: '#FFFAF8' } }
+  assert.throws(
+    () => checkThemeContrast(merged, current, defaults.theme),
+    (err) => err instanceof ValidationError && /text on background/.test(err.message)
+  )
+})
+
+test('checkThemeContrast allows re-saving the current theme unchanged, even though its own accent is under 4.5:1 against white', () => {
+  assert.ok(contrastRatio('#FFFFFF', defaults.theme.colors.accent) < MIN_CONTRAST_RATIO, 'this test assumes the historic accent fails the new gate on its own')
+  const current = defaults.theme
+  const merged = { ...current }
+  assert.doesNotThrow(() => checkThemeContrast(merged, current, defaults.theme))
+})
+
+test('checkThemeContrast allows switching to the "Hair By Her Rose" default preset from a different current theme', () => {
+  const rose = THEME_PRESETS.find(p => p.name === 'Hair By Her Rose')
+  const current = { ...defaults.theme, colors: { ...defaults.theme.colors, accent: '#7E6A9C', text: '#2E2A38' } }
+  const merged = { ...current, colors: rose.colors, fonts: rose.fonts }
+  assert.doesNotThrow(() => checkThemeContrast(merged, current, defaults.theme))
+})
+
+test('checkThemeContrast still gates a genuinely new colour choice even when unrelated fields change', () => {
+  const current = defaults.theme
+  const merged = { ...current, colors: { ...current.colors, accent: '#F5C6D0' }, fonts: { ...current.fonts, body: 'Jost' } }
+  assert.throws(() => checkThemeContrast(merged, current, defaults.theme), ValidationError)
+})
+
+test('every new preset (other than the historic default) clears the contrast check unassisted', () => {
+  // "Hair By Her Rose" is the historic default itself - it only clears the
+  // gate via the exemption above, same as the real default colours do.
+  for (const preset of THEME_PRESETS.filter(p => p.name !== 'Hair By Her Rose')) {
+    assert.doesNotThrow(
+      () => checkThemeContrast({ colors: preset.colors, fonts: preset.fonts }, { colors: {} }, { colors: {} }),
+      `${preset.name} should pass the contrast check unassisted`
+    )
+  }
+})
+
+// ── Theme field spec ─────────────────────────────────────────────────────────
+
+test('themeFieldSpec returns the allowed fonts and the preset list', () => {
+  const spec = themeFieldSpec()
+  assert.ok(spec.headingFonts.includes('Cormorant Garamond'))
+  assert.ok(spec.bodyFonts.includes('Lato'))
+  assert.strictEqual(spec.presets.length, 4)
+  assert.ok(spec.presets.some(p => p.name === 'Hair By Her Rose'))
 })
 
 // ── Content field spec ───────────────────────────────────────────────────────

@@ -25,6 +25,8 @@ const {
   validateAndMergeTheme,
   fillMissingWithDefaults,
   contentFieldSpec,
+  themeFieldSpec,
+  checkThemeContrast,
 } = require('./src/siteSettings/schema')
 const {
   SITE_SETTINGS_KEYS,
@@ -682,6 +684,7 @@ app.put('/api/admin/site-settings/theme', authenticate, requireRole('sysadmin'),
     const { rows } = await pool.query('SELECT value FROM site_settings WHERE key = $1', ['theme'])
     const current = rows[0] ? rows[0].value : siteSettingsDefaults.theme
     const merged = validateAndMergeTheme(current, req.body)
+    checkThemeContrast(merged, current, siteSettingsDefaults.theme)
     await saveSiteSetting('theme', merged, req.user.id)
     await addAuditLog(req.user.id, req.user.username, 'SITE_SETTINGS_UPDATED', 'Updated site theme', req.ip)
     res.json(merged)
@@ -692,6 +695,12 @@ app.put('/api/admin/site-settings/theme', authenticate, requireRole('sysadmin'),
     console.error(err)
     res.status(500).json({ error: 'Failed to update site theme' })
   }
+})
+
+// Lets the Theme page build its font dropdowns and preset buttons from the
+// backend's own source of truth, instead of copying them into the frontend.
+app.get('/api/admin/site-settings/theme/spec', authenticate, requireRole('sysadmin'), (req, res) => {
+  res.json(themeFieldSpec())
 })
 
 app.get('/api/admin/site-settings/:key/history', authenticate, requireSiteSettingsRole, async (req, res) => {
