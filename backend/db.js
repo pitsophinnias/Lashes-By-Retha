@@ -1,4 +1,5 @@
 const { Pool } = require('pg')
+const siteSettingsDefaults = require('./src/siteSettings/defaults')
 
 // Local Postgres (DATABASE_URL pointing at localhost) has no SSL listener,
 // but managed providers like Render require it.
@@ -153,6 +154,21 @@ const createTables = async () => {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE (product_id, length_mm, curl)
+    );
+
+    CREATE TABLE IF NOT EXISTS site_settings (
+      key VARCHAR(20) PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_by INTEGER REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS site_settings_history (
+      id SERIAL PRIMARY KEY,
+      key VARCHAR(20) NOT NULL,
+      value JSONB NOT NULL,
+      saved_at TIMESTAMPTZ DEFAULT NOW(),
+      saved_by INTEGER REFERENCES users(id)
     );
   `)
 
@@ -430,6 +446,16 @@ const createTables = async () => {
       params
     )
     console.log(`CC curl options added for product ${productId}`)
+  }
+
+  // Seed site settings defaults if a key has no row, so the public endpoint
+  // and admin dashboard always have a full content/theme object to read,
+  // even before an owner or sysadmin has customised anything.
+  for (const key of ['content', 'theme']) {
+    await pool.query(
+      `INSERT INTO site_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
+      [key, siteSettingsDefaults[key]]
+    )
   }
 
   console.log('Database tables ready')
