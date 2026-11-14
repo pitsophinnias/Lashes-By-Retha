@@ -32,6 +32,9 @@ class ValidationError extends Error {
 }
 
 const text = (maxLength) => ({ type: 'text', maxLength })
+// Like text(), but an empty string is valid - for content that's fine to
+// leave blank, like the hero's optional occasion message.
+const optionalText = (maxLength) => ({ type: 'text', maxLength, optional: true })
 const hexColor = () => ({ type: 'hexColor' })
 const font = (allowed) => ({ type: 'font', allowed })
 // maxLength on these two is informational only (the admin form's character
@@ -47,6 +50,7 @@ const CONTENT_SPEC = {
     tagline: text(60),
     bookButtonLabel: text(30),
     shopButtonLabel: text(30),
+    occasionMessage: optionalText(120),
   },
   contact: {
     addressLine1: text(60),
@@ -193,6 +197,7 @@ const validateLeaf = (fieldSpec, value, path) => {
       throw new ValidationError(path, `${path} must be plain text - HTML is not allowed`)
     }
     if (trimmed.length === 0) {
+      if (fieldSpec.optional) return trimmed
       throw new ValidationError(path, `${path} cannot be empty`)
     }
     if (trimmed.length > fieldSpec.maxLength) {

@@ -15,6 +15,7 @@ const content = {
     tagline: "Hair so good, it's by her.",
     bookButtonLabel: 'Book Now',
     shopButtonLabel: 'Shop Products',
+    occasionMessage: '',
   },
   contact: {
     addressLine1: '125 Piet Retief Boulevard, SE1',

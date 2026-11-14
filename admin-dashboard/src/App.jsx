@@ -48,6 +48,7 @@ const DEFAULT_CONTENT = {
     tagline: "Hair so good, it's by her.",
     bookButtonLabel: 'Book Now',
     shopButtonLabel: 'Shop Products',
+    occasionMessage: '',
   },
   contact: {
     addressLine1: '125 Piet Retief Boulevard, SE1',
@@ -361,7 +362,7 @@ const WebsiteContentPage = forwardRef(function WebsiteContentPage({ apiFetch, on
   const errorFor = (path) => contentFieldErrors[path]
   const maxLenFor = (section, field) => contentSpecLimits?.[section]?.[field]?.maxLength
 
-  const fieldRow = (label, section, field, { multiline } = {}) => {
+  const fieldRow = (label, section, field, { multiline, hint } = {}) => {
     const path = `${section}.${field}`
     const value = contentDraft[section][field]
     const maxLen = maxLenFor(section, field)
@@ -391,6 +392,7 @@ const WebsiteContentPage = forwardRef(function WebsiteContentPage({ apiFetch, on
         ) : (
           <input type="text" value={value} onChange={e => updateContentField(path, e.target.value)} style={inputStyle} />
         )}
+        {hint && !error && <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 4 }}>{hint}</div>}
         {error && <div style={{ fontSize: 12, color: '#C47A8A', marginTop: 4 }}>{error}</div>}
       </div>
     )
@@ -418,6 +420,9 @@ const WebsiteContentPage = forwardRef(function WebsiteContentPage({ apiFetch, on
             {fieldRow('Tagline', 'hero', 'tagline')}
             {fieldRow('Book Button Label', 'hero', 'bookButtonLabel')}
             {fieldRow('Shop Button Label', 'hero', 'shopButtonLabel')}
+            {fieldRow('Occasion message (optional)', 'hero', 'occasionMessage', {
+              hint: 'Shown in the hero when an occasion theme is on. Leave empty to use the standard greeting.',
+            })}
           </div>
 
           <div style={panelStyle}>

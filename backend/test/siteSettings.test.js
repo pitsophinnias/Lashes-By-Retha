@@ -94,6 +94,32 @@ test('validateAndMergeContent rejects an empty required field', () => {
   )
 })
 
+// ── hero.occasionMessage (optional) ─────────────────────────────────────────
+
+test('validateAndMergeContent accepts an empty occasionMessage', () => {
+  const merged = validateAndMergeContent(defaults.content, { hero: { occasionMessage: '' } })
+  assert.strictEqual(merged.hero.occasionMessage, '')
+})
+
+test('validateAndMergeContent accepts an occasionMessage up to 120 characters', () => {
+  const merged = validateAndMergeContent(defaults.content, { hero: { occasionMessage: 'x'.repeat(120) } })
+  assert.strictEqual(merged.hero.occasionMessage, 'x'.repeat(120))
+})
+
+test('validateAndMergeContent rejects an occasionMessage over 120 characters', () => {
+  assert.throws(
+    () => validateAndMergeContent(defaults.content, { hero: { occasionMessage: 'x'.repeat(121) } }),
+    (err) => err instanceof ValidationError && err.field === 'content.hero.occasionMessage'
+  )
+})
+
+test('validateAndMergeContent rejects HTML in occasionMessage', () => {
+  assert.throws(
+    () => validateAndMergeContent(defaults.content, { hero: { occasionMessage: '<b>Hi</b>' } }),
+    (err) => err instanceof ValidationError && err.field === 'content.hero.occasionMessage'
+  )
+})
+
 // ── Contact phone and email validation ──────────────────────────────────────
 
 test('validateAndMergeContent accepts a South African phone number and stores it in display format', () => {
@@ -254,6 +280,7 @@ test('themeFieldSpec returns the allowed fonts and the full preset list', () => 
 test('contentFieldSpec mirrors CONTENT_SPEC shape with just a maxLength per field', () => {
   const spec = contentFieldSpec()
   assert.strictEqual(spec.hero.heading.maxLength, 60)
+  assert.strictEqual(spec.hero.occasionMessage.maxLength, 120)
   assert.strictEqual(spec.contact.phone.maxLength, 20)
   assert.strictEqual(spec.contact.email.maxLength, 60)
   assert.strictEqual(spec.sectionHeadings.products.maxLength, 60)

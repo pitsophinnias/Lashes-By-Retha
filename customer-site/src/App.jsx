@@ -287,6 +287,7 @@ const hexToRgb = (hex) => {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
 }
 const rgbToHex = ([r, g, b]) => `#${[r, g, b].map((v) => clamp255(v).toString(16).padStart(2, '0').toUpperCase()).join('')}`
+const hexToRgba = (hex, alpha) => `rgba(${hexToRgb(hex).join(', ')}, ${alpha})`
 // Blends hexB into hexA by weight (0 = all hexA, 1 = all hexB).
 const mix = (hexA, hexB, weight) => {
   const a = hexToRgb(hexA), b = hexToRgb(hexB)
@@ -322,19 +323,22 @@ const deriveShades = (colors) => ({
 const colorsMatchDefault = (colors) =>
   Object.keys(DEFAULT_THEME_COLORS).every((key) => colors?.[key]?.toUpperCase() === DEFAULT_THEME_COLORS[key])
 
-// A warm greeting and a soft, tasteful particle animation for each occasion
-// preset - keyed by the exact preset name the admin's Theme page saves.
-// Nothing shows for the everyday presets or an unset/unrecognised preset.
-const OCCASION_GREETINGS = {
-  'New Year': { message: "Wishing you a sparkling New Year, from all of us at Hair By Her.", animation: 'sparkle' },
-  "Valentine's Day": { message: "Happy Valentine's Day, with love from Hair By Her.", animation: 'hearts' },
-  'Easter': { message: 'Happy Easter from Hair By Her.', animation: 'petals' },
-  'Freedom Day': { message: 'Happy Freedom Day from Hair By Her.', animation: 'leaves' },
-  "Mother's Day": { message: "Happy Mother's Day to the beautiful mothers in our lives.", animation: 'petals' },
-  "Women's Month": { message: "Celebrating every woman this Women's Month.", animation: 'sparkle' },
-  'Heritage Day': { message: 'Happy Heritage Day from Hair By Her.', animation: 'leaves' },
-  'Black Friday': { message: 'Our Black Friday specials are here for a limited time.', animation: 'sparkle' },
-  'Festive Season': { message: 'Merry Christmas and a joyful festive season from Hair By Her.', animation: 'snow' },
+// A hero eyebrow label, a default greeting and a soft, tasteful particle
+// animation for each occasion preset - keyed by the exact preset name the
+// admin's Theme page saves. Nothing shows for the everyday presets or an
+// unset/unrecognised preset. withYear adds the current year to the eyebrow,
+// only where that reads naturally. The greeting is overridden by
+// siteContent.hero.occasionMessage when an owner has filled that in.
+const OCCASION_META = {
+  'New Year': { eyebrow: 'New Year', withYear: true, greeting: 'Wishing you a sparkling New Year, from all of us.', animation: 'sparkle' },
+  "Valentine's Day": { eyebrow: "Valentine's Day", withYear: false, greeting: "Happy Valentine's Day, with love from all of us.", animation: 'hearts' },
+  'Easter': { eyebrow: 'Easter', withYear: false, greeting: 'Happy Easter, from all of us.', animation: 'petals' },
+  'Freedom Day': { eyebrow: 'Freedom Day', withYear: false, greeting: 'Happy Freedom Day, from all of us.', animation: 'leaves' },
+  "Mother's Day": { eyebrow: "Mother's Day", withYear: false, greeting: "Happy Mother's Day to the mothers in our lives.", animation: 'petals' },
+  "Women's Month": { eyebrow: "Women's Month", withYear: false, greeting: "Celebrating every woman this Women's Month.", animation: 'sparkle' },
+  'Heritage Day': { eyebrow: 'Heritage Day', withYear: false, greeting: 'Happy Heritage Day, from all of us.', animation: 'leaves' },
+  'Black Friday': { eyebrow: 'Black Friday', withYear: false, greeting: 'Something special for you this Black Friday.', animation: 'sparkle' },
+  'Festive Season': { eyebrow: 'Festive Season', withYear: true, greeting: 'Merry Christmas and a joyful festive season from all of us.', animation: 'snow' },
 }
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
@@ -531,11 +535,6 @@ function App() {
   // the API loads, and stays on it quietly if the API fails.
   const [siteContent, setSiteContent] = useState(DEFAULT_CONTENT)
   const [siteTheme, setSiteTheme] = useState(DEFAULT_THEME)
-  // Remembers which occasion banner was last dismissed, so it stays hidden
-  // for that occasion but reappears the moment a different one goes live.
-  const [dismissedOccasion, setDismissedOccasion] = useState(() => {
-    try { return localStorage.getItem('hbh_dismissed_occasion') || '' } catch { return '' }
-  })
   const [enrolFormOpenFor, setEnrolFormOpenFor] = useState(null)
   const [enrolName, setEnrolName] = useState('')
   const [enrolPhone, setEnrolPhone] = useState('')
@@ -1431,30 +1430,36 @@ function App() {
     )
   }
 
-  const activeOccasion = OCCASION_GREETINGS[siteTheme.preset] || null
-  const showOccasionBanner = !!activeOccasion && dismissedOccasion !== siteTheme.preset
+  const activeOccasion = OCCASION_META[siteTheme.preset] || null
+  const occasionEyebrowText = activeOccasion
+    ? `${activeOccasion.eyebrow}${activeOccasion.withYear ? ` ${new Date().getFullYear()}` : ''}`
+    : ''
+  const occasionGreetingText = activeOccasion
+    ? (siteContent.hero.occasionMessage?.trim() || activeOccasion.greeting)
+    : ''
+  // A soft glow built from the live theme's own accent and nav colours, at
+  // low opacity - subtle, and only ever shown behind the occasion hero.
+  const occasionHeroBackground = activeOccasion
+    ? `radial-gradient(ellipse at 60% 25%, ${hexToRgba(siteTheme.colors.accent, 0.14)} 0%, transparent 60%), ` +
+      `radial-gradient(ellipse at 15% 85%, ${hexToRgba(siteTheme.colors.navBackground, 0.55)} 0%, transparent 70%), ` +
+      'var(--background)'
+    : undefined
 
-  const dismissOccasionBanner = () => {
-    setDismissedOccasion(siteTheme.preset)
-    try { localStorage.setItem('hbh_dismissed_occasion', siteTheme.preset) } catch {}
-  }
-
-  // A fixed set of particles per animation type, regenerated only when the
-  // occasion itself changes - not on every render.
+  // A fixed set of particles, confined to the hero only and regenerated
+  // only when the occasion or screen size changes - not on every render.
   const occasionParticles = useMemo(() => {
     if (!activeOccasion) return []
-    const counts = { snow: 18, hearts: 14, petals: 14, leaves: 12, sparkle: 16 }
-    const count = counts[activeOccasion.animation] || 14
+    const count = isMobile ? 6 : 12
     return Array.from({ length: count }, (_, i) => ({
       id: i,
       left: Math.random() * 100,
-      size: 6 + Math.random() * 8,
-      duration: 8 + Math.random() * 10,
+      size: 5 + Math.random() * 6,
+      duration: 10 + Math.random() * 10,
       delay: Math.random() * 10,
-      drift: (Math.random() - 0.5) * 80,
+      drift: (Math.random() - 0.5) * 60,
     }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeOccasion?.animation])
+  }, [activeOccasion?.animation, isMobile])
 
   return (
     <div className="page">
@@ -2115,60 +2120,92 @@ function App() {
           .policies-tabs button { flex-shrink: 0 !important; white-space: nowrap !important; }
         }
 
-        /* Occasion banner + particle animation - shown only while an
+        /* Occasion hero treatment - shown only inside the hero while an
            occasion theme preset (e.g. "Festive Season") is active. */
-        .occasion-banner {
+        .hero.has-occasion {
           position: relative;
-          z-index: 500;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 16px;
-          padding: 10px 20px;
-          text-align: center;
-          font-size: 13px;
-          font-weight: 600;
-          background: var(--nav-background);
-          color: var(--text);
-          border-bottom: 1px solid var(--border);
+          overflow: hidden;
         }
 
-        .occasion-banner-close {
-          background: none;
-          border: none;
-          color: var(--muted-text);
-          cursor: pointer;
-          font-size: 16px;
-          line-height: 1;
-          padding: 0;
+        .hero-occasion-inner {
+          position: relative;
+          z-index: 1;
         }
 
-        .occasion-particles {
-          position: fixed;
+        .hero-occasion-particles {
+          position: absolute;
           inset: 0;
           pointer-events: none;
           overflow: hidden;
-          z-index: 1;
+          z-index: 0;
+        }
+
+        .hero-eyebrow {
+          font-family: var(--font-body);
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 2.5px;
+          text-transform: uppercase;
+          color: var(--accent);
+          margin-bottom: 0.75rem;
+        }
+
+        /* The divider already separates the tagline from the greeting, so
+           drop the tagline's own large default bottom margin here. */
+        .has-occasion .hero-tagline {
+          margin-bottom: 0.75rem;
+        }
+
+        .hero-occasion-divider {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          margin: 0 auto 1rem auto;
+        }
+
+        .hero-divider-line {
+          width: 48px;
+          height: 1px;
+          background: var(--accent);
+          opacity: 0.6;
+        }
+
+        .hero-divider-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: var(--accent);
+          transform: rotate(45deg);
+        }
+
+        .hero-occasion-greeting {
+          font-family: var(--font-heading);
+          font-style: italic;
+          font-size: 17px;
+          color: var(--text);
+          max-width: 560px;
+          margin: 0 auto 1.75rem auto;
         }
 
         .occasion-particle {
           position: absolute;
-          top: -24px;
+          top: -5%;
           border-radius: 50%;
-          opacity: 0.7;
+          opacity: 0.5;
           animation-name: occasion-fall;
           animation-timing-function: linear;
           animation-iteration-count: infinite;
         }
 
         @keyframes occasion-fall {
-          0% { transform: translateY(-10vh) translateX(0) rotate(0deg); }
-          100% { transform: translateY(110vh) translateX(var(--drift, 20px)) rotate(360deg); }
+          0% { top: -5%; transform: translateX(0) rotate(0deg); }
+          100% { top: 105%; transform: translateX(var(--drift, 20px)) rotate(360deg); }
         }
 
         @keyframes occasion-twinkle {
           0%, 100% { opacity: 0; transform: scale(0.6); }
-          50% { opacity: 0.9; transform: scale(1.15); }
+          50% { opacity: 0.7; transform: scale(1.15); }
         }
 
         .occasion-particle.snow { background: #FFFFFF; box-shadow: 0 0 4px rgba(255,255,255,0.8); }
@@ -2185,38 +2222,12 @@ function App() {
           .occasion-particle { animation: none !important; display: none; }
         }
 
-        @media (max-width: 600px) {
-          .occasion-banner { font-size: 12px; padding: 8px 14px; gap: 10px; }
+        @media (max-width: 480px) {
+          .hero-eyebrow { font-size: 11px; letter-spacing: 2px; margin-bottom: 0.5rem; }
+          .hero-occasion-divider { margin-bottom: 0.75rem; }
+          .hero-occasion-greeting { font-size: 15px; margin-bottom: 1.25rem; }
         }
       `}</style>
-
-      {showOccasionBanner && (
-        <div className="occasion-banner">
-          <span>{activeOccasion.message}</span>
-          <button className="occasion-banner-close" onClick={dismissOccasionBanner} aria-label="Dismiss">
-            x
-          </button>
-        </div>
-      )}
-
-      {showOccasionBanner && (
-        <div className="occasion-particles" aria-hidden="true">
-          {occasionParticles.map(p => (
-            <span
-              key={p.id}
-              className={`occasion-particle ${activeOccasion.animation}`}
-              style={{
-                left: `${p.left}%`,
-                width: p.size,
-                height: p.size,
-                animationDuration: `${p.duration}s`,
-                animationDelay: `${p.delay}s`,
-                '--drift': `${p.drift}px`,
-              }}
-            />
-          ))}
-        </div>
-      )}
 
       {!showPolicies && (
       <>
@@ -2375,24 +2386,61 @@ function App() {
         </div>
       )}
 
-      <section id="home" className="hero hero-section">
-        <h1 className="hero-headline hero-heading">{siteContent.hero.heading}</h1>
-        <p className="hero-subtext">
-          {siteContent.hero.subtext}
-        </p>
-        <p className="hero-tagline">{siteContent.hero.tagline}</p>
-        <div className="hero-buttons">
-          <a
-            className="btn btn-primary hero-btn"
-            href={bookingUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {siteContent.hero.bookButtonLabel}
-          </a>
-          <button className="btn btn-secondary hero-btn" onClick={scrollToShop}>
-            {siteContent.hero.shopButtonLabel}
-          </button>
+      <section
+        id="home"
+        className={`hero hero-section${activeOccasion ? ' has-occasion' : ''}`}
+        style={activeOccasion ? { background: occasionHeroBackground } : undefined}
+      >
+        {activeOccasion && (
+          <div className="hero-occasion-particles" aria-hidden="true">
+            {occasionParticles.map(p => (
+              <span
+                key={p.id}
+                className={`occasion-particle ${activeOccasion.animation}`}
+                style={{
+                  left: `${p.left}%`,
+                  width: p.size,
+                  height: p.size,
+                  animationDuration: `${p.duration}s`,
+                  animationDelay: `${p.delay}s`,
+                  '--drift': `${p.drift}px`,
+                }}
+              />
+            ))}
+          </div>
+        )}
+        <div className={activeOccasion ? 'hero-occasion-inner' : undefined}>
+          {activeOccasion && (
+            <div className="hero-eyebrow">{occasionEyebrowText}</div>
+          )}
+          <h1 className="hero-headline hero-heading">{siteContent.hero.heading}</h1>
+          <p className="hero-subtext">
+            {siteContent.hero.subtext}
+          </p>
+          <p className="hero-tagline">{siteContent.hero.tagline}</p>
+          {activeOccasion && (
+            <>
+              <div className="hero-occasion-divider" aria-hidden="true">
+                <span className="hero-divider-line" />
+                <span className="hero-divider-dot" />
+                <span className="hero-divider-line" />
+              </div>
+              <p className="hero-occasion-greeting">{occasionGreetingText}</p>
+            </>
+          )}
+          <div className="hero-buttons">
+            <a
+              className="btn btn-primary hero-btn"
+              href={bookingUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {siteContent.hero.bookButtonLabel}
+            </a>
+            <button className="btn btn-secondary hero-btn" onClick={scrollToShop}>
+              {siteContent.hero.shopButtonLabel}
+            </button>
+          </div>
         </div>
       </section>
 
