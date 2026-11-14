@@ -235,6 +235,16 @@ async function reconcilePayflexPayment(identifier) {
         : 'not set'
       await notifyAdmin('section', 'New training payment',
         `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`)
+
+      // The payment is still recorded as-is - this only flags it for Retha
+      // to check and refund the difference, it never blocks or adjusts it.
+      if (paidStudent.course) {
+        const coursePrice = parseFloat(paidStudent.course.price)
+        if (paidStudent.amount_paid > coursePrice) {
+          await notifyAdmin('section', 'Possible overpayment',
+            `Possible overpayment: ${paidStudent.name} has paid R${paidStudent.amount_paid.toFixed(2)} for ${paidStudent.course.name} (price R${coursePrice.toFixed(2)}). Please check and refund the difference.`)
+        }
+      }
     }
   } catch (err) {
     console.error('reconcilePayflexPayment failed:', err.message)

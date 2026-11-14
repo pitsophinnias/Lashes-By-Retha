@@ -1640,6 +1640,9 @@ app.post('/api/enrolments', enrolmentsLimiter, async (req, res) => {
       error: "Online payments are taking a short break. Please message us on WhatsApp at 082 685 5399 and we'll gladly help you enrol."
     })
   }
+  // Set once the student row is inserted below, so the catch block knows
+  // whether there's a row to clean up if starting the payment then fails.
+  let student = null
   try {
     const course = await getCourse(courseId)
     if (!course || !course.is_active) {
@@ -1662,7 +1665,7 @@ app.post('/api/enrolments', enrolmentsLimiter, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, 'unpaid', 'awaiting_payment', $6, 'website') RETURNING *`,
       [course.id, name.trim(), normalisedPhone, email.trim(), preferredStartDate, publicToken]
     )
-    const student = studentResult.rows[0]
+    student = studentResult.rows[0]
 
     if (provider === 'ozow') {
       const { transactionReference, amountStr, fields } = ozow.buildOzowFields(student.id, amount, {
@@ -1698,6 +1701,23 @@ app.post('/api/enrolments', enrolmentsLimiter, async (req, res) => {
     res.status(201).json({ success: true, enrolmentToken: publicToken, redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
     console.error('Failed to create enrolment:', err.message)
+    // If the student row was created but starting the payment then failed,
+    // it's an orphan with no payment attempt against it - clean it up rather
+    // than leaving a dangling "awaiting_payment" enrolment behind. The
+    // NOT EXISTS guards mean this only ever removes a row that truly has no
+    // payment recorded, never one a payment insert actually reached.
+    if (student) {
+      try {
+        await pool.query(
+          `DELETE FROM students WHERE id = $1
+             AND NOT EXISTS (SELECT 1 FROM ozow_payments WHERE student_id = $1)
+             AND NOT EXISTS (SELECT 1 FROM payflex_payments WHERE student_id = $1)`,
+          [student.id]
+        )
+      } catch (cleanupErr) {
+        console.error('Failed to clean up orphaned enrolment:', cleanupErr.message)
+      }
+    }
     res.status(500).json({ error: 'Failed to create enrolment' })
   }
 })
@@ -1744,10 +1764,10 @@ app.get('/api/enrolments/by-token/:token', async (req, res) => {
     const balance = Math.max(0, price - amountPaid)
 
     const latestOzowResult = await pool.query(
-      'SELECT status FROM ozow_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
+      'SELECT status, created_at FROM ozow_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
     )
     const latestPayflexResult = await pool.query(
-      'SELECT status FROM payflex_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
+      'SELECT status, created_at FROM payflex_payments WHERE student_id = $1 ORDER BY created_at DESC LIMIT 1', [student.id]
     )
     const latestOzowStatus = latestOzowResult.rows[0]?.status || null
     const latestPayflexStatus = latestPayflexResult.rows[0]?.status || null
@@ -1795,6 +1815,22 @@ app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, async (req, re
     const balance = parseFloat(course.price) - parseFloat(student.amount_paid)
     if (balance <= 0) {
       return res.status(400).json({ error: 'There is nothing left to pay on this enrolment.' })
+    }
+
+    // Stops a double-submit (or a second tab) from starting two payments for
+    // the same balance at once - checked across both providers, since "in
+    // progress" means any attempt, not just the one just chosen.
+    const recentAttempt = await pool.query(
+      `SELECT 1 FROM ozow_payments
+         WHERE student_id = $1 AND status IN ('started', 'pending') AND created_at > NOW() - INTERVAL '30 minutes'
+       UNION ALL
+       SELECT 1 FROM payflex_payments
+         WHERE student_id = $1 AND status IN ('started', 'pending') AND created_at > NOW() - INTERVAL '30 minutes'
+       LIMIT 1`,
+      [student.id]
+    )
+    if (recentAttempt.rows.length > 0) {
+      return res.status(409).json({ error: 'You already have a payment in progress. Please finish it or wait a few minutes before trying again.' })
     }
 
     if (provider === 'ozow') {

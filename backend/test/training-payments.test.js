@@ -187,6 +187,38 @@ test('reconciling a student payment never touches an unrelated order, and reconc
   }
 })
 
+test('a payment that pushes amount_paid above the course price still credits it in full and notifies about a possible overpayment', async () => {
+  const student = await createStudent()
+  // Course 1 (class_id 1, seeded by db.js) is R2500 - starting at R2400
+  // paid means one more R200 payment pushes the total over.
+  await pool.query('UPDATE students SET amount_paid = $1 WHERE id = $2', ['2400.00', student.id])
+
+  const reference = `HBH-${student.id}-overpay`
+  await createOzowStudentPayment(student.id, reference, '200.00')
+  mockOzowTransactions.set(reference, {
+    TransactionReference: reference, Status: 'Complete', Amount: '200.00', SiteCode: process.env.OZOW_SITE_CODE, TransactionId: 'tx-overpay',
+  })
+
+  const notifications = []
+  ozow.setNotifier(async (type, title, message) => { notifications.push({ type, title, message }) })
+
+  try {
+    await ozow.reconcileOzowPayment(reference)
+
+    const studentRow = (await pool.query('SELECT * FROM students WHERE id = $1', [student.id])).rows[0]
+    assert.strictEqual(parseFloat(studentRow.amount_paid), 2600, 'the overpayment must still be recorded in full, never capped or blocked')
+
+    const overpayNotification = notifications.find(n => n.title === 'Possible overpayment')
+    assert.ok(overpayNotification, 'an overpayment must raise its own admin notification')
+    assert.match(overpayNotification.message, /R2600\.00/)
+    assert.match(overpayNotification.message, /R2500\.00/)
+  } finally {
+    ozow.setNotifier(async () => {})
+    mockOzowTransactions.delete(reference)
+    await cleanupStudent(student.id)
+  }
+})
+
 after(async () => {
   global.fetch = realFetch
   await pool.end()
