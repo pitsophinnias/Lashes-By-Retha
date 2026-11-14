@@ -109,6 +109,15 @@ export default function App({ user, onLogout }) {
   const [ordersView, setOrdersView] = useState('active')
   const [orderCounts, setOrderCounts] = useState({ active: 0, archived: 0 })
 
+  // ── Business calendar ────────────────────────────────────────────────────
+  // Months from the real current month that the dashboard calendar is
+  // showing - 0 is this month, 1 is next month, -1 is last month.
+  const [calendarMonthOffset, setCalendarMonthOffset] = useState(0)
+  // Keyed by "YYYY-MM"; a value of 'loading' marks a fetch in flight so the
+  // effect below never starts the same request twice.
+  const [calendarCache, setCalendarCache] = useState({})
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(null)
+
   const [bPwCurrent, setBPwCurrent] = useState('')
   const [bPwNew, setBPwNew] = useState('')
   const [bPwConfirm, setBPwConfirm] = useState('')
@@ -335,6 +344,29 @@ export default function App({ user, onLogout }) {
     }
     fetchOrders()
   }, [])
+
+  // Fetches whatever months the business calendar needs: the one currently
+  // in view, plus today's and "today + 14 days"'s so the "Coming up" list
+  // always has what it needs even when the grid is showing another month.
+  // Skips a month already cached or already being fetched.
+  useEffect(() => {
+    const now = new Date()
+    const viewed = new Date(now.getFullYear(), now.getMonth() + calendarMonthOffset, 1)
+    const in14 = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 14)
+    const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    const neededKeys = Array.from(new Set([monthKey(viewed), monthKey(now), monthKey(in14)]))
+
+    neededKeys.forEach(key => {
+      setCalendarCache(prev => {
+        if (prev[key]) return prev
+        apiFetch(`/api/dashboard/calendar?month=${key}`)
+          .then(r => r.json())
+          .then(data => setCalendarCache(p => ({ ...p, [key]: data })))
+          .catch(() => setCalendarCache(p => ({ ...p, [key]: { students: [], orders: [] } })))
+        return { ...prev, [key]: 'loading' }
+      })
+    })
+  }, [calendarMonthOffset])
 
   // Warns before closing the tab or refreshing with unsaved Website Content
   // changes - in-app navigation away is instead caught by navigateTo above.
@@ -654,6 +686,16 @@ export default function App({ user, onLogout }) {
     } finally {
       setStudentsLoading(false)
     }
+  }
+
+  // From a calendar day panel - staff can't reach the Training page at all,
+  // so this is only ever wired up for owner/sysadmin.
+  const goToClassStudents = (classId) => {
+    const cls = coursesMerged.find(c => c.id === classId)
+    if (!cls) return
+    setSelectedCalendarDay(null)
+    setActivePage('training')
+    openClass(cls)
   }
 
   const addStudent = async () => {
@@ -1435,8 +1477,10 @@ export default function App({ user, onLogout }) {
         .cal-day {
           aspect-ratio: 1;
           display: flex;
+          flex-direction: column;
           align-items: center;
           justify-content: center;
+          gap: 3px;
           font-size: 13px;
           color: #444444;
           border-radius: 6px;
@@ -1454,16 +1498,105 @@ export default function App({ user, onLogout }) {
           color: #DDDDDD;
         }
 
-        .cal-day.has-booking::after {
-          content: '';
-          position: absolute;
-          bottom: 3px;
-          left: 50%;
-          transform: translateX(-50%);
-          width: 4px;
-          height: 4px;
-          border-radius: 50%;
+        .cal-day.closed {
+          background: #F7F2F0;
+        }
+
+        .cal-day.today.closed {
           background: #C47A8A;
+        }
+
+        .cal-day.has-items {
+          cursor: pointer;
+        }
+
+        .cal-day.has-items:hover {
+          outline: 1px solid #C47A8A;
+        }
+
+        .cal-day-dots {
+          display: flex;
+          align-items: center;
+          gap: 2px;
+          height: 6px;
+        }
+
+        .cal-day-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+
+        .cal-day-extra {
+          font-size: 8px;
+          font-weight: 700;
+          color: #8C5A6A;
+          line-height: 1;
+        }
+
+        .cal-day.today .cal-day-extra {
+          color: white;
+        }
+
+        .cal-nav-btn {
+          background: rgba(255,255,255,0.15);
+          border: none;
+          color: #FFFFFF;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 700;
+          padding: 4px 8px;
+          border-radius: 6px;
+          font-family: inherit;
+        }
+
+        .cal-nav-btn:hover {
+          background: rgba(255,255,255,0.28);
+        }
+
+        .cal-legend {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px 14px;
+          margin-top: 14px;
+          padding-top: 12px;
+          border-top: 1px solid #F7EEF0;
+        }
+
+        .cal-legend-item {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          font-size: 11px;
+          color: #9A8A8E;
+        }
+
+        .cal-legend-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+
+        .cal-legend-swatch {
+          width: 10px;
+          height: 10px;
+          border-radius: 2px;
+          background: #F7F2F0;
+          flex-shrink: 0;
+        }
+
+        .cal-day-panel {
+          margin-top: 14px;
+          padding-top: 12px;
+          border-top: 1px solid #F7EEF0;
+        }
+
+        @media (max-width: 480px) {
+          .cal-day-dot { width: 4px; height: 4px; }
+          .cal-day-dots { gap: 1px; }
+          .cal-legend { gap: 8px 10px; }
         }
 
         /* Notification items */
@@ -1760,15 +1893,46 @@ export default function App({ user, onLogout }) {
               const today = new Date()
               const hour = today.getHours()
               const timeGreeting = hour < 12 ? 'Good Morning' : hour < 18 ? 'Good Afternoon' : 'Good Evening'
-              const year = today.getFullYear()
-              const month = today.getMonth()
               const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December']
               const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+
+              // The calendar grid shows this month (today + the nav offset);
+              // "today" markers below still compare against the real date.
+              const viewedDate = new Date(today.getFullYear(), today.getMonth() + calendarMonthOffset, 1)
+              const year = viewedDate.getFullYear()
+              const month = viewedDate.getMonth()
+              const isViewingCurrentMonth = year === today.getFullYear() && month === today.getMonth()
+              const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`
+              const monthData = calendarCache[monthKey]
+              const monthStudents = (monthData && monthData !== 'loading') ? monthData.students : []
+              const monthOrders = (monthData && monthData !== 'loading') ? monthData.orders : []
 
               // Build calendar days
               const firstDay = new Date(year, month, 1).getDay()
               const daysInMonth = new Date(year, month + 1, 0).getDate()
               const daysInPrevMonth = new Date(year, month, 0).getDate()
+
+              // Group this month's training starts and orders by day number,
+              // so each grid cell can show its own dots without re-scanning
+              // the full list 42 times.
+              const studentsByDay = {}
+              monthStudents.forEach(s => {
+                if (!s.preferredStartDate) return
+                const day = new Date(s.preferredStartDate).getDate()
+                ;(studentsByDay[day] = studentsByDay[day] || []).push(s)
+              })
+              const ordersByDay = {}
+              monthOrders.forEach(o => {
+                const day = new Date(o.createdAt).getDate()
+                ;(ordersByDay[day] = ordersByDay[day] || []).push(o)
+              })
+              const itemsForDay = (day) => [
+                ...(studentsByDay[day] || []).map(s => ({ kind: 'student', data: s })),
+                ...(ordersByDay[day] || []).map(o => ({ kind: 'order', data: o })),
+              ]
+              const dotColor = (item) => item.kind === 'student'
+                ? (item.data.hasBalance ? '#C47A8A' : '#7A9E8A')
+                : (item.data.needsConfirmation ? '#E65100' : '#8C5A6A')
 
               const calDays = []
               // Previous month padding
@@ -1777,13 +1941,34 @@ export default function App({ user, onLogout }) {
               }
               // Current month
               for (let i = 1; i <= daysInMonth; i++) {
-                calDays.push({ day: i, current: true, isToday: i === today.getDate() })
+                calDays.push({ day: i, current: true, isToday: isViewingCurrentMonth && i === today.getDate(), items: itemsForDay(i) })
               }
               // Next month padding
               const remaining = 42 - calDays.length
               for (let i = 1; i <= remaining; i++) {
                 calDays.push({ day: i, current: false })
               }
+
+              // "Coming up": the next 14 days of training starts, regardless
+              // of which month the grid above is showing, plus every paid
+              // order still awaiting confirmation, however old.
+              const in14 = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 14)
+              const todayYmd = today.toLocaleDateString('en-CA')
+              const in14Ymd = in14.toLocaleDateString('en-CA')
+              const in14Key = `${in14.getFullYear()}-${String(in14.getMonth() + 1).padStart(2, '0')}`
+              const in14Data = calendarCache[in14Key]
+              const in14Students = (in14Data && in14Data !== 'loading') ? in14Data.students : []
+              const upcomingStudentsSource = in14Key === monthKey ? monthStudents : [...monthStudents, ...in14Students]
+              const upcomingStudents = upcomingStudentsSource
+                .filter(s => {
+                  if (!s.preferredStartDate) return false
+                  const ymd = new Date(s.preferredStartDate).toLocaleDateString('en-CA')
+                  return ymd >= todayYmd && ymd <= in14Ymd
+                })
+                .sort((a, b) => new Date(a.preferredStartDate) - new Date(b.preferredStartDate))
+              const unconfirmedPaidOrders = orders
+                .filter(o => o.paymentStatus === 'paid' && o.status !== 'confirmed')
+                .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
 
               const totalRevenue = orders
                 .filter(o => o.status === 'confirmed')
@@ -1940,31 +2125,154 @@ export default function App({ user, onLogout }) {
 
                     {/* Calendar */}
                     <div className="panel">
-                      <div className="panel-heading" style={{ background: '#8C5A6A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
-                        {monthNames[month]} {year}
-                        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 400, marginLeft: 8 }}>
-                          Setmore bookings — coming soon
-                        </span>
+                      <div className="panel-heading" style={{ background: '#8C5A6A', color: '#FFFFFF', borderRadius: '12px 12px 0 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                        <div>
+                          <div>{monthNames[month]} {year}</div>
+                          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: 400 }}>Business calendar</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                          <button className="cal-nav-btn" onClick={() => setCalendarMonthOffset(prev => prev - 1)} aria-label="Previous month">&lsaquo;</button>
+                          <button className="cal-nav-btn" onClick={() => setCalendarMonthOffset(0)}>Today</button>
+                          <button className="cal-nav-btn" onClick={() => setCalendarMonthOffset(prev => prev + 1)} aria-label="Next month">&rsaquo;</button>
+                        </div>
                       </div>
                       <div style={{ padding: '0 20px 20px 20px' }}>
                         <div className="calendar-grid">
                           {dayNames.map(d => (
                             <div key={d} className="cal-day-label">{d}</div>
                           ))}
-                          {calDays.map((d, i) => (
-                            <div
-                              key={i}
-                              className={[
-                                'cal-day',
-                                !d.current ? 'other-month' : '',
-                                d.isToday ? 'today' : '',
-                              ].join(' ').trim()}
-                            >
-                              {d.day}
-                            </div>
-                          ))}
+                          {calDays.map((d, i) => {
+                            const closed = i % 7 === 0 || i % 7 === 1
+                            const items = d.current ? (d.items || []) : []
+                            const visibleDots = items.slice(0, 3)
+                            const extra = items.length - visibleDots.length
+                            return (
+                              <div
+                                key={i}
+                                className={[
+                                  'cal-day',
+                                  !d.current ? 'other-month' : '',
+                                  d.isToday ? 'today' : '',
+                                  d.current && closed ? 'closed' : '',
+                                  items.length > 0 ? 'has-items' : '',
+                                ].join(' ').trim()}
+                                onClick={() => {
+                                  if (items.length === 0) return
+                                  setSelectedCalendarDay(prev => prev === d.day ? null : d.day)
+                                }}
+                              >
+                                <span>{d.day}</span>
+                                {visibleDots.length > 0 && (
+                                  <div className="cal-day-dots">
+                                    {visibleDots.map((item, idx) => (
+                                      <span key={idx} className="cal-day-dot" style={{ background: dotColor(item) }} />
+                                    ))}
+                                    {extra > 0 && <span className="cal-day-extra">+{extra}</span>}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
+
+                        <div className="cal-legend">
+                          <span className="cal-legend-item"><span className="cal-legend-dot" style={{ background: '#7A9E8A' }} />Training</span>
+                          <span className="cal-legend-item"><span className="cal-legend-dot" style={{ background: '#C47A8A' }} />Training, balance due</span>
+                          <span className="cal-legend-item"><span className="cal-legend-dot" style={{ background: '#8C5A6A' }} />Order placed</span>
+                          <span className="cal-legend-item"><span className="cal-legend-dot" style={{ background: '#E65100' }} />Paid, needs confirming</span>
+                          <span className="cal-legend-item"><span className="cal-legend-swatch" />Closed (Sun/Mon)</span>
+                        </div>
+
+                        {selectedCalendarDay && (() => {
+                          const items = itemsForDay(selectedCalendarDay)
+                          const dayLabel = new Date(year, month, selectedCalendarDay)
+                            .toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' })
+                          return (
+                            <div className="cal-day-panel">
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20' }}>{dayLabel}</div>
+                                <button
+                                  onClick={() => setSelectedCalendarDay(null)}
+                                  style={{ background: 'none', border: 'none', color: '#9A8A8E', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
+                                  aria-label="Close"
+                                >
+                                  x
+                                </button>
+                              </div>
+                              {items.map((item, idx) => item.kind === 'student' ? (
+                                <div
+                                  key={`s-${idx}`}
+                                  onClick={user?.role !== 'staff' ? () => goToClassStudents(item.data.classId) : undefined}
+                                  style={{ padding: '8px 0', borderBottom: '1px solid #F7EEF0', cursor: user?.role !== 'staff' ? 'pointer' : 'default' }}
+                                >
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: '#2C1A20' }}>{item.data.name}</div>
+                                  <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                                    {item.data.courseName || 'Training'}
+                                    {' - '}
+                                    {item.data.balance != null
+                                      ? `Balance R${item.data.balance.toFixed(2)}`
+                                      : (item.data.hasBalance ? 'Balance due' : 'Paid in full')}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div
+                                  key={`o-${idx}`}
+                                  onClick={() => { setSelectedCalendarDay(null); setActivePage('orders') }}
+                                  style={{ padding: '8px 0', borderBottom: '1px solid #F7EEF0', cursor: 'pointer' }}
+                                >
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: '#2C1A20' }}>{item.data.customerName}</div>
+                                  <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                                    R {item.data.total.toFixed(2)}{item.data.needsConfirmation ? ' - paid, needs confirming' : ''}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )
+                        })()}
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Coming up - training starts in the next 14 days, plus
+                      any paid order still waiting to be confirmed */}
+                  <div className="panel" style={{ marginBottom: 24 }}>
+                    <div className="panel-heading" style={{ background: '#7A9E8A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
+                      Coming Up
+                    </div>
+                    <div style={{ padding: '0 20px 20px 20px' }}>
+                      {upcomingStudents.length === 0 && unconfirmedPaidOrders.length === 0 && (
+                        <div style={{ fontSize: 13, color: '#AAAAAA', padding: '12px 0' }}>Nothing coming up right now.</div>
+                      )}
+                      {upcomingStudents.map(s => (
+                        <div
+                          key={`up-s-${s.id}`}
+                          onClick={user?.role !== 'staff' ? () => goToClassStudents(s.classId) : undefined}
+                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9', cursor: user?.role !== 'staff' ? 'pointer' : 'default' }}
+                        >
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{s.name}</div>
+                            <div style={{ fontSize: 12, color: '#AAAAAA' }}>
+                              {s.courseName || 'Training'} starts {new Date(s.preferredStartDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: s.hasBalance ? '#C47A8A' : '#7A9E8A' }}>
+                            {s.balance != null ? `R${s.balance.toFixed(2)}` : (s.hasBalance ? 'Balance due' : 'Paid in full')}
+                          </div>
+                        </div>
+                      ))}
+                      {unconfirmedPaidOrders.map(o => (
+                        <div
+                          key={`up-o-${o.id}`}
+                          onClick={() => setActivePage('orders')}
+                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9', cursor: 'pointer' }}
+                        >
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{o.customerName}</div>
+                            <div style={{ fontSize: 12, color: '#E65100' }}>Paid, needs confirming - placed {new Date(o.createdAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}</div>
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#C47A8A' }}>R {o.total.toFixed(2)}</div>
+                        </div>
+                      ))}
                     </div>
                   </div>
 

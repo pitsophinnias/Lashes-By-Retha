@@ -1127,6 +1127,73 @@ app.get('/api/courses', async (req, res) => {
   }
 })
 
+// ── Dashboard calendar ────────────────────────────────────────────────────────
+// Training start dates and orders placed in a given month, for the admin
+// dashboard's business calendar. One call instead of the dashboard fetching
+// every class's students plus every order just to find what falls in a month.
+app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner', 'staff'), async (req, res) => {
+  const month = req.query.month
+  if (!/^\d{4}-\d{2}$/.test(month || '')) {
+    return res.status(400).json({ error: 'month must be in YYYY-MM format' })
+  }
+  const [year, mon] = month.split('-').map(Number)
+  const start = new Date(year, mon - 1, 1)
+  const end = new Date(year, mon, 1)
+  try {
+    const studentsResult = await pool.query(
+      `SELECT s.id, s.class_id, s.name, s.status, s.preferred_start_date, s.amount_paid,
+              c.name AS course_name, c.price AS course_price
+       FROM students s
+       LEFT JOIN courses c ON c.id = s.class_id
+       WHERE s.status IN ('active', 'awaiting_payment')
+         AND s.preferred_start_date >= $1 AND s.preferred_start_date < $2
+       ORDER BY s.preferred_start_date ASC`,
+      [start, end]
+    )
+    // Students' payment amounts are owner/sysadmin only everywhere else
+    // (classes/:id/students denies staff outright) - staff get whether a
+    // balance is owed, never the figure itself.
+    const isStaff = req.user.role === 'staff'
+    const students = studentsResult.rows.map(s => {
+      const amountPaid = parseFloat(s.amount_paid || 0)
+      const price = s.course_price !== null ? parseFloat(s.course_price) : null
+      const balance = price !== null ? Math.max(0, price - amountPaid) : null
+      return {
+        id: s.id,
+        classId: s.class_id,
+        courseName: s.course_name,
+        name: s.name,
+        status: s.status,
+        preferredStartDate: s.preferred_start_date,
+        hasBalance: balance !== null && balance > 0,
+        balance: isStaff ? null : balance,
+      }
+    })
+
+    const ordersResult = await pool.query(
+      `SELECT id, customer_name, total, status, payment_status, created_at
+       FROM orders
+       WHERE created_at >= $1 AND created_at < $2
+       ORDER BY created_at ASC`,
+      [start, end]
+    )
+    const orders = ordersResult.rows.map(o => ({
+      id: o.id,
+      customerName: o.customer_name,
+      total: parseFloat(o.total),
+      status: o.status,
+      paymentStatus: o.payment_status,
+      createdAt: o.created_at,
+      needsConfirmation: o.payment_status === 'paid' && o.status !== 'confirmed',
+    }))
+
+    res.json({ students, orders })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch calendar data' })
+  }
+})
+
 app.post('/api/orders', ordersLimiter, async (req, res) => {
   const {
     customerName, customerPhone, customerEmail, items, fulfilmentMethod, paymentMethod,
