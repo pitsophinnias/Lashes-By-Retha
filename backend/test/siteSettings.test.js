@@ -9,6 +9,7 @@ const {
   validateAndMergeContent,
   validateAndMergeTheme,
   fillMissingWithDefaults,
+  contentFieldSpec,
 } = require('../src/siteSettings/schema')
 const { siteSettingsRolesForKey, saveSiteSetting } = require('../src/siteSettings/store')
 const defaults = require('../src/siteSettings/defaults')
@@ -88,6 +89,37 @@ test('validateAndMergeContent rejects an empty required field', () => {
   )
 })
 
+// ── Contact phone and email validation ──────────────────────────────────────
+
+test('validateAndMergeContent accepts a South African phone number and stores it in display format', () => {
+  const merged = validateAndMergeContent(defaults.content, { contact: { phone: '0826855399' } })
+  assert.strictEqual(merged.contact.phone, '+27 82 685 5399')
+})
+
+test('validateAndMergeContent accepts the phone number already in display format', () => {
+  const merged = validateAndMergeContent(defaults.content, { contact: { phone: '+27 82 685 5399' } })
+  assert.strictEqual(merged.contact.phone, '+27 82 685 5399')
+})
+
+test('validateAndMergeContent rejects a non-South African phone number, naming the field', () => {
+  assert.throws(
+    () => validateAndMergeContent(defaults.content, { contact: { phone: '+1 555 123 4567' } }),
+    (err) => err instanceof ValidationError && err.field === 'content.contact.phone'
+  )
+})
+
+test('validateAndMergeContent accepts a valid email address', () => {
+  const merged = validateAndMergeContent(defaults.content, { contact: { email: 'owner@example.com' } })
+  assert.strictEqual(merged.contact.email, 'owner@example.com')
+})
+
+test('validateAndMergeContent rejects an invalid email address, naming the field', () => {
+  assert.throws(
+    () => validateAndMergeContent(defaults.content, { contact: { email: 'not-an-email' } }),
+    (err) => err instanceof ValidationError && err.field === 'content.contact.email'
+  )
+})
+
 // ── Theme validation ─────────────────────────────────────────────────────────
 
 test('validateAndMergeTheme accepts a valid hex colour and upper-cases it', () => {
@@ -117,6 +149,17 @@ test('validateAndMergeTheme rejects a font outside the allowed list, naming the 
     () => validateAndMergeTheme(defaults.theme, { fonts: { heading: 'Comic Sans MS' } }),
     (err) => err instanceof ValidationError && err.field === 'theme.fonts.heading'
   )
+})
+
+// ── Content field spec ───────────────────────────────────────────────────────
+
+test('contentFieldSpec mirrors CONTENT_SPEC shape with just a maxLength per field', () => {
+  const spec = contentFieldSpec()
+  assert.strictEqual(spec.hero.heading.maxLength, 60)
+  assert.strictEqual(spec.contact.phone.maxLength, 20)
+  assert.strictEqual(spec.contact.email.maxLength, 60)
+  assert.strictEqual(spec.sectionHeadings.products.maxLength, 60)
+  assert.strictEqual(spec.footer.text.maxLength, 160)
 })
 
 // ── Defaults fill-in ─────────────────────────────────────────────────────────
