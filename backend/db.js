@@ -458,6 +458,20 @@ const createTables = async () => {
     )
   }
 
+  // One-time cleanup: the backend used to add a "Dashboard ready" system
+  // notification on every startup, which just piled up as noise in the
+  // owner's notification feed. Nothing creates these anymore; this removes
+  // any that are still there. Matches on the exact title and message only,
+  // so no other notification is ever touched. Safe to run every start -
+  // deletes zero rows once they're gone.
+  const { rowCount: dashboardReadyRemoved } = await pool.query(
+    `DELETE FROM notifications WHERE type = 'system' AND title = $1 AND message = $2`,
+    ['Dashboard ready', 'Hair By Her admin dashboard is live and running.']
+  )
+  if (dashboardReadyRemoved > 0) {
+    console.log(`Removed ${dashboardReadyRemoved} old "Dashboard ready" notification(s)`)
+  }
+
   console.log('Database tables ready')
 }
 
