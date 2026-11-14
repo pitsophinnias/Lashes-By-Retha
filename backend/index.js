@@ -2266,7 +2266,6 @@ const start = async () => {
   await createTables()
   await archiveOldNotifications()
   await archiveOldOrders()
-  await addNotification('system', 'Dashboard ready', 'Hair By Her admin dashboard is live and running.')
   server = app.listen(PORT, () => {
     console.log(`Lashes By Retha backend listening on port ${PORT}`)
   })
