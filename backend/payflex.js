@@ -232,14 +232,16 @@ async function reconcilePayflexPayment(identifier) {
 
     if (paidOrder) {
       await notifyAdmin('order', 'Payflex payment received',
-        `Order #${paidOrder.id} for ${paidOrder.customer_name} has been paid via Payflex (R${parseFloat(paidOrder.total).toFixed(2)}).`)
+        `Order #${paidOrder.id} for ${paidOrder.customer_name} has been paid via Payflex (R${parseFloat(paidOrder.total).toFixed(2)}).`,
+        { orderId: paidOrder.id })
     }
     if (paidStudent) {
       const startDate = paidStudent.preferred_start_date
         ? new Date(paidStudent.preferred_start_date).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
         : 'not set'
       await notifyAdmin('section', 'New training payment',
-        `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`)
+        `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`,
+        { studentId: paidStudent.id })
     }
   } catch (err) {
     console.error('reconcilePayflexPayment failed:', err.message)
