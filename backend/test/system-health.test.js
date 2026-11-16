@@ -58,8 +58,31 @@ let logError
 let cleanupErrorLog
 let JWT_SECRET
 let sysadminUserId
-const tokenFor = (role, id = 999) => jwt.sign({ id, username: 'system-health-test', role }, JWT_SECRET, { expiresIn: '1h' })
-const sysadminHeaders = () => ({ Authorization: `Bearer ${tokenFor('sysadmin', sysadminUserId)}` })
+const testUserIds = []
+
+// authenticate now loads the user fresh from the database on every request
+// (id, is_active, token_version, and the role itself) instead of trusting
+// the token's own claims - so every role needs a real user row behind it,
+// with that row's current token_version in the signed token.
+const roleTokenInfo = {}
+const tokenFor = (role) => jwt.sign(
+  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion },
+  JWT_SECRET,
+  { expiresIn: '1h' }
+)
+const sysadminHeaders = () => ({ Authorization: `Bearer ${tokenFor('sysadmin')}` })
+
+const createTestUser = async (roleName) => {
+  const roleRow = (await pool.query('SELECT id FROM roles WHERE name = $1', [roleName])).rows[0]
+  const username = `system-health-test-${roleName}-${Date.now()}`
+  const result = await pool.query(
+    `INSERT INTO users (username, password_hash, role_id, is_active, must_change_password)
+     VALUES ($1, 'x', $2, TRUE, FALSE) RETURNING *`,
+    [username, roleRow.id]
+  )
+  testUserIds.push(result.rows[0].id)
+  roleTokenInfo[roleName] = { id: result.rows[0].id, username: result.rows[0].username, tokenVersion: result.rows[0].token_version }
+}
 
 before(async () => {
   api = require('../index')
@@ -68,9 +91,12 @@ before(async () => {
   JWT_SECRET = require('../auth').JWT_SECRET
   ;({ logError, cleanupErrorLog } = require('../src/errorLog/store'))
   const userRow = await pool.query(
-    `SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
+    `SELECT u.id, u.username, u.token_version FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
   )
   sysadminUserId = userRow.rows[0].id
+  roleTokenInfo.sysadmin = { id: userRow.rows[0].id, username: userRow.rows[0].username, tokenVersion: userRow.rows[0].token_version }
+  await createTestUser('owner')
+  await createTestUser('staff')
 })
 
 // ── sanitizeMessage ──────────────────────────────────────────────────────────
@@ -264,6 +290,7 @@ test('POST /api/admin/errors/resolve rejects a non-array or empty ids', async ()
 
 after(async () => {
   await pool.query(`DELETE FROM error_log WHERE context LIKE 'TEST:%'`)
+  await pool.query('DELETE FROM users WHERE id = ANY($1)', [testUserIds])
   await new Promise((resolve) => api.getServer().close(resolve))
   await pool.end()
 })

@@ -353,6 +353,29 @@ const createTables = async () => {
     ALTER TABLE notifications ADD COLUMN IF NOT EXISTS student_id INTEGER REFERENCES students(id);
   `)
 
+  // Bumped by "log out everywhere" (see POST /api/admin/users/:id/logout-
+  // everywhere) - authenticate checks this against the token's own claim on
+  // every request, so a bump invalidates every token issued before it,
+  // immediately, without waiting for them to expire.
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+  `)
+
+  // One row per backup attempt, reported by backend/scripts/backup.sh
+  // running on the server that actually hosts the database - see POST
+  // /api/system/backups/report. Nothing else ever writes to this table.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS backup_runs (
+      id SERIAL PRIMARY KEY,
+      started_at TIMESTAMPTZ NOT NULL,
+      finished_at TIMESTAMPTZ,
+      status VARCHAR(20) NOT NULL,
+      size_bytes BIGINT,
+      location VARCHAR(255),
+      message TEXT
+    );
+  `)
+
   // Seed courses if none exist, using the same ids and values as the
   // hard-coded CLASSES list both frontends used before this table existed.
   const { rows: courseRows } = await pool.query('SELECT COUNT(*) FROM courses')

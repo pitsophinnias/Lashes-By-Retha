@@ -62,6 +62,17 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [testDataDeleting, setTestDataDeleting] = useState(false)
   const [testDataMsg, setTestDataMsg] = useState('')
 
+  // Backups
+  const [backups, setBackups] = useState({ setUp: false, runs: [], lastSuccessAt: null, warning: false })
+  const [backupsLoading, setBackupsLoading] = useState(false)
+
+  // Login Activity
+  const [loginActivity, setLoginActivity] = useState({ recentLogins: [], failedLast24h: 0, lastLoginByUser: [] })
+  const [loginActivityLoading, setLoginActivityLoading] = useState(false)
+  const [logoutConfirmUser, setLogoutConfirmUser] = useState(null)
+  const [loggingOutUser, setLoggingOutUser] = useState(false)
+  const [loginActivityMsg, setLoginActivityMsg] = useState('')
+
   const getHeaders = () => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
@@ -95,6 +106,14 @@ export default function SysAdminDashboard({ user, onLogout }) {
 
   useEffect(() => {
     if (activePage === 'testData') fetchTestData()
+  }, [activePage])
+
+  useEffect(() => {
+    if (activePage === 'backups') fetchBackups()
+  }, [activePage])
+
+  useEffect(() => {
+    if (activePage === 'loginActivity') fetchLoginActivity()
   }, [activePage])
 
   const fetchUsers = async () => {
@@ -390,6 +409,45 @@ export default function SysAdminDashboard({ user, onLogout }) {
     }
   }
 
+  const fetchBackups = async () => {
+    setBackupsLoading(true)
+    try {
+      const res = await fetch(`${API}/api/admin/backups`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && Array.isArray(data.runs)) setBackups(data)
+    } catch {}
+    setBackupsLoading(false)
+  }
+
+  const fetchLoginActivity = async () => {
+    setLoginActivityLoading(true)
+    try {
+      const res = await fetch(`${API}/api/admin/login-activity`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && Array.isArray(data.recentLogins)) setLoginActivity(data)
+    } catch {}
+    setLoginActivityLoading(false)
+  }
+
+  const logoutUserEverywhere = async (user) => {
+    setLoggingOutUser(true)
+    setLoginActivityMsg('')
+    try {
+      const res = await fetch(`${API}/api/admin/users/${user.id}/logout-everywhere`, {
+        method: 'POST',
+        headers: getHeaders(),
+      })
+      const data = await res.json()
+      if (!res.ok) { setLoginActivityMsg(data.error || 'Failed to log out user.'); return }
+      setLoginActivityMsg(`Logged "${user.username}" out of every session.`)
+      setLogoutConfirmUser(null)
+    } catch {
+      setLoginActivityMsg('Failed to log out user.')
+    } finally {
+      setLoggingOutUser(false)
+    }
+  }
+
   const roleColour = (role) => {
     if (role === 'sysadmin') return { bg: '#FDE8EC', color: '#C47A8A' }
     if (role === 'owner') return { bg: '#E8F0FA', color: '#3A5A8A' }
@@ -406,6 +464,8 @@ export default function SysAdminDashboard({ user, onLogout }) {
     { label: 'System Health', value: 'health' },
     { label: 'Errors', value: 'errors' },
     { label: 'Test Data', value: 'testData' },
+    { label: 'Backups', value: 'backups' },
+    { label: 'Login Activity', value: 'loginActivity' },
     { label: 'Settings', value: 'settings' },
   ]
 
@@ -419,6 +479,8 @@ export default function SysAdminDashboard({ user, onLogout }) {
     health: 'System Health',
     errors: 'Errors',
     testData: 'Test Data',
+    backups: 'Backups',
+    loginActivity: 'Login Activity',
     settings: 'Settings',
   }
 
@@ -436,6 +498,14 @@ export default function SysAdminDashboard({ user, onLogout }) {
     if (d > 0) return `${d}d ${h}h ${m}m`
     if (h > 0) return `${h}h ${m}m`
     return `${m}m`
+  }
+
+  const formatBytes = (bytes) => {
+    if (bytes == null) return '-'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
   }
 
   return (
@@ -1405,6 +1475,204 @@ export default function SysAdminDashboard({ user, onLogout }) {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {/* Backups */}
+            {activePage === 'backups' && (
+              <div>
+                {!backups.setUp && !backupsLoading && (
+                  <div className="sa-panel" style={{ maxWidth: 560 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 10 }}>
+                      Backups aren't set up on this server yet
+                    </div>
+                    <div style={{ fontSize: 13, color: '#9A8A8E', lineHeight: 1.6 }}>
+                      Set <code>BACKUP_REPORT_TOKEN</code> on the backend, then add a cron job on the server that
+                      hosts the database to run <code>backend/scripts/backup.sh</code> (see the comments at the top
+                      of that script, and the "Database backups" section of the README, for the exact environment
+                      variables and an example crontab line). This page will show the last 30 runs once the first
+                      one reports in.
+                    </div>
+                  </div>
+                )}
+
+                {backups.setUp && (
+                  <>
+                    {backups.warning && (
+                      <div style={{ background: '#FDE8EC', border: '1px solid #F5C0CC', borderRadius: 8, padding: '14px 16px', marginBottom: 16, fontSize: 13, color: '#C47A8A', fontWeight: 600 }}>
+                        {backups.runs[0]?.status === 'failed'
+                          ? 'The most recent backup run failed.'
+                          : 'No successful backup in the last 26 hours.'}
+                      </div>
+                    )}
+
+                    <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginBottom: 20 }}>
+                      <div style={{ background: backups.warning ? '#C47A8A' : '#7A9E8A', borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: 'white', marginBottom: 4 }}>
+                          {backups.lastSuccessAt
+                            ? new Date(backups.lastSuccessAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                            : 'Never'}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>Last Successful Backup</div>
+                      </div>
+                      <div style={{ background: '#8C5A6A', borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: 'white', marginBottom: 4 }}>{backups.runs.length}</div>
+                        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>Runs Shown (Last 30)</div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                      <button className="sa-btn-secondary" disabled={backupsLoading} onClick={fetchBackups}>
+                        {backupsLoading ? 'Refreshing...' : 'Refresh'}
+                      </button>
+                    </div>
+
+                    <div className="sa-panel" style={{ overflowX: 'auto' }}>
+                      <table className="sa-table">
+                        <thead>
+                          <tr>
+                            <th>Started</th>
+                            <th>Finished</th>
+                            <th>Status</th>
+                            <th>Size</th>
+                            <th>Location</th>
+                            <th>Message</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backups.runs.map(run => (
+                            <tr key={run.id}>
+                              <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                                {new Date(run.startedAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                              <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                                {run.finishedAt ? new Date(run.finishedAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '-'}
+                              </td>
+                              <td>
+                                <span className="sa-badge" style={run.status === 'ok' ? { background: '#E8F5E9', color: '#2E7D32' } : { background: '#FDE8EC', color: '#C47A8A' }}>
+                                  {run.status}
+                                </span>
+                              </td>
+                              <td>{formatBytes(run.sizeBytes)}</td>
+                              <td style={{ color: '#9A8A8E', fontSize: 12, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={run.location || ''}>
+                                {run.location || '-'}
+                              </td>
+                              <td style={{ color: '#9A8A8E', fontSize: 12 }}>{run.message || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Login Activity */}
+            {activePage === 'loginActivity' && (
+              <div>
+                <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginBottom: 20 }}>
+                  <div style={{ background: loginActivity.failedLast24h > 0 ? '#C47A8A' : '#7A9E8A', borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                    <div style={{ fontSize: 30, fontWeight: 700, color: 'white', marginBottom: 4 }}>{loginActivity.failedLast24h}</div>
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>Failed Logins (24h)</div>
+                  </div>
+                  <div style={{ background: '#8C5A6A', borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                    <div style={{ fontSize: 30, fontWeight: 700, color: 'white', marginBottom: 4 }}>{loginActivity.lastLoginByUser.length}</div>
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>Users</div>
+                  </div>
+                </div>
+
+                {loginActivityMsg && (
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 16, color: loginActivityMsg.startsWith('Logged') ? '#2E7D32' : '#C47A8A' }}>{loginActivityMsg}</div>
+                )}
+
+                <div className="sa-panel" style={{ overflowX: 'auto', marginBottom: 20 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16 }}>Last Login Per User</div>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Last Login</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loginActivity.lastLoginByUser.map(u => (
+                        <tr key={u.id}>
+                          <td style={{ fontWeight: 600 }}>{u.username}</td>
+                          <td><span className="sa-badge" style={roleColour(u.role)}>{u.role}</span></td>
+                          <td>
+                            <span className="sa-badge" style={{ background: u.isActive ? '#E8F5E9' : '#F5F5F5', color: u.isActive ? '#2E7D32' : '#9E9E9E' }}>
+                              {u.isActive ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Never'}
+                          </td>
+                          <td>
+                            <button className="sa-btn-danger" onClick={() => { setLogoutConfirmUser(u); setLoginActivityMsg('') }}>
+                              Log Out Everywhere
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16 }}>Recent Logins</div>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Username</th>
+                        <th>Result</th>
+                        <th>IP Address</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loginActivity.recentLogins.map(l => (
+                        <tr key={l.id}>
+                          <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {new Date(l.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td style={{ fontWeight: 600 }}>{l.username || '-'}</td>
+                          <td>
+                            <span className="sa-badge" style={l.action === 'LOGIN' ? { background: '#E8F5E9', color: '#2E7D32' } : { background: '#FDE8EC', color: '#C47A8A' }}>
+                              {l.action === 'LOGIN' ? 'Success' : 'Failed'}
+                            </span>
+                          </td>
+                          <td style={{ color: '#9A8A8E', fontSize: 12 }}>{l.ipAddress || '-'}</td>
+                        </tr>
+                      ))}
+                      {loginActivity.recentLogins.length === 0 && (
+                        <tr><td colSpan={4} style={{ color: '#AAAAAA', padding: '16px 0' }}>No login activity yet.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {logoutConfirmUser && (
+                  <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(44,26,32,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    onClick={() => setLogoutConfirmUser(null)}>
+                    <div style={{ background: 'white', borderRadius: 16, padding: 32, maxWidth: 420, width: '100%', boxShadow: '0 8px 40px rgba(44,26,32,0.2)' }}
+                      onClick={e => e.stopPropagation()}>
+                      <div style={{ fontSize: 17, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Log out everywhere?</div>
+                      <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
+                        This immediately signs <strong>{logoutConfirmUser.username}</strong> out of every device and browser they're currently logged into. They'll need to log in again to continue.
+                      </div>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <button className="sa-btn-danger" disabled={loggingOutUser} onClick={() => logoutUserEverywhere(logoutConfirmUser)}>
+                          {loggingOutUser ? 'Logging out...' : 'Yes, log them out'}
+                        </button>
+                        <button className="sa-btn-secondary" onClick={() => setLogoutConfirmUser(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

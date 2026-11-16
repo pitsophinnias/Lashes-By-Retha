@@ -90,9 +90,33 @@ let api
 let pool
 let JWT_SECRET
 let sysadminUserId
-const tokenFor = (role, id = 999) => jwt.sign({ id, username: 'test-data-test', role }, JWT_SECRET, { expiresIn: '1h' })
-const sysadminHeaders = () => ({ Authorization: `Bearer ${tokenFor('sysadmin', sysadminUserId)}` })
-const ownerHeaders = () => ({ Authorization: `Bearer ${tokenFor('owner', sysadminUserId)}` })
+const testUserIds = []
+
+// authenticate now loads the user fresh from the database on every request
+// (id, is_active, token_version, and the role itself) instead of trusting
+// the token's own claims - so "owner" needs a real owner user row behind
+// it, not the sysadmin's id wearing a fake role claim (which would now
+// resolve to the sysadmin's real role and defeat the point of these tests).
+const roleTokenInfo = {}
+const tokenFor = (role) => jwt.sign(
+  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion },
+  JWT_SECRET,
+  { expiresIn: '1h' }
+)
+const sysadminHeaders = () => ({ Authorization: `Bearer ${tokenFor('sysadmin')}` })
+const ownerHeaders = () => ({ Authorization: `Bearer ${tokenFor('owner')}` })
+
+const createTestUser = async (roleName) => {
+  const roleRow = (await pool.query('SELECT id FROM roles WHERE name = $1', [roleName])).rows[0]
+  const username = `test-data-test-${roleName}-${Date.now()}`
+  const result = await pool.query(
+    `INSERT INTO users (username, password_hash, role_id, is_active, must_change_password)
+     VALUES ($1, 'x', $2, TRUE, FALSE) RETURNING *`,
+    [username, roleRow.id]
+  )
+  testUserIds.push(result.rows[0].id)
+  roleTokenInfo[roleName] = { id: result.rows[0].id, username: result.rows[0].username, tokenVersion: result.rows[0].token_version }
+}
 
 const createdOrderIds = []
 const createdStudentIds = []
@@ -135,9 +159,11 @@ before(async () => {
   pool = require('../db').pool
   JWT_SECRET = require('../auth').JWT_SECRET
   const userRow = await pool.query(
-    `SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
+    `SELECT u.id, u.username, u.token_version FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
   )
   sysadminUserId = userRow.rows[0].id
+  roleTokenInfo.sysadmin = { id: userRow.rows[0].id, username: userRow.rows[0].username, tokenVersion: userRow.rows[0].token_version }
+  await createTestUser('owner')
 })
 
 // ── Auto-marking ─────────────────────────────────────────────────────────────
@@ -427,6 +453,7 @@ after(async () => {
   await pool.query('DELETE FROM orders WHERE id = ANY($1)', [createdOrderIds])
   await pool.query('DELETE FROM students WHERE id = ANY($1)', [createdStudentIds])
   await pool.query('DELETE FROM products WHERE id = ANY($1)', [createdProductIds])
+  await pool.query('DELETE FROM users WHERE id = ANY($1)', [testUserIds])
 
   await new Promise((resolve) => api.getServer().close(resolve))
   await pool.end()

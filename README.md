@@ -35,6 +35,7 @@ Copy backend/.env.example to backend/.env and fill in values.
 - PAYFLEX_API_URL — defaults to the sandbox (UAT) base, https://api.uat.payflex.co.za; use https://api.payflex.co.za in production
 - PAYFLEX_AUTH_URL — defaults to the sandbox auth endpoint, https://auth-uat.payflex.co.za/auth/merchant; use https://auth.payflex.co.za/auth/merchant in production
 - PAYFLEX_AUDIENCE — defaults to the sandbox audience, https://auth-dev.payflex.co.za; use https://auth-production.payflex.co.za in production
+- BACKUP_REPORT_TOKEN — shared secret backend/scripts/backup.sh sends as a Bearer token when it reports each backup run to POST /api/system/backups/report. Leave unset to disable that endpoint entirely.
 
 Ozow counts as configured only when OZOW_SITE_CODE, OZOW_PRIVATE_KEY, OZOW_API_KEY, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Payflex counts as configured only when PAYFLEX_CLIENT_ID, PAYFLEX_CLIENT_SECRET, PAYFLEX_API_URL, PAYFLEX_AUTH_URL, PAYFLEX_AUDIENCE, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Checkout only offers whichever of Ozow/Payflex is configured; if neither is, ordering is blocked with a message to contact Retha on WhatsApp instead.
 
@@ -57,3 +58,13 @@ Custom domains: the Blueprint adds `www.hairbyher.co.za` and `hairbyher.co.za` t
 `OZOW_IS_TEST` stays `true` until a test payment has passed.
 
 If you have existing images under backend/uploads from before CLOUDINARY_URL was set, run `npm run migrate:uploads` from backend/ (with CLOUDINARY_URL set in your environment) to upload them to Cloudinary and update the database. It is safe to run more than once.
+
+## Database backups
+
+Render's free Postgres plan has no shell access to run `pg_dump` or cron against it, so backups run from cron on whichever server actually hosts the database (e.g. the Zeecom server), using `backend/scripts/backup.sh`:
+
+1. Set `BACKUP_REPORT_TOKEN` on the backend (any long random string).
+2. On the database server, add a crontab entry that sets `DATABASE_URL`, `BACKUP_REPORT_TOKEN` (same value as above) and `REPORT_URL` (the backend's `/api/system/backups/report` URL), then runs `backend/scripts/backup.sh` - see the comments at the top of that script for the exact variables and an example crontab line.
+3. Optionally set `RCLONE_REMOTE` too, for an offsite copy of each backup via `rclone`.
+
+The sysadmin Backups page reads only what the script reports - it shows "Backups aren't set up on this server yet" until the first run reports in, and a warning if the last successful backup is over 26 hours old or the most recent run failed.
