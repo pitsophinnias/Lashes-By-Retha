@@ -390,34 +390,33 @@ test('deleting a confirmed test order restores stock (product and variant), remo
   assert.strictEqual(realStudentRow.rows.length, 1)
 })
 
-test('"delete all" removes every current test order and student, and nothing else', async (t) => {
+test('"delete all" removes every current test order and student, and nothing else', async () => {
   const testOrder1 = await createOrder({ isTest: true })
   const testOrder2 = await createOrder({ isTest: true })
   const testStudent = await createStudent({ isTest: true })
   const realOrder = await createOrder({ isTest: false })
 
-  // "all: true" deletes every is_test row in the whole database, not just
-  // ones this test created - it is only ever safe to actually invoke that
-  // here if nothing else in the database is currently flagged as test data
-  // (another process's rows, or real rows an earlier startup backfill
-  // marked as test). If anything foreign is present, skip rather than risk
-  // deleting someone else's data - the explicit-ids test above already
-  // covers this endpoint's deletion logic end to end.
-  const ownOrderIds = new Set([testOrder1.id, testOrder2.id])
-  const ownStudentIds = new Set([testStudent.id])
-  const existingTestOrders = (await pool.query('SELECT id FROM orders WHERE is_test = TRUE')).rows
-  const existingTestStudents = (await pool.query('SELECT id FROM students WHERE is_test = TRUE')).rows
-  const foreignOrders = existingTestOrders.filter(o => !ownOrderIds.has(o.id))
-  const foreignStudents = existingTestStudents.filter(s => !ownStudentIds.has(s.id))
-  if (foreignOrders.length > 0 || foreignStudents.length > 0) {
-    t.skip(`database already has ${foreignOrders.length} other test order(s) and ${foreignStudents.length} other test student(s) outside this test - skipping "all: true" to avoid deleting them`)
-    return
-  }
+  // "all: true" deletes every is_test row in the database, including any
+  // this file's earlier tests already left behind (each test file gets a
+  // clean slate - see test/setup.mjs - but tests within this file still
+  // share it with each other) - so the only safe expectation is "exactly
+  // however many are_test rows exist right now", not a fixed number.
+  const [pendingOrders, pendingStudents] = await Promise.all([
+    pool.query('SELECT COUNT(*) FROM orders WHERE is_test = TRUE'),
+    pool.query('SELECT COUNT(*) FROM students WHERE is_test = TRUE'),
+  ])
 
   const res = await request('POST', '/api/admin/test-data/delete', { all: true }, sysadminHeaders())
   assert.strictEqual(res.status, 200)
-  assert.strictEqual(res.data.ordersDeleted, 2)
-  assert.strictEqual(res.data.studentsDeleted, 1)
+  assert.strictEqual(res.data.ordersDeleted, parseInt(pendingOrders.rows[0].count))
+  assert.strictEqual(res.data.studentsDeleted, parseInt(pendingStudents.rows[0].count))
+
+  const [remainingOrders, remainingStudents] = await Promise.all([
+    pool.query('SELECT COUNT(*) FROM orders WHERE is_test = TRUE'),
+    pool.query('SELECT COUNT(*) FROM students WHERE is_test = TRUE'),
+  ])
+  assert.strictEqual(parseInt(remainingOrders.rows[0].count), 0)
+  assert.strictEqual(parseInt(remainingStudents.rows[0].count), 0)
 
   for (const id of [testOrder1.id, testOrder2.id]) {
     assert.strictEqual((await pool.query('SELECT 1 FROM orders WHERE id = $1', [id])).rows.length, 0)

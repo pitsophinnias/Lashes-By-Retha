@@ -7,7 +7,8 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "migrate:uploads": "node scripts/migrate-uploads-to-cloudinary.js",
-    "test": "node --test --test-force-exit"
+    "pretest": "node test/check-test-db.js",
+    "test": "node --test --test-force-exit --test-concurrency=1 --import ./test/setup.mjs \"test/**/*.test.js\""
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

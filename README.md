@@ -17,6 +17,7 @@ Sections: Product marketplace, Beauty class enrolment, Setmore API integration (
 Copy backend/.env.example to backend/.env and fill in values.
 
 - DATABASE_URL — PostgreSQL connection string
+- TEST_DATABASE_URL — a separate local database `npm test` runs against, never DATABASE_URL - must be on localhost/127.0.0.1 with a name ending in `_test` (e.g. `postgresql://hbh_admin:hbh_password@localhost:5432/hairbyher_test`), or the suite refuses to run. Create it once with `psql -U postgres -c "CREATE DATABASE hairbyher_test OWNER hbh_admin;"`. Every table in it is truncated and reseeded before each test file runs, so it only ever holds whatever that file creates.
 - PORT — port the API listens on (defaults to 3002)
 - NODE_ENV — development or production; production enforces the required secrets below
 - JWT_SECRET — signs auth tokens; required in production, must be at least 32 characters

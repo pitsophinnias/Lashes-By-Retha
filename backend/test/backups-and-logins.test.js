@@ -85,21 +85,6 @@ const insertBackupRun = async ({ startedAt, finishedAt = null, status, sizeBytes
   return result.rows[0].id
 }
 
-// backup_runs has nothing to do with orders/students/customers - but after
-// the feature/test-data incident, the same discipline applies to every
-// shared table: never trust a computed value (like the "warning" flag,
-// which looks at *all* rows) unless nothing outside this test is present to
-// skew it. Only ever reads here, never deletes anything not in ownIds.
-const skipIfForeignBackupRuns = async (t, ownIds) => {
-  const { rows } = await pool.query('SELECT id FROM backup_runs')
-  const foreign = rows.filter(r => !ownIds.includes(r.id))
-  if (foreign.length > 0) {
-    t.skip(`backup_runs has ${foreign.length} row(s) outside this test - skipping, since the warning flag looks at every row`)
-    return true
-  }
-  return false
-}
-
 let sysadminUser, ownerUser, staffUser
 
 before(async () => {
@@ -155,10 +140,12 @@ test('POST /api/system/backups/report rejects a missing or invalid status', asyn
 
 // ── Backup age warning ───────────────────────────────────────────────────────
 // warning looks at *every* row in backup_runs, so each of these tests starts
-// by clearing out whatever this file has inserted so far (never anything
-// else - see skipIfForeignBackupRuns below) - otherwise an earlier test's
-// own "now" row would still be the most recent when a later test is trying
-// to test what happens when the most recent row is old or failed.
+// by clearing out whatever this file has inserted so far - otherwise an
+// earlier test's own "now" row would still be the most recent when a later
+// test is trying to test what happens when the most recent row is old or
+// failed. Safe to do for real (never anything outside this test can be
+// present) because the test database is truncated and reseeded before this
+// file even starts - see test/setup.mjs.
 const resetOwnBackupRuns = async () => {
   if (createdBackupRunIds.length > 0) {
     await pool.query('DELETE FROM backup_runs WHERE id = ANY($1)', [createdBackupRunIds])
@@ -166,14 +153,13 @@ const resetOwnBackupRuns = async () => {
   }
 }
 
-test('GET /api/admin/backups warns when the last successful backup is over 26 hours old', async (t) => {
+test('GET /api/admin/backups warns when the last successful backup is over 26 hours old', async () => {
   await resetOwnBackupRuns()
   await insertBackupRun({
     startedAt: new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString(),
     finishedAt: new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString(),
     status: 'ok',
   })
-  if (await skipIfForeignBackupRuns(t, createdBackupRunIds)) return
 
   const res = await request('GET', '/api/admin/backups', undefined, sysadminHeaders())
   assert.strictEqual(res.status, 200)
@@ -181,10 +167,9 @@ test('GET /api/admin/backups warns when the last successful backup is over 26 ho
   assert.strictEqual(res.data.warning, true)
 })
 
-test('GET /api/admin/backups has no warning when the last run succeeded recently', async (t) => {
+test('GET /api/admin/backups has no warning when the last run succeeded recently', async () => {
   await resetOwnBackupRuns()
   await insertBackupRun({ startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), status: 'ok' })
-  if (await skipIfForeignBackupRuns(t, createdBackupRunIds)) return
 
   const res = await request('GET', '/api/admin/backups', undefined, sysadminHeaders())
   assert.strictEqual(res.status, 200)
@@ -192,11 +177,10 @@ test('GET /api/admin/backups has no warning when the last run succeeded recently
   assert.ok(res.data.lastSuccessAt)
 })
 
-test('GET /api/admin/backups warns when the most recent run failed, even if an earlier one succeeded', async (t) => {
+test('GET /api/admin/backups warns when the most recent run failed, even if an earlier one succeeded', async () => {
   await resetOwnBackupRuns()
   await insertBackupRun({ startedAt: new Date(Date.now() - 60 * 1000).toISOString(), status: 'ok' })
   await insertBackupRun({ startedAt: new Date().toISOString(), status: 'failed', message: 'pg_dump failed' })
-  if (await skipIfForeignBackupRuns(t, createdBackupRunIds)) return
 
   const res = await request('GET', '/api/admin/backups', undefined, sysadminHeaders())
   assert.strictEqual(res.status, 200)
