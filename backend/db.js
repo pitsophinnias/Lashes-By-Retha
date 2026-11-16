@@ -319,6 +319,26 @@ const createTables = async () => {
     )
   }
 
+  // Error log for the sysadmin Errors page - see src/errorLog/store.js's
+  // logError, which is the only thing that ever writes to this table.
+  // route/method/status describe the request, never its body; message is
+  // already stripped of anything that looks like a secret, email or phone
+  // number before it gets here.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS error_log (
+      id SERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      level VARCHAR(20) NOT NULL DEFAULT 'error',
+      context VARCHAR(255),
+      message TEXT,
+      route VARCHAR(255),
+      method VARCHAR(10),
+      status INTEGER,
+      user_id INTEGER REFERENCES users(id),
+      resolved_at TIMESTAMPTZ
+    );
+  `)
+
   // Seed courses if none exist, using the same ids and values as the
   // hard-coded CLASSES list both frontends used before this table existed.
   const { rows: courseRows } = await pool.query('SELECT COUNT(*) FROM courses')
