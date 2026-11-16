@@ -339,6 +339,20 @@ const createTables = async () => {
     );
   `)
 
+  // Marks sandbox/UAT orders and training enrolments so Retha's owner/staff
+  // views never see them - set automatically (see index.js's
+  // markOrderTestIfNeeded/markStudentTestIfNeeded and the startup backfill
+  // next to createTables()'s call site) or by hand by a sysadmin. Once set,
+  // never auto-cleared - only a sysadmin unmarks a row.
+  // notifications.order_id/student_id tag a notification to the order/
+  // student it came from, so a test one can be hidden the same way.
+  await pool.query(`
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id);
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS student_id INTEGER REFERENCES students(id);
+  `)
+
   // Seed courses if none exist, using the same ids and values as the
   // hard-coded CLASSES list both frontends used before this table existed.
   const { rows: courseRows } = await pool.query('SELECT COUNT(*) FROM courses')

@@ -355,11 +355,14 @@ const checkFileSize = (file) => {
 }
 
 // ── Notification helper ───────────────────────────────────────────────────────
-const addNotification = async (type, title, message) => {
+// orderId/studentId (optional) tag a notification to the order or student it
+// came from, so it can be hidden from owner/staff along with the rest of
+// that test order's or student's data - see canIncludeTestData.
+const addNotification = async (type, title, message, { orderId, studentId } = {}) => {
   try {
     await pool.query(
-      'INSERT INTO notifications (type, title, message) VALUES ($1, $2, $3)',
-      [type, title, message]
+      'INSERT INTO notifications (type, title, message, order_id, student_id) VALUES ($1, $2, $3, $4, $5)',
+      [type, title, message, orderId || null, studentId || null]
     )
   } catch (err) {
     console.error('Failed to add notification:', err.message)
@@ -470,6 +473,54 @@ const maskName = (name) => {
   const parts = name.trim().split(/\s+/)
   if (parts.length > 1) return `${parts[0]} ${parts[parts.length - 1][0]}.`
   return parts[0].length > 2 ? `${parts[0].slice(0, 2)}***` : parts[0]
+}
+
+// Owner/staff never see test data (orders, students, the calendar,
+// notifications tied to either) - a sysadmin can opt in with ?includeTest=true.
+const canIncludeTestData = (req) => req.user.role === 'sysadmin' && req.query.includeTest === 'true'
+
+// Called right after a new Ozow/Payflex payment attempt is inserted - once
+// an order or student has any test attempt, it stays marked as test data
+// (never auto-unmarked; only a sysadmin can unmark it by hand). A no-op
+// when isTest is false, so call sites never need their own guard.
+const markOrderTestIfNeeded = async (orderId, isTest) => {
+  if (!isTest || !orderId) return
+  await pool.query('UPDATE orders SET is_test = TRUE WHERE id = $1', [orderId])
+}
+const markStudentTestIfNeeded = async (studentId, isTest) => {
+  if (!isTest || !studentId) return
+  await pool.query('UPDATE students SET is_test = TRUE WHERE id = $1', [studentId])
+}
+
+// Run once at startup (see start() below) to mark any order/student that
+// predates is_test existing at all. Ozow attempts carry their own is_test
+// per row, so that part is exact; Payflex never has, so a Payflex-linked
+// order/student is marked test only when this backend is *currently*
+// pointed at the UAT/sandbox API - the best available signal, since there's
+// no historical record of which mode was active when an older attempt was made.
+const backfillTestData = async () => {
+  try {
+    await pool.query(`
+      UPDATE orders o SET is_test = TRUE
+      WHERE is_test = FALSE AND EXISTS (SELECT 1 FROM ozow_payments p WHERE p.order_id = o.id AND p.is_test = TRUE)
+    `)
+    await pool.query(`
+      UPDATE students s SET is_test = TRUE
+      WHERE is_test = FALSE AND EXISTS (SELECT 1 FROM ozow_payments p WHERE p.student_id = s.id AND p.is_test = TRUE)
+    `)
+    if (payflex.PAYFLEX_IS_TEST) {
+      await pool.query(`
+        UPDATE orders o SET is_test = TRUE
+        WHERE is_test = FALSE AND EXISTS (SELECT 1 FROM payflex_payments p WHERE p.order_id = o.id)
+      `)
+      await pool.query(`
+        UPDATE students s SET is_test = TRUE
+        WHERE is_test = FALSE AND EXISTS (SELECT 1 FROM payflex_payments p WHERE p.student_id = s.id)
+      `)
+    }
+  } catch (err) {
+    console.error('Failed to backfill test data flags:', err.message)
+  }
 }
 
 // Shared by the payments monitor and the system health overview - a payment
@@ -1207,6 +1258,182 @@ app.post('/api/admin/errors/resolve', authenticate, requireRole('sysadmin'), asy
   }
 })
 
+// ── Test data (sysadmin only) ────────────────────────────────────────────────
+app.patch('/api/admin/orders/:id/test-flag', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { isTest } = req.body
+  if (typeof isTest !== 'boolean') return res.status(400).json({ error: 'isTest must be true or false' })
+  try {
+    const result = await pool.query('UPDATE orders SET is_test = $1 WHERE id = $2 RETURNING id', [isTest, req.params.id])
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Order not found' })
+    await addAuditLog(req.user.id, req.user.username, 'ORDER_TEST_FLAG_CHANGED',
+      `Order #${req.params.id} marked as ${isTest ? 'test' : 'real'} data`, req.ip)
+    res.json({ success: true, isTest })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update order' })
+    await logError('PATCH /api/admin/orders/:id/test-flag', err, req)
+  }
+})
+
+app.patch('/api/admin/students/:id/test-flag', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { isTest } = req.body
+  if (typeof isTest !== 'boolean') return res.status(400).json({ error: 'isTest must be true or false' })
+  try {
+    const result = await pool.query('UPDATE students SET is_test = $1 WHERE id = $2 RETURNING id', [isTest, req.params.id])
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    await addAuditLog(req.user.id, req.user.username, 'STUDENT_TEST_FLAG_CHANGED',
+      `Student #${req.params.id} marked as ${isTest ? 'test' : 'real'} data`, req.ip)
+    res.json({ success: true, isTest })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update student' })
+    await logError('PATCH /api/admin/students/:id/test-flag', err, req)
+  }
+})
+
+app.get('/api/admin/test-data', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const ordersResult = await pool.query(
+      `SELECT o.*, (SELECT COUNT(*) FROM order_items i WHERE i.order_id = o.id) AS item_count
+       FROM orders o WHERE o.is_test = TRUE ORDER BY o.created_at DESC`
+    )
+    const studentsResult = await pool.query(
+      `SELECT s.*, c.name AS course_name FROM students s LEFT JOIN courses c ON c.id = s.class_id
+       WHERE s.is_test = TRUE ORDER BY s.enrolled_at DESC`
+    )
+    const orders = ordersResult.rows.map(o => ({
+      id: o.id, customerName: o.customer_name, total: parseFloat(o.total), status: o.status,
+      paymentStatus: o.payment_status, paymentMethod: o.payment_method, createdAt: o.created_at,
+      itemCount: parseInt(o.item_count),
+    }))
+    const students = studentsResult.rows.map(s => ({
+      id: s.id, name: s.name, courseName: s.course_name, status: s.status, paymentStatus: s.payment_status,
+      amountPaid: parseFloat(s.amount_paid || 0), enrolledAt: s.enrolled_at,
+    }))
+    res.json({
+      orders,
+      students,
+      totals: {
+        orderCount: orders.length,
+        studentCount: students.length,
+        orderTotal: orders.reduce((sum, o) => sum + o.total, 0),
+        studentAmountPaid: students.reduce((sum, s) => sum + s.amountPaid, 0),
+      },
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch test data' })
+    await logError('GET /api/admin/test-data', err, req)
+  }
+})
+
+// Restores stock for every item of a confirmed test order before it's
+// deleted, recording a 'test_cleanup' stock_movement for each - the mirror
+// image of the 'sale' deduction made when the order was confirmed. These
+// rows deliberately leave order_id NULL (naming the order in note instead) -
+// the order itself is about to be deleted, and stock_movements.order_id has
+// no ON DELETE action, so a row that still pointed at it would block that
+// delete. Returns how many line items were restored and how many units.
+const restoreStockForTestOrders = async (client, orderIds, userId) => {
+  let stockRestoredMovements = 0
+  let stockRestoredUnits = 0
+  if (orderIds.length === 0) return { stockRestoredMovements, stockRestoredUnits }
+
+  const items = (await client.query('SELECT * FROM order_items WHERE order_id = ANY($1)', [orderIds])).rows
+  for (const item of items) {
+    const table = item.variant_id ? 'product_variants' : 'products'
+    const idColumn = item.variant_id ? item.variant_id : item.product_id
+    const updateResult = await client.query(
+      `UPDATE ${table} SET stock_quantity = stock_quantity + $1, updated_at = NOW() WHERE id = $2`,
+      [item.qty, idColumn]
+    )
+    if (updateResult.rowCount === 0) continue // product/option was deleted since - nothing to credit
+    await client.query(
+      `INSERT INTO stock_movements (product_id, variant_id, change, reason, user_id, note)
+       VALUES ($1, $2, $3, 'test_cleanup', $4, $5)`,
+      [item.product_id, item.variant_id, item.qty, userId, `Restored from deleted test order #${item.order_id}`]
+    )
+    stockRestoredMovements += 1
+    stockRestoredUnits += item.qty
+  }
+  return { stockRestoredMovements, stockRestoredUnits }
+}
+
+// Only ever deletes rows that are actually is_test = TRUE, no matter what
+// candidateIds contains - the FOR UPDATE select re-checks that, so a bad id
+// slipping into the request body can never touch real data.
+const deleteTestOrders = async (client, candidateIds, userId) => {
+  if (candidateIds.length === 0) return { ordersDeleted: 0, stockRestoredMovements: 0, stockRestoredUnits: 0 }
+  const testOrders = (await client.query(
+    'SELECT id, status FROM orders WHERE id = ANY($1) AND is_test = TRUE FOR UPDATE', [candidateIds]
+  )).rows
+  const orderIds = testOrders.map(o => o.id)
+  if (orderIds.length === 0) return { ordersDeleted: 0, stockRestoredMovements: 0, stockRestoredUnits: 0 }
+
+  const confirmedIds = testOrders.filter(o => o.status === 'confirmed').map(o => o.id)
+  const { stockRestoredMovements, stockRestoredUnits } = await restoreStockForTestOrders(client, confirmedIds, userId)
+
+  // The order's own stock_movements history (the original 'sale' deductions)
+  // still points at order_id - it has to go before the order itself can.
+  await client.query('DELETE FROM stock_movements WHERE order_id = ANY($1)', [orderIds])
+  await client.query('DELETE FROM ozow_payments WHERE order_id = ANY($1)', [orderIds])
+  await client.query('DELETE FROM payflex_payments WHERE order_id = ANY($1)', [orderIds])
+  await client.query('DELETE FROM notifications WHERE order_id = ANY($1)', [orderIds])
+  await client.query('DELETE FROM order_items WHERE order_id = ANY($1)', [orderIds])
+  const deleted = await client.query('DELETE FROM orders WHERE id = ANY($1)', [orderIds])
+  return { ordersDeleted: deleted.rowCount, stockRestoredMovements, stockRestoredUnits }
+}
+
+const deleteTestStudents = async (client, candidateIds) => {
+  if (candidateIds.length === 0) return { studentsDeleted: 0 }
+  const studentIds = (await client.query(
+    'SELECT id FROM students WHERE id = ANY($1) AND is_test = TRUE FOR UPDATE', [candidateIds]
+  )).rows.map(r => r.id)
+  if (studentIds.length === 0) return { studentsDeleted: 0 }
+
+  await client.query('DELETE FROM ozow_payments WHERE student_id = ANY($1)', [studentIds])
+  await client.query('DELETE FROM payflex_payments WHERE student_id = ANY($1)', [studentIds])
+  await client.query('DELETE FROM notifications WHERE student_id = ANY($1)', [studentIds])
+  const deleted = await client.query('DELETE FROM students WHERE id = ANY($1)', [studentIds])
+  return { studentsDeleted: deleted.rowCount }
+}
+
+app.post('/api/admin/test-data/delete', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { orderIds, studentIds, all } = req.body
+  let requestedOrderIds = Array.isArray(orderIds) ? orderIds.filter(Number.isInteger) : []
+  let requestedStudentIds = Array.isArray(studentIds) ? studentIds.filter(Number.isInteger) : []
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    if (all === true) {
+      requestedOrderIds = (await client.query('SELECT id FROM orders WHERE is_test = TRUE')).rows.map(r => r.id)
+      requestedStudentIds = (await client.query('SELECT id FROM students WHERE is_test = TRUE')).rows.map(r => r.id)
+    }
+
+    if (requestedOrderIds.length === 0 && requestedStudentIds.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Nothing to delete' })
+    }
+
+    const orderSummary = await deleteTestOrders(client, requestedOrderIds, req.user.id)
+    const studentSummary = await deleteTestStudents(client, requestedStudentIds)
+
+    await client.query('COMMIT')
+
+    await addAuditLog(req.user.id, req.user.username, 'TEST_DATA_DELETED',
+      `Deleted ${orderSummary.ordersDeleted} test order(s) and ${studentSummary.studentsDeleted} test student(s); ` +
+      `restored stock on ${orderSummary.stockRestoredMovements} line item(s) (${orderSummary.stockRestoredUnits} units).`,
+      req.ip)
+
+    res.json({ success: true, ...orderSummary, ...studentSummary })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to delete test data' })
+    await logError('POST /api/admin/test-data/delete', err, req)
+  } finally {
+    client.release()
+  }
+})
+
 // ── Products ──────────────────────────────────────────────────────────────────
 // Public: active products only, for the customer site.
 app.get('/api/products', async (req, res) => {
@@ -1425,7 +1652,7 @@ const serializeStudent = (s, course) => {
     paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
     status: s.status, completedAt: s.completed_at,
     amountPaid, balance: price !== null ? Math.max(0, price - amountPaid) : null,
-    source: s.source, publicToken: s.public_token,
+    source: s.source, publicToken: s.public_token, isTest: s.is_test,
   }
 }
 
@@ -1433,7 +1660,9 @@ app.get('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 
   try {
     const course = await getCourse(req.params.classId)
     const result = await pool.query(
-      'SELECT * FROM students WHERE class_id = $1 ORDER BY enrolled_at DESC',
+      canIncludeTestData(req)
+        ? 'SELECT * FROM students WHERE class_id = $1 ORDER BY enrolled_at DESC'
+        : 'SELECT * FROM students WHERE class_id = $1 AND is_test = FALSE ORDER BY enrolled_at DESC',
       [req.params.classId]
     )
     res.json(result.rows.map(s => serializeStudent(s, course)))
@@ -1455,7 +1684,7 @@ app.post('/api/classes/:classId/students', authenticate, requireRole('sysadmin',
       [req.params.classId, name.trim(), whatsapp.trim(), paymentStatus || 'unpaid', notes || '']
     )
     const s = result.rows[0]
-    await addNotification('section', 'New student enrolled', `${s.name} was added to a Lash Training class.`)
+    await addNotification('section', 'New student enrolled', `${s.name} was added to a Lash Training class.`, { studentId: s.id })
     const course = await getCourse(req.params.classId)
     res.status(201).json(serializeStudent(s, course))
   } catch (err) {
@@ -1604,6 +1833,7 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
   const [year, mon] = month.split('-').map(Number)
   const start = new Date(year, mon - 1, 1)
   const end = new Date(year, mon, 1)
+  const includeTest = canIncludeTestData(req)
   try {
     const studentsResult = await pool.query(
       `SELECT s.id, s.class_id, s.name, s.status, s.preferred_start_date, s.amount_paid,
@@ -1612,8 +1842,9 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
        LEFT JOIN courses c ON c.id = s.class_id
        WHERE s.status IN ('active', 'awaiting_payment')
          AND s.preferred_start_date >= $1 AND s.preferred_start_date < $2
+         AND ($3::boolean OR s.is_test = FALSE)
        ORDER BY s.preferred_start_date ASC`,
-      [start, end]
+      [start, end, includeTest]
     )
     // Students' payment amounts are owner/sysadmin only everywhere else
     // (classes/:id/students denies staff outright) - staff get whether a
@@ -1639,8 +1870,9 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
       `SELECT id, customer_name, total, status, payment_status, created_at
        FROM orders
        WHERE created_at >= $1 AND created_at < $2
+         AND ($3::boolean OR is_test = FALSE)
        ORDER BY created_at ASC`,
-      [start, end]
+      [start, end, includeTest]
     )
     const orders = ordersResult.rows.map(o => ({
       id: o.id,
@@ -1785,7 +2017,8 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
       )
     }
     await addNotification('order', 'New order received',
-      `${customerName} placed a ${fulfilmentMethod} order for ${orderItems.length} item${orderItems.length !== 1 ? 's' : ''} totalling R${total}.`)
+      `${customerName} placed a ${fulfilmentMethod} order for ${orderItems.length} item${orderItems.length !== 1 ? 's' : ''} totalling R${total}.`,
+      { orderId: order.id })
     console.log('New order:', order.id)
     res.status(201).json({ success: true, orderId: order.id, orderToken: order.public_token })
   } catch (err) {
@@ -1797,11 +2030,12 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
 app.get('/api/orders', authenticate, async (req, res) => {
   try {
     const view = ['active', 'archived'].includes(req.query.view) ? req.query.view : 'all'
-    const ordersResult = await pool.query(
-      view === 'active' ? 'SELECT * FROM orders WHERE archived = FALSE ORDER BY created_at DESC'
-        : view === 'archived' ? 'SELECT * FROM orders WHERE archived = TRUE ORDER BY created_at DESC'
-        : 'SELECT * FROM orders ORDER BY created_at DESC'
-    )
+    const conditions = []
+    if (view === 'active') conditions.push('archived = FALSE')
+    if (view === 'archived') conditions.push('archived = TRUE')
+    if (!canIncludeTestData(req)) conditions.push('is_test = FALSE')
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const ordersResult = await pool.query(`SELECT * FROM orders ${where} ORDER BY created_at DESC`)
     const orders = ordersResult.rows
     for (const order of orders) {
       const itemsResult = await pool.query(
@@ -1848,6 +2082,7 @@ app.get('/api/orders', authenticate, async (req, res) => {
       order.payflexOrderId = latestPayflex ? latestPayflex.payflex_order_id : null
       order.payflexStatus = latestPayflex ? latestPayflex.status : null
       order.archivedAt = order.archived_at
+      order.isTest = order.is_test
     }
     res.json(orders)
   } catch (err) {
@@ -1909,6 +2144,7 @@ app.post('/api/payments/ozow/start', ordersLimiter, requireNotInMaintenance, asy
        VALUES ($1, $2, $3, 'started', $4)`,
       [order.id, transactionReference, amountStr, ozow.OZOW_IS_TEST]
     )
+    await markOrderTestIfNeeded(order.id, ozow.OZOW_IS_TEST)
     res.json({ action: 'https://pay.ozow.com/', fields })
   } catch (err) {
     res.status(500).json({ error: 'Failed to start Ozow payment' })
@@ -1968,6 +2204,7 @@ app.post('/api/payments/payflex/start', ordersLimiter, requireNotInMaintenance, 
        VALUES ($1, $2, $3, $4, 'started')`,
       [order.id, merchantReference, payflexOrder.payflexOrderId, total.toFixed(2)]
     )
+    await markOrderTestIfNeeded(order.id, payflex.PAYFLEX_IS_TEST)
     res.json({ redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
     res.status(500).json({ error: 'Failed to start Payflex payment' })
@@ -2149,8 +2386,9 @@ app.post('/api/enrolments', enrolmentsLimiter, requireNotInMaintenance, async (r
          VALUES ($1, $2, $3, 'started', $4, $5)`,
         [student.id, transactionReference, amountStr, ozow.OZOW_IS_TEST, paymentOption === 'deposit_ozow' ? 'deposit' : 'full']
       )
+      await markStudentTestIfNeeded(student.id, ozow.OZOW_IS_TEST)
       await addNotification('section', 'New training enrolment',
-        `${student.name} started enrolling for ${course.name}.`)
+        `${student.name} started enrolling for ${course.name}.`, { studentId: student.id })
       return res.status(201).json({ success: true, enrolmentToken: publicToken, action: 'https://pay.ozow.com/', fields })
     }
 
@@ -2169,8 +2407,9 @@ app.post('/api/enrolments', enrolmentsLimiter, requireNotInMaintenance, async (r
        VALUES ($1, $2, $3, $4, 'started', 'full')`,
       [student.id, merchantReference, payflexOrder.payflexOrderId, amount.toFixed(2)]
     )
+    await markStudentTestIfNeeded(student.id, payflex.PAYFLEX_IS_TEST)
     await addNotification('section', 'New training enrolment',
-      `${student.name} started enrolling for ${course.name}.`)
+      `${student.name} started enrolling for ${course.name}.`, { studentId: student.id })
     res.status(201).json({ success: true, enrolmentToken: publicToken, redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
     res.status(500).json({ error: 'Failed to create enrolment' })
@@ -2282,6 +2521,7 @@ app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, requireNotInMa
          VALUES ($1, $2, $3, 'started', $4, 'balance')`,
         [student.id, transactionReference, amountStr, ozow.OZOW_IS_TEST]
       )
+      await markStudentTestIfNeeded(student.id, ozow.OZOW_IS_TEST)
       return res.json({ action: 'https://pay.ozow.com/', fields })
     }
 
@@ -2306,6 +2546,7 @@ app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, requireNotInMa
        VALUES ($1, $2, $3, $4, 'started', 'balance')`,
       [student.id, merchantReference, payflexOrder.payflexOrderId, balance.toFixed(2)]
     )
+    await markStudentTestIfNeeded(student.id, payflex.PAYFLEX_IS_TEST)
     res.json({ redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
     res.status(500).json({ error: 'Failed to start balance payment' })
@@ -2352,6 +2593,7 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintena
          VALUES ($1, $2, $3, 'started', $4, $5)`,
         [student.id, transactionReference, amountStr, ozow.OZOW_IS_TEST, latest.purpose]
       )
+      await markStudentTestIfNeeded(student.id, ozow.OZOW_IS_TEST)
       return res.json({ action: 'https://pay.ozow.com/', fields })
     }
 
@@ -2371,6 +2613,7 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintena
        VALUES ($1, $2, $3, $4, 'started', $5)`,
       [student.id, merchantReference, payflexOrder.payflexOrderId, amount.toFixed(2), latest.purpose]
     )
+    await markStudentTestIfNeeded(student.id, payflex.PAYFLEX_IS_TEST)
     res.json({ redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
     res.status(500).json({ error: 'Failed to retry payment' })
@@ -2456,10 +2699,12 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
     await client.query('COMMIT')
 
     await addNotification('order', 'Order confirmed',
-      `Order #${id} for ${order.customer_name} has been marked as confirmed.`)
+      `Order #${id} for ${order.customer_name} has been marked as confirmed.`, { orderId: id })
     for (const p of lowStockCrossed) {
+      // Tagged with the order that crossed the threshold - a test order's
+      // stock deduction should never read to Retha as a real low-stock alert.
       await addNotification('stock', 'Low stock',
-        `"${p.name}" is running low - only ${p.stock} left.`)
+        `"${p.name}" is running low - only ${p.stock} left.`, { orderId: id })
     }
     res.json({ success: true })
   } catch (err) {
@@ -2730,10 +2975,20 @@ app.post('/api/categories/product/:productId', authenticate, requireRole('sysadm
 })
 
 // ── Notifications ─────────────────────────────────────────────────────────────
+// A notification tagged with a test order/student (see addNotification) is
+// excluded the same way the order/student itself is - unless the caller is
+// a sysadmin who opted in with ?includeTest=true.
+const TEST_NOTIFICATION_EXCLUSION = `
+  AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = notifications.order_id AND o.is_test = TRUE)
+  AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = notifications.student_id AND s.is_test = TRUE)
+`
+
 app.get('/api/notifications/archived', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM notifications WHERE archived = TRUE ORDER BY created_at DESC LIMIT 100'
+      `SELECT * FROM notifications WHERE archived = TRUE
+       ${canIncludeTestData(req) ? '' : TEST_NOTIFICATION_EXCLUSION}
+       ORDER BY created_at DESC LIMIT 100`
     )
     res.json(result.rows.map(r => ({
       id: r.id, type: r.type, title: r.title,
@@ -2747,7 +3002,8 @@ app.get('/api/notifications/archived', authenticate, async (req, res) => {
 app.get('/api/notifications/unread-count', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT COUNT(*) FROM notifications WHERE read = FALSE AND archived = FALSE'
+      `SELECT COUNT(*) FROM notifications WHERE read = FALSE AND archived = FALSE
+       ${canIncludeTestData(req) ? '' : TEST_NOTIFICATION_EXCLUSION}`
     )
     res.json({ count: parseInt(result.rows[0].count) })
   } catch {
@@ -2758,7 +3014,9 @@ app.get('/api/notifications/unread-count', authenticate, async (req, res) => {
 app.get('/api/notifications', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM notifications WHERE archived = FALSE ORDER BY created_at DESC LIMIT 50'
+      `SELECT * FROM notifications WHERE archived = FALSE
+       ${canIncludeTestData(req) ? '' : TEST_NOTIFICATION_EXCLUSION}
+       ORDER BY created_at DESC LIMIT 50`
     )
     res.json(result.rows.map(r => ({
       id: r.id, type: r.type, title: r.title,
@@ -2815,6 +3073,7 @@ app.use((err, req, res, next) => {
 let server
 const start = async () => {
   await createTables()
+  await backfillTestData()
   await archiveOldNotifications()
   await archiveOldOrders()
   await cleanupErrorLog()

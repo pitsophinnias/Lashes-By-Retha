@@ -53,6 +53,15 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [selectedErrorIds, setSelectedErrorIds] = useState([])
   const [resolvingErrors, setResolvingErrors] = useState(false)
 
+  // Test Data
+  const [testData, setTestData] = useState({ orders: [], students: [], totals: { orderCount: 0, studentCount: 0, orderTotal: 0, studentAmountPaid: 0 } })
+  const [testDataLoading, setTestDataLoading] = useState(false)
+  const [selectedTestOrderIds, setSelectedTestOrderIds] = useState([])
+  const [selectedTestStudentIds, setSelectedTestStudentIds] = useState([])
+  const [testDataConfirm, setTestDataConfirm] = useState(null) // { mode: 'selected' | 'all' }
+  const [testDataDeleting, setTestDataDeleting] = useState(false)
+  const [testDataMsg, setTestDataMsg] = useState('')
+
   const getHeaders = () => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
@@ -83,6 +92,10 @@ export default function SysAdminDashboard({ user, onLogout }) {
   useEffect(() => {
     if (activePage === 'errors') fetchErrors()
   }, [activePage, errorFilters])
+
+  useEffect(() => {
+    if (activePage === 'testData') fetchTestData()
+  }, [activePage])
 
   const fetchUsers = async () => {
     try {
@@ -334,6 +347,49 @@ export default function SysAdminDashboard({ user, onLogout }) {
     })
   }
 
+  const fetchTestData = async () => {
+    setTestDataLoading(true)
+    try {
+      const res = await fetch(`${API}/api/admin/test-data`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && data.totals) setTestData(data)
+      setSelectedTestOrderIds([])
+      setSelectedTestStudentIds([])
+    } catch {}
+    setTestDataLoading(false)
+  }
+
+  const toggleTestOrderSelected = (id) => {
+    setSelectedTestOrderIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+  const toggleTestStudentSelected = (id) => {
+    setSelectedTestStudentIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
+  const runTestDataDelete = async (body) => {
+    setTestDataDeleting(true)
+    setTestDataMsg('')
+    try {
+      const res = await fetch(`${API}/api/admin/test-data/delete`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) { setTestDataMsg(data.error || 'Failed to delete test data.'); return }
+      setTestDataMsg(
+        `Deleted ${data.ordersDeleted} order(s) and ${data.studentsDeleted} student(s). ` +
+        `Restored stock on ${data.stockRestoredMovements} line(s) (${data.stockRestoredUnits} units).`
+      )
+      setTestDataConfirm(null)
+      await fetchTestData()
+    } catch {
+      setTestDataMsg('Failed to delete test data.')
+    } finally {
+      setTestDataDeleting(false)
+    }
+  }
+
   const roleColour = (role) => {
     if (role === 'sysadmin') return { bg: '#FDE8EC', color: '#C47A8A' }
     if (role === 'owner') return { bg: '#E8F0FA', color: '#3A5A8A' }
@@ -349,6 +405,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
     { label: 'Payments', value: 'payments' },
     { label: 'System Health', value: 'health' },
     { label: 'Errors', value: 'errors' },
+    { label: 'Test Data', value: 'testData' },
     { label: 'Settings', value: 'settings' },
   ]
 
@@ -361,6 +418,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
     payments: 'Payments',
     health: 'System Health',
     errors: 'Errors',
+    testData: 'Test Data',
     settings: 'Settings',
   }
 
@@ -1204,6 +1262,145 @@ export default function SysAdminDashboard({ user, onLogout }) {
                       })}
                       {!errorsLoading && errorGroups.length === 0 && (
                         <tr><td colSpan={8} style={{ color: '#AAAAAA', padding: '16px 0' }}>No errors match these filters.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Test Data */}
+            {activePage === 'testData' && (
+              <div>
+                <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+                  {[
+                    { label: 'Test Orders', value: testData.totals.orderCount, bg: '#C47A8A' },
+                    { label: 'Test Students', value: testData.totals.studentCount, bg: '#7A9E8A' },
+                    { label: 'Test Order Value', value: `R ${Number(testData.totals.orderTotal).toLocaleString('en-ZA')}`, bg: '#8C5A6A' },
+                    { label: 'Test Amount Paid', value: `R ${Number(testData.totals.studentAmountPaid).toLocaleString('en-ZA')}`, bg: '#9A8A8E' },
+                  ].map(stat => (
+                    <div key={stat.label} style={{ background: stat.bg, borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: 'white', marginBottom: 4 }}>{stat.value}</div>
+                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>{stat.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+                  <button
+                    className="sa-btn-secondary"
+                    disabled={selectedTestOrderIds.length === 0 && selectedTestStudentIds.length === 0}
+                    onClick={() => setTestDataConfirm({ mode: 'selected' })}
+                  >
+                    Delete Selected
+                  </button>
+                  <button
+                    className="sa-btn-danger"
+                    disabled={testData.totals.orderCount === 0 && testData.totals.studentCount === 0}
+                    onClick={() => setTestDataConfirm({ mode: 'all' })}
+                  >
+                    Delete All Test Data
+                  </button>
+                  <button className="sa-btn-secondary" disabled={testDataLoading} onClick={fetchTestData}>
+                    {testDataLoading ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+
+                {testDataConfirm && (
+                  <div style={{ background: '#FFF3E0', border: '1px solid #FFD591', borderRadius: 8, padding: '14px 16px', marginBottom: 16 }}>
+                    <div style={{ fontSize: 13, color: '#8C5A00', fontWeight: 600, marginBottom: 10 }}>
+                      {testDataConfirm.mode === 'all' ? (
+                        <>This will permanently delete all {testData.totals.orderCount} test order(s) and {testData.totals.studentCount} test student(s) - their order items, payment attempts and notifications, restoring any stock that was deducted from a confirmed test order. This cannot be undone.</>
+                      ) : (
+                        <>This will permanently delete {selectedTestOrderIds.length} selected order(s) and {selectedTestStudentIds.length} selected student(s) - their order items, payment attempts and notifications, restoring any stock that was deducted from a confirmed test order. This cannot be undone.</>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button
+                        className="sa-btn-danger"
+                        disabled={testDataDeleting}
+                        onClick={() => testDataConfirm.mode === 'all'
+                          ? runTestDataDelete({ all: true })
+                          : runTestDataDelete({ orderIds: selectedTestOrderIds, studentIds: selectedTestStudentIds })}
+                      >
+                        {testDataDeleting ? 'Deleting...' : 'Yes, delete it'}
+                      </button>
+                      <button className="sa-btn-secondary" onClick={() => setTestDataConfirm(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {testDataMsg && (
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 16, color: testDataMsg.startsWith('Deleted') ? '#2E7D32' : '#C47A8A' }}>{testDataMsg}</div>
+                )}
+
+                <div className="sa-panel" style={{ overflowX: 'auto', marginBottom: 20 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16 }}>Test Orders</div>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Order #</th>
+                        <th>Customer</th>
+                        <th>Total</th>
+                        <th>Status</th>
+                        <th>Payment</th>
+                        <th>Items</th>
+                        <th>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {testData.orders.map(o => (
+                        <tr key={o.id}>
+                          <td><input type="checkbox" checked={selectedTestOrderIds.includes(o.id)} onChange={() => toggleTestOrderSelected(o.id)} /></td>
+                          <td style={{ fontWeight: 600 }}>#{o.id}</td>
+                          <td>{o.customerName}</td>
+                          <td>R{o.total.toFixed(2)}</td>
+                          <td><span className="sa-badge" style={statusColour(o.status)}>{o.status}</span></td>
+                          <td><span className="sa-badge" style={statusColour(o.paymentStatus)}>{o.paymentStatus}</span></td>
+                          <td>{o.itemCount}</td>
+                          <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {new Date(o.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                        </tr>
+                      ))}
+                      {testData.orders.length === 0 && (
+                        <tr><td colSpan={8} style={{ color: '#AAAAAA', padding: '16px 0' }}>No test orders.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16 }}>Test Students</div>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Name</th>
+                        <th>Course</th>
+                        <th>Status</th>
+                        <th>Payment</th>
+                        <th>Amount Paid</th>
+                        <th>Enrolled</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {testData.students.map(s => (
+                        <tr key={s.id}>
+                          <td><input type="checkbox" checked={selectedTestStudentIds.includes(s.id)} onChange={() => toggleTestStudentSelected(s.id)} /></td>
+                          <td style={{ fontWeight: 600 }}>{s.name}</td>
+                          <td>{s.courseName || '-'}</td>
+                          <td><span className="sa-badge" style={{ background: '#F7EEF0', color: '#8C5A6A' }}>{s.status}</span></td>
+                          <td><span className="sa-badge" style={statusColour(s.paymentStatus)}>{s.paymentStatus}</span></td>
+                          <td>R{s.amountPaid.toFixed(2)}</td>
+                          <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {new Date(s.enrolledAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                        </tr>
+                      ))}
+                      {testData.students.length === 0 && (
+                        <tr><td colSpan={7} style={{ color: '#AAAAAA', padding: '16px 0' }}>No test students.</td></tr>
                       )}
                     </tbody>
                   </table>

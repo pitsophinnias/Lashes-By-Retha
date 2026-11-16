@@ -220,14 +220,16 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
 
     if (paidOrder) {
       await notifyAdmin('order', 'Ozow payment received',
-        `Order #${paidOrder.id} for ${paidOrder.customer_name} has been paid via Ozow (R${parseFloat(paidOrder.total).toFixed(2)}). Ready to confirm and pack.`)
+        `Order #${paidOrder.id} for ${paidOrder.customer_name} has been paid via Ozow (R${parseFloat(paidOrder.total).toFixed(2)}). Ready to confirm and pack.`,
+        { orderId: paidOrder.id })
     }
     if (paidStudent) {
       const startDate = paidStudent.preferred_start_date
         ? new Date(paidStudent.preferred_start_date).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
         : 'not set'
       await notifyAdmin('section', 'New training payment',
-        `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`)
+        `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`,
+        { studentId: paidStudent.id })
     }
   } catch (err) {
     console.error('reconcileOzowPayment failed:', err.message)
