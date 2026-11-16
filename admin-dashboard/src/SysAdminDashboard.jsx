@@ -24,6 +24,24 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [pwMsg, setPwMsg] = useState('')
 
+  // System Controls (maintenance mode + payment switches)
+  const [systemSettings, setSystemSettings] = useState(null)
+  const [maintenanceDraft, setMaintenanceDraft] = useState({ enabled: false, message: '' })
+  const [maintenanceConfirming, setMaintenanceConfirming] = useState(false)
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false)
+  const [maintenanceMsg, setMaintenanceMsg] = useState('')
+  const [paymentsDraft, setPaymentsDraft] = useState({ ozowEnabled: true, payflexEnabled: true })
+  const [paymentSwitchesSaving, setPaymentSwitchesSaving] = useState(false)
+  const [paymentSwitchesMsg, setPaymentSwitchesMsg] = useState('')
+
+  // Payments monitor
+  const [paymentRows, setPaymentRows] = useState([])
+  const [paymentsSummary, setPaymentsSummary] = useState({ stuckCount: 0, lastOzowNotifyAt: null, lastPayflexCallbackAt: null })
+  const [paymentFilters, setPaymentFilters] = useState({ provider: '', status: '', mode: '', days: '' })
+  const [paymentsLoading, setPaymentsLoading] = useState(false)
+  const [rechecking, setRechecking] = useState({})
+  const [paymentEvents, setPaymentEvents] = useState([])
+
   const getHeaders = () => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
@@ -33,11 +51,19 @@ export default function SysAdminDashboard({ user, onLogout }) {
     fetchUsers()
     fetchRoles()
     fetchSystemNotifications()
+    fetchSystemSettings()
   }, [])
 
   useEffect(() => {
     if (activePage === 'audit') fetchAuditLogs(auditPage)
   }, [activePage, auditPage])
+
+  useEffect(() => {
+    if (activePage === 'payments') {
+      fetchPayments()
+      fetchPaymentEvents()
+    }
+  }, [activePage, paymentFilters])
 
   const fetchUsers = async () => {
     try {
@@ -152,6 +178,97 @@ export default function SysAdminDashboard({ user, onLogout }) {
     } catch { setPwMsg('Failed to change password.') }
   }
 
+  const fetchSystemSettings = async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/system/settings`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && data.maintenance) {
+        setSystemSettings(data)
+        setMaintenanceDraft({ enabled: data.maintenance.enabled, message: data.maintenance.message })
+        setPaymentsDraft({ ozowEnabled: data.payments.ozow.enabled, payflexEnabled: data.payments.payflex.enabled })
+      }
+    } catch {}
+  }
+
+  const saveMaintenance = async (enabled, message) => {
+    setMaintenanceSaving(true)
+    setMaintenanceMsg('')
+    try {
+      const res = await fetch(`${API}/api/admin/system/maintenance`, {
+        method: 'PUT',
+        headers: getHeaders(),
+        body: JSON.stringify({ enabled, message }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setMaintenanceMsg(data.error || 'Failed to update maintenance mode.'); return }
+      setMaintenanceConfirming(false)
+      setMaintenanceMsg(`Maintenance mode is now ${enabled ? 'ON' : 'OFF'}.`)
+      fetchSystemSettings()
+    } catch {
+      setMaintenanceMsg('Failed to update maintenance mode.')
+    } finally {
+      setMaintenanceSaving(false)
+    }
+  }
+
+  const savePaymentSwitches = async () => {
+    setPaymentSwitchesSaving(true)
+    setPaymentSwitchesMsg('')
+    try {
+      const res = await fetch(`${API}/api/admin/system/payments`, {
+        method: 'PUT',
+        headers: getHeaders(),
+        body: JSON.stringify(paymentsDraft),
+      })
+      const data = await res.json()
+      if (!res.ok) { setPaymentSwitchesMsg(data.error || 'Failed to update payment switches.'); return }
+      setPaymentSwitchesMsg('Payment switches saved.')
+      fetchSystemSettings()
+    } catch {
+      setPaymentSwitchesMsg('Failed to update payment switches.')
+    } finally {
+      setPaymentSwitchesSaving(false)
+    }
+  }
+
+  const fetchPayments = async () => {
+    setPaymentsLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (paymentFilters.provider) params.set('provider', paymentFilters.provider)
+      if (paymentFilters.status) params.set('status', paymentFilters.status)
+      if (paymentFilters.mode) params.set('mode', paymentFilters.mode)
+      if (paymentFilters.days) params.set('days', paymentFilters.days)
+      const res = await fetch(`${API}/api/admin/payments?${params.toString()}`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && Array.isArray(data.payments)) {
+        setPaymentRows(data.payments)
+        setPaymentsSummary(data.summary)
+      }
+    } catch {}
+    setPaymentsLoading(false)
+  }
+
+  const fetchPaymentEvents = async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/payment-events`, { headers: getHeaders() })
+      const data = await res.json()
+      if (Array.isArray(data)) setPaymentEvents(data)
+    } catch {}
+  }
+
+  const recheckPayment = async (row) => {
+    setRechecking(prev => ({ ...prev, [`${row.provider}-${row.id}`]: true }))
+    try {
+      await fetch(`${API}/api/admin/payments/${row.provider}/${row.id}/recheck`, {
+        method: 'POST',
+        headers: getHeaders(),
+      })
+      await fetchPayments()
+    } catch {}
+    setRechecking(prev => ({ ...prev, [`${row.provider}-${row.id}`]: false }))
+  }
+
   const roleColour = (role) => {
     if (role === 'sysadmin') return { bg: '#FDE8EC', color: '#C47A8A' }
     if (role === 'owner') return { bg: '#E8F0FA', color: '#3A5A8A' }
@@ -163,6 +280,8 @@ export default function SysAdminDashboard({ user, onLogout }) {
     { label: 'Users', value: 'users' },
     { label: 'Roles', value: 'roles' },
     { label: 'Audit Log', value: 'audit' },
+    { label: 'System Controls', value: 'controls' },
+    { label: 'Payments', value: 'payments' },
     { label: 'Settings', value: 'settings' },
   ]
 
@@ -171,7 +290,16 @@ export default function SysAdminDashboard({ user, onLogout }) {
     users: 'User Management',
     roles: 'Roles and Permissions',
     audit: 'Audit Log',
+    controls: 'System Controls',
+    payments: 'Payments',
     settings: 'Settings',
+  }
+
+  const statusColour = (status) => {
+    if (status === 'paid') return { background: '#E8F5E9', color: '#2E7D32' }
+    if (status === 'failed') return { background: '#FDE8EC', color: '#C47A8A' }
+    if (status === 'cancelled') return { background: '#F5F5F5', color: '#9E9E9E' }
+    return { background: '#FFF3E0', color: '#E65100' } // started / pending
   }
 
   return (
@@ -295,8 +423,16 @@ export default function SysAdminDashboard({ user, onLogout }) {
         {/* Main content */}
         <div className="admin-main" style={{ marginLeft: 240, flex: 1, minHeight: '100vh' }}>
 
-          {/* Top bar */}
-          <div className="admin-topbar" style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
+          {/* Top bar (and, while maintenance is on, a banner above it) - both
+              sticky together as one header so the banner never scrolls out
+              from under a non-sticky top bar. */}
+          <div style={{ position: 'sticky', top: 0, zIndex: 50 }}>
+            {systemSettings?.maintenance?.enabled && (
+              <div style={{ background: '#E65100', color: 'white', textAlign: 'center', padding: '8px 16px', fontSize: 13, fontWeight: 700, letterSpacing: 0.5 }}>
+                Maintenance mode is ON - the customer site is showing a maintenance screen and new payments are blocked.
+              </div>
+            )}
+            <div className="admin-topbar" style={{ background: '#2C1A20', borderBottom: 'none', padding: '0 32px', height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 2px 8px rgba(44,20,28,0.2)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <button
                 className="admin-hamburger"
@@ -311,6 +447,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
               <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF' }}>{pageTitles[activePage]}</div>
             </div>
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', background: 'rgba(255,255,255,0.08)', padding: '4px 12px', borderRadius: 20, whiteSpace: 'nowrap' }}>System Admin Portal</div>
+            </div>
           </div>
 
           <div className="admin-content" style={{ padding: 32, maxWidth: 1100 }}>
@@ -560,6 +697,247 @@ export default function SysAdminDashboard({ user, onLogout }) {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* System Controls */}
+            {activePage === 'controls' && (
+              <div>
+                <div className="sa-panel" style={{ maxWidth: 560 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Maintenance Mode</div>
+                  <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
+                    While on, the customer site shows a maintenance screen instead of the shop, and new orders, enrolments and payments are turned away. The admin dashboard and payments already in progress are never affected.
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#2C1A20' }}>
+                      Maintenance mode is currently {systemSettings?.maintenance?.enabled ? 'ON' : 'OFF'}
+                    </div>
+                    <button
+                      className={systemSettings?.maintenance?.enabled ? 'sa-btn-danger' : 'sa-btn'}
+                      onClick={() => {
+                        if (maintenanceDraft.enabled) {
+                          saveMaintenance(false, maintenanceDraft.message)
+                        } else {
+                          setMaintenanceConfirming(true)
+                        }
+                      }}
+                    >
+                      {maintenanceDraft.enabled ? 'Turn Off' : 'Turn On'}
+                    </button>
+                  </div>
+
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 4 }}>
+                    Message shown to visitors ({maintenanceDraft.message.length}/200)
+                  </label>
+                  <textarea
+                    className="sa-input"
+                    rows={3}
+                    maxLength={200}
+                    value={maintenanceDraft.message}
+                    onChange={e => setMaintenanceDraft(p => ({ ...p, message: e.target.value }))}
+                    style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+
+                  {maintenanceConfirming && (
+                    <div style={{ background: '#FFF3E0', border: '1px solid #FFD591', borderRadius: 8, padding: '12px 14px', marginBottom: 14 }}>
+                      <div style={{ fontSize: 13, color: '#8C5A00', fontWeight: 600, marginBottom: 10 }}>
+                        Turn maintenance mode on? The customer site will immediately show the maintenance screen, and new orders, enrolments and payments will be turned away.
+                      </div>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <button className="sa-btn" disabled={maintenanceSaving} onClick={() => saveMaintenance(true, maintenanceDraft.message)}>
+                          Yes, turn it on
+                        </button>
+                        <button className="sa-btn-secondary" onClick={() => setMaintenanceConfirming(false)}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {!maintenanceConfirming && (
+                    <button
+                      className="sa-btn-secondary"
+                      disabled={maintenanceSaving}
+                      onClick={() => saveMaintenance(maintenanceDraft.enabled, maintenanceDraft.message)}
+                    >
+                      Save Message
+                    </button>
+                  )}
+
+                  {maintenanceMsg && (
+                    <div style={{ fontSize: 13, fontWeight: 600, marginTop: 12, color: maintenanceMsg.includes('now') ? '#2E7D32' : '#C47A8A' }}>{maintenanceMsg}</div>
+                  )}
+                </div>
+
+                <div className="sa-panel" style={{ maxWidth: 560 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Payment Switches</div>
+                  <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
+                    A payment method is only offered at checkout when it's both configured and switched on here. If both are off, checkout falls back to the WhatsApp message.
+                  </div>
+
+                  {['ozow', 'payflex'].map(key => {
+                    const info = systemSettings?.payments?.[key]
+                    const label = key === 'ozow' ? 'Ozow' : 'Payflex'
+                    const draftKey = key === 'ozow' ? 'ozowEnabled' : 'payflexEnabled'
+                    return (
+                      <div key={key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid #F7F0F2' }}>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20' }}>{label}</div>
+                          <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
+                            {info?.configured ? `Configured - ${info.isTest ? 'test mode' : 'live mode'}` : 'Not configured'}
+                          </div>
+                        </div>
+                        <button
+                          className={paymentsDraft[draftKey] ? 'sa-btn' : 'sa-btn-secondary'}
+                          onClick={() => setPaymentsDraft(p => ({ ...p, [draftKey]: !p[draftKey] }))}
+                        >
+                          {paymentsDraft[draftKey] ? 'On' : 'Off'}
+                        </button>
+                      </div>
+                    )
+                  })}
+
+                  <button className="sa-btn" style={{ marginTop: 16 }} disabled={paymentSwitchesSaving} onClick={savePaymentSwitches}>
+                    Save Switches
+                  </button>
+                  {paymentSwitchesMsg && (
+                    <div style={{ fontSize: 13, fontWeight: 600, marginTop: 12, color: paymentSwitchesMsg.includes('saved') ? '#2E7D32' : '#C47A8A' }}>{paymentSwitchesMsg}</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Payments monitor */}
+            {activePage === 'payments' && (
+              <div>
+                <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
+                  <div style={{ background: paymentsSummary.stuckCount > 0 ? '#E65100' : '#7A9E8A', borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                    <div style={{ fontSize: 30, fontWeight: 700, color: 'white', marginBottom: 4 }}>{paymentsSummary.stuckCount}</div>
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>Stuck Over 1 Hour</div>
+                  </div>
+                  <div style={{ background: '#8C5A6A', borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'white', marginBottom: 4 }}>
+                      {paymentsSummary.lastOzowNotifyAt ? new Date(paymentsSummary.lastOzowNotifyAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'None yet'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>Last Ozow Notify</div>
+                  </div>
+                  <div style={{ background: '#C47A8A', borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: 'white', marginBottom: 4 }}>
+                      {paymentsSummary.lastPayflexCallbackAt ? new Date(paymentsSummary.lastPayflexCallbackAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'None yet'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>Last Payflex Callback</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                  <select className="sa-input" style={{ marginBottom: 0, width: 150 }} value={paymentFilters.provider} onChange={e => setPaymentFilters(p => ({ ...p, provider: e.target.value }))}>
+                    <option value="">All providers</option>
+                    <option value="ozow">Ozow</option>
+                    <option value="payflex">Payflex</option>
+                  </select>
+                  <select className="sa-input" style={{ marginBottom: 0, width: 150 }} value={paymentFilters.status} onChange={e => setPaymentFilters(p => ({ ...p, status: e.target.value }))}>
+                    <option value="">All statuses</option>
+                    <option value="started">Started</option>
+                    <option value="pending">Pending</option>
+                    <option value="paid">Paid</option>
+                    <option value="failed">Failed</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                  <select className="sa-input" style={{ marginBottom: 0, width: 150 }} value={paymentFilters.mode} onChange={e => setPaymentFilters(p => ({ ...p, mode: e.target.value }))}>
+                    <option value="">Test and live</option>
+                    <option value="test">Test only</option>
+                    <option value="live">Live only</option>
+                  </select>
+                  <select className="sa-input" style={{ marginBottom: 0, width: 150 }} value={paymentFilters.days} onChange={e => setPaymentFilters(p => ({ ...p, days: e.target.value }))}>
+                    <option value="">All time</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                  </select>
+                </div>
+
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th>Provider</th>
+                        <th>Purpose</th>
+                        <th>Order / Student</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Mode</th>
+                        <th>Created</th>
+                        <th>Updated</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paymentRows.map(row => (
+                        <tr key={`${row.provider}-${row.id}`}>
+                          <td style={{ fontWeight: 600, textTransform: 'capitalize' }}>{row.provider}</td>
+                          <td style={{ textTransform: 'capitalize' }}>{row.purpose}</td>
+                          <td>{row.identifier}</td>
+                          <td>R{row.amount.toFixed(2)}</td>
+                          <td>
+                            <span className="sa-badge" style={statusColour(row.status)}>{row.status}</span>
+                            {row.stuck && <span className="sa-badge" style={{ background: '#E65100', color: 'white', marginLeft: 6 }}>Stuck</span>}
+                          </td>
+                          <td>{row.isTest ? 'Test' : 'Live'}</td>
+                          <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {new Date(row.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {new Date(row.updatedAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td>
+                            <button
+                              className="sa-btn-secondary"
+                              style={{ padding: '5px 10px', fontSize: 11 }}
+                              disabled={!!rechecking[`${row.provider}-${row.id}`]}
+                              onClick={() => recheckPayment(row)}
+                            >
+                              {rechecking[`${row.provider}-${row.id}`] ? 'Checking...' : 'Check again'}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {!paymentsLoading && paymentRows.length === 0 && (
+                        <tr><td colSpan={9} style={{ color: '#AAAAAA', padding: '16px 0' }}>No payment attempts match these filters.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid #F0E8EA' }}>
+                    Rejected Notifications
+                  </div>
+                  {paymentEvents.length === 0 && (
+                    <div style={{ fontSize: 13, color: '#AAAAAA' }}>No rejected notifications or callbacks.</div>
+                  )}
+                  {paymentEvents.length > 0 && (
+                    <table className="sa-table">
+                      <thead>
+                        <tr>
+                          <th>Provider</th>
+                          <th>Reason</th>
+                          <th>Reference</th>
+                          <th>Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paymentEvents.map(ev => (
+                          <tr key={ev.id}>
+                            <td style={{ fontWeight: 600, textTransform: 'capitalize' }}>{ev.provider}</td>
+                            <td>{ev.reason.replace(/_/g, ' ')}</td>
+                            <td style={{ color: '#9A8A8E' }}>{ev.reference || '-'}</td>
+                            <td style={{ color: '#9A8A8E', fontSize: 12 }}>
+                              {new Date(ev.created_at).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
             )}
 

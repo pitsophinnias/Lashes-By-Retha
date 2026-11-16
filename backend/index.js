@@ -31,6 +31,8 @@ const {
   siteSettingsRolesForKey,
   saveSiteSetting,
 } = require('./src/siteSettings/store')
+const systemSettingsDefaults = require('./src/systemSettings/defaults')
+const { readSystemSettings, saveSystemSetting } = require('./src/systemSettings/store')
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -150,14 +152,17 @@ app.post('/api/payments/ozow/notify', globalLimiter, ozowFormParser, async (req,
 
   if (String(body.SiteCode) !== String(ozow.OZOW_SITE_CODE)) {
     console.warn('Ozow notify: site code mismatch')
+    await logPaymentEvent('ozow', 'site_code_mismatch', body.TransactionReference)
     return res.status(400).json({ error: 'Invalid notification' })
   }
   if (!ozow.verifyResponseHash(body, ozow.OZOW_PRIVATE_KEY)) {
     console.warn('Ozow notify: hash verification failed')
+    await logPaymentEvent('ozow', 'hash_mismatch', body.TransactionReference)
     return res.status(400).json({ error: 'Invalid notification' })
   }
 
   console.log(`Ozow notify received: ${body.TransactionReference} ${body.Status}`)
+  await logPaymentEvent('ozow', 'notify_received', body.TransactionReference)
 
   try {
     await pool.query(
@@ -217,8 +222,23 @@ app.post('/api/payments/payflex/callback', globalLimiter, payflexJsonParser, asy
   // Never trust this body for status - it's only used to find which payment
   // attempt to re-check against Payflex's own GET /order/{orderId}.
   const identifier = body.orderId || body.merchantReference
+  let matched = false
   if (identifier) {
+    try {
+      const existing = await pool.query(
+        'SELECT 1 FROM payflex_payments WHERE merchant_reference = $1 OR payflex_order_id = $1',
+        [identifier]
+      )
+      matched = existing.rows.length > 0
+    } catch (err) {
+      console.error('Payflex callback match lookup failed:', err.message)
+    }
+  }
+  if (matched) {
+    await logPaymentEvent('payflex', 'callback_received', identifier)
     await payflex.reconcilePayflexPayment(identifier)
+  } else {
+    await logPaymentEvent('payflex', 'unmatched_callback', identifier)
   }
   res.status(200).send('OK')
 })
@@ -368,6 +388,74 @@ const addAuditLog = async (userId, username, action, details, ipAddress) => {
   } catch (err) {
     console.error('Audit log error:', err.message)
   }
+}
+
+// ── System controls: maintenance mode and payment switches ──────────────────
+// Blocks the request with 503 + the configured message while maintenance is
+// on. Reads system_settings fresh on every call (see readSystemSettings) so
+// a sysadmin turning maintenance off takes effect immediately, and attaches
+// the settings it already read to req so the route handler (which also
+// needs the payment switches) doesn't have to read them again. Fails open on
+// a DB hiccup - a settings read failing is never the reason checkout breaks.
+const requireNotInMaintenance = async (req, res, next) => {
+  try {
+    req.systemSettings = await readSystemSettings()
+    if (req.systemSettings.maintenance.enabled) {
+      return res.status(503).json({ error: req.systemSettings.maintenance.message })
+    }
+    next()
+  } catch (err) {
+    console.error('Failed to read system settings:', err.message)
+    next()
+  }
+}
+
+// requireNotInMaintenance already reads system settings onto req for routes
+// that have it mounted; this reuses that read or, if it's missing (route
+// didn't need the maintenance check, or that read itself failed), reads
+// again, falling back to the published defaults rather than letting a DB
+// hiccup turn into an unhandled rejection.
+const getSystemSettings = async (req) => {
+  if (req.systemSettings) return req.systemSettings
+  try {
+    return await readSystemSettings()
+  } catch (err) {
+    console.error('Failed to read system settings:', err.message)
+    return systemSettingsDefaults
+  }
+}
+
+// Shared by every route that starts or offers an Ozow/Payflex payment - a
+// provider is only ever offered when it's configured (env) AND its sysadmin
+// switch is on.
+const isProviderEnabled = (provider, settings) => {
+  if (provider === 'ozow') return ozow.isOzowConfigured && settings.payments.ozowEnabled
+  if (provider === 'payflex') return payflex.isPayflexConfigured && settings.payments.payflexEnabled
+  return false
+}
+
+// Logs a payment confirmation or a rejected notification/callback for the
+// sysadmin Payments monitor - never secrets or a full request body, just
+// enough to see what happened and when. Best-effort, like addNotification.
+const logPaymentEvent = async (provider, reason, reference) => {
+  try {
+    await pool.query(
+      'INSERT INTO payment_events (provider, reason, reference) VALUES ($1, $2, $3)',
+      [provider, reason, reference || null]
+    )
+  } catch (err) {
+    console.error('Failed to log payment event:', err.message)
+  }
+}
+
+// A student's full name is personal information the Payments monitor only
+// needs enough of to tell rows apart - shown as a first name and last
+// initial (or the first few letters of a one-word name), never in full.
+const maskName = (name) => {
+  if (!name) return 'Unknown'
+  const parts = name.trim().split(/\s+/)
+  if (parts.length > 1) return `${parts[0]} ${parts[parts.length - 1][0]}.`
+  return parts[0].length > 2 ? `${parts[0].slice(0, 2)}***` : parts[0]
 }
 
 // ── Auto-archive notifications older than 7 days ─────────────────────────────
@@ -654,6 +742,19 @@ app.get('/api/site-settings', async (req, res) => {
   }
 })
 
+// Public: the customer site checks this before showing the shop, so it can
+// show a full-page maintenance screen instead with no flash of the shop.
+app.get('/api/system/status', async (req, res) => {
+  try {
+    const settings = await readSystemSettings()
+    res.set('Cache-Control', 'public, max-age=15')
+    res.json({ maintenance: settings.maintenance })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch system status' })
+  }
+})
+
 app.put('/api/admin/site-settings/content', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT value FROM site_settings WHERE key = $1', ['content'])
@@ -739,6 +840,197 @@ app.post('/api/admin/site-settings/:key/reset', authenticate, requireSiteSetting
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Failed to reset site settings' })
+  }
+})
+
+// ── System controls (sysadmin only) ──────────────────────────────────────────
+app.get('/api/admin/system/settings', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const settings = await readSystemSettings()
+    res.json({
+      maintenance: settings.maintenance,
+      payments: {
+        ozow: { enabled: settings.payments.ozowEnabled, configured: ozow.isOzowConfigured, isTest: ozow.OZOW_IS_TEST },
+        payflex: { enabled: settings.payments.payflexEnabled, configured: payflex.isPayflexConfigured, isTest: payflex.PAYFLEX_IS_TEST },
+      },
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch system settings' })
+  }
+})
+
+app.put('/api/admin/system/maintenance', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { enabled, message } = req.body
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be true or false' })
+  }
+  const trimmedMessage = typeof message === 'string' ? message.trim() : ''
+  if (!trimmedMessage) {
+    return res.status(400).json({ error: 'A maintenance message is required' })
+  }
+  if (/[<>]/.test(trimmedMessage)) {
+    return res.status(400).json({ error: 'Message must be plain text - HTML is not allowed' })
+  }
+  if (trimmedMessage.length > 200) {
+    return res.status(400).json({ error: 'Message must be 200 characters or fewer' })
+  }
+  try {
+    const value = { enabled, message: trimmedMessage }
+    await saveSystemSetting('maintenance', value, req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'MAINTENANCE_MODE_CHANGED',
+      `Maintenance mode turned ${enabled ? 'ON' : 'OFF'}`, req.ip)
+    res.json(value)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update maintenance settings' })
+  }
+})
+
+app.put('/api/admin/system/payments', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { ozowEnabled, payflexEnabled } = req.body
+  if (typeof ozowEnabled !== 'boolean' || typeof payflexEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'ozowEnabled and payflexEnabled must be true or false' })
+  }
+  try {
+    const value = { ozowEnabled, payflexEnabled }
+    await saveSystemSetting('payments', value, req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'PAYMENT_SWITCHES_CHANGED',
+      `Ozow ${ozowEnabled ? 'ON' : 'OFF'}, Payflex ${payflexEnabled ? 'ON' : 'OFF'}`, req.ip)
+    res.json(value)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to update payment switches' })
+  }
+})
+
+// ── Payments monitor (sysadmin only) ─────────────────────────────────────────
+// A payment row belongs to either an order (shown as its order number, never
+// sensitive) or a training enrolment (shown as a masked student name - see
+// maskName). Never exposes anything that would let an amount be hand-edited
+// from here - "Check again" only ever re-runs the real reconcile functions.
+const formatPaymentRow = (row) => ({
+  id: row.id,
+  provider: row.provider,
+  purpose: row.purpose,
+  identifier: row.order_id ? `Order #${row.order_id}` : maskName(row.student_name),
+  orderId: row.order_id,
+  studentId: row.student_id,
+  amount: parseFloat(row.amount),
+  status: row.status,
+  isTest: row.is_test,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  stuck: ['started', 'pending'].includes(row.status) &&
+    (Date.now() - new Date(row.created_at).getTime()) > 60 * 60 * 1000,
+})
+
+app.get('/api/admin/payments', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const provider = ['ozow', 'payflex'].includes(req.query.provider) ? req.query.provider : null
+    const status = ['started', 'pending', 'paid', 'failed', 'cancelled'].includes(req.query.status) ? req.query.status : null
+    const mode = ['test', 'live'].includes(req.query.mode) ? req.query.mode === 'test' : null
+    const days = ['7', '30'].includes(req.query.days) ? parseInt(req.query.days) : null
+    const since = days ? new Date(Date.now() - days * 24 * 60 * 60 * 1000) : null
+
+    const result = await pool.query(
+      `SELECT * FROM (
+         SELECT 'ozow' AS provider, p.id, p.order_id, p.student_id, p.purpose, p.amount, p.status, p.is_test,
+                p.created_at, p.updated_at, s.name AS student_name
+         FROM ozow_payments p
+         LEFT JOIN students s ON s.id = p.student_id
+         UNION ALL
+         SELECT 'payflex' AS provider, p.id, p.order_id, p.student_id, p.purpose, p.amount, p.status,
+                $1::boolean AS is_test, p.created_at, p.updated_at, s.name AS student_name
+         FROM payflex_payments p
+         LEFT JOIN students s ON s.id = p.student_id
+       ) combined
+       WHERE ($2::text IS NULL OR combined.provider = $2)
+         AND ($3::text IS NULL OR combined.status = $3)
+         AND ($4::boolean IS NULL OR combined.is_test = $4)
+         AND ($5::timestamptz IS NULL OR combined.created_at >= $5)
+       ORDER BY combined.created_at DESC
+       LIMIT 100`,
+      [payflex.PAYFLEX_IS_TEST, provider, status, mode, since]
+    )
+
+    const stuckResult = await pool.query(
+      `SELECT COUNT(*) FROM (
+         SELECT status, created_at FROM ozow_payments WHERE status IN ('started', 'pending')
+         UNION ALL
+         SELECT status, created_at FROM payflex_payments WHERE status IN ('started', 'pending')
+       ) stuck_candidates
+       WHERE created_at < NOW() - INTERVAL '1 hour'`
+    )
+
+    const confirmationResult = await pool.query(
+      `SELECT provider, MAX(created_at) AS last_at FROM payment_events
+       WHERE reason IN ('notify_received', 'callback_received')
+       GROUP BY provider`
+    )
+    const lastConfirmation = Object.fromEntries(confirmationResult.rows.map(r => [r.provider, r.last_at]))
+
+    res.json({
+      summary: {
+        stuckCount: parseInt(stuckResult.rows[0].count),
+        lastOzowNotifyAt: lastConfirmation.ozow || null,
+        lastPayflexCallbackAt: lastConfirmation.payflex || null,
+      },
+      payments: result.rows.map(formatPaymentRow),
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch payments' })
+  }
+})
+
+app.post('/api/admin/payments/:provider/:id/recheck', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { provider, id } = req.params
+  if (!['ozow', 'payflex'].includes(provider)) {
+    return res.status(400).json({ error: 'Unknown provider' })
+  }
+  try {
+    const table = provider === 'ozow' ? 'ozow_payments' : 'payflex_payments'
+    const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [id])
+    const payment = result.rows[0]
+    if (!payment) return res.status(404).json({ error: 'Payment not found' })
+
+    if (provider === 'ozow') {
+      await ozow.reconcileOzowPayment(payment.transaction_reference)
+    } else {
+      await payflex.reconcilePayflexPayment(payment.merchant_reference)
+    }
+
+    const refreshedResult = await pool.query(
+      `SELECT p.*, s.name AS student_name FROM ${table} p LEFT JOIN students s ON s.id = p.student_id WHERE p.id = $1`,
+      [id]
+    )
+    const refreshed = refreshedResult.rows[0]
+    await addAuditLog(req.user.id, req.user.username, 'PAYMENT_RECHECKED',
+      `Rechecked ${provider} payment id ${id}`, req.ip)
+    res.json(formatPaymentRow({
+      ...refreshed,
+      provider,
+      is_test: provider === 'ozow' ? refreshed.is_test : payflex.PAYFLEX_IS_TEST,
+    }))
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to recheck payment' })
+  }
+})
+
+app.get('/api/admin/payment-events', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, provider, reason, reference, created_at FROM payment_events
+       WHERE reason IN ('site_code_mismatch', 'hash_mismatch', 'unmatched_callback')
+       ORDER BY created_at DESC
+       LIMIT 50`
+    )
+    res.json(result.rows)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Failed to fetch payment events' })
   }
 })
 
@@ -1194,7 +1486,7 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
   }
 })
 
-app.post('/api/orders', ordersLimiter, async (req, res) => {
+app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res) => {
   const {
     customerName, customerPhone, customerEmail, items, fulfilmentMethod, paymentMethod,
     deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
@@ -1218,8 +1510,8 @@ app.post('/api/orders', ordersLimiter, async (req, res) => {
   if (!['ozow', 'payflex'].includes(paymentMethod)) {
     return res.status(400).json({ error: "We're only able to take online payments at the moment." })
   }
-  const isPaymentMethodConfigured = paymentMethod === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
-  if (!isPaymentMethodConfigured) {
+  const settings = await getSystemSettings(req)
+  if (!isProviderEnabled(paymentMethod, settings)) {
     return res.status(503).json({
       error: "Online payments are taking a short break. Please message us on WhatsApp at 082 685 5399 and we'll gladly help you place your order."
     })
@@ -1393,8 +1685,16 @@ app.get('/api/orders', authenticate, async (req, res) => {
 
 // ── Ozow payments ─────────────────────────────────────────────────────────────
 app.get('/api/payments/options', async (req, res) => {
-  const payflexOptions = { enabled: payflex.isPayflexConfigured, minimumAmount: null, maximumAmount: null }
-  if (payflex.isPayflexConfigured) {
+  let settings
+  try {
+    settings = await readSystemSettings()
+  } catch (err) {
+    console.error('Failed to read system settings:', err.message)
+    return res.status(500).json({ error: 'Failed to fetch payment options' })
+  }
+  const payflexEnabled = isProviderEnabled('payflex', settings)
+  const payflexOptions = { enabled: payflexEnabled, minimumAmount: null, maximumAmount: null }
+  if (payflexEnabled) {
     try {
       const config = await payflex.getConfiguration()
       if (config) {
@@ -1405,11 +1705,12 @@ app.get('/api/payments/options', async (req, res) => {
       console.error('Failed to fetch Payflex configuration:', err.message)
     }
   }
-  res.json({ ozow: ozow.isOzowConfigured, payflex: payflexOptions })
+  res.json({ ozow: isProviderEnabled('ozow', settings), payflex: payflexOptions })
 })
 
-app.post('/api/payments/ozow/start', ordersLimiter, async (req, res) => {
-  if (!ozow.isOzowConfigured) {
+app.post('/api/payments/ozow/start', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+  const startSettings = await getSystemSettings(req)
+  if (!isProviderEnabled('ozow', startSettings)) {
     return res.status(503).json({ error: 'Ozow payments are not available right now.' })
   }
   const { orderToken } = req.body
@@ -1441,8 +1742,9 @@ app.post('/api/payments/ozow/start', ordersLimiter, async (req, res) => {
   }
 })
 
-app.post('/api/payments/payflex/start', ordersLimiter, async (req, res) => {
-  if (!payflex.isPayflexConfigured) {
+app.post('/api/payments/payflex/start', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+  const startSettings = await getSystemSettings(req)
+  if (!isProviderEnabled('payflex', startSettings)) {
     return res.status(503).json({ error: 'Payflex payments are not available right now.' })
   }
   const { orderToken } = req.body
@@ -1584,8 +1886,8 @@ app.patch('/api/orders/:token/switch-provider', async (req, res) => {
   if (!['ozow', 'payflex'].includes(provider)) {
     return res.status(400).json({ error: 'Please choose Ozow or Payflex.' })
   }
-  const isProviderConfigured = provider === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
-  if (!isProviderConfigured) {
+  const switchSettings = await getSystemSettings(req)
+  if (!isProviderEnabled(provider, switchSettings)) {
     return res.status(503).json({ error: 'That payment method is not available right now.' })
   }
   try {
@@ -1613,7 +1915,7 @@ app.patch('/api/orders/:token/switch-provider', async (req, res) => {
 })
 
 // ── Training enrolment ───────────────────────────────────────────────────────
-app.post('/api/enrolments', enrolmentsLimiter, async (req, res) => {
+app.post('/api/enrolments', enrolmentsLimiter, requireNotInMaintenance, async (req, res) => {
   const { courseId, name, phone, email, preferredStartDate, paymentOption } = req.body
   if (!name || !name.trim() || !phone || !email || !preferredStartDate || !paymentOption) {
     return res.status(400).json({ error: 'Missing required fields' })
@@ -1634,8 +1936,8 @@ app.post('/api/enrolments', enrolmentsLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Please choose a future Tuesday to Saturday date for your preferred start.' })
   }
   const provider = paymentOption === 'full_payflex' ? 'payflex' : 'ozow'
-  const isProviderConfigured = provider === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
-  if (!isProviderConfigured) {
+  const enrolSettings = await getSystemSettings(req)
+  if (!isProviderEnabled(provider, enrolSettings)) {
     return res.status(503).json({
       error: "Online payments are taking a short break. Please message us on WhatsApp at 082 685 5399 and we'll gladly help you enrol."
     })
@@ -1777,13 +2079,13 @@ app.get('/api/enrolments/by-token/:token', async (req, res) => {
   }
 })
 
-app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, async (req, res) => {
+app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, requireNotInMaintenance, async (req, res) => {
   const { provider } = req.body
   if (!['ozow', 'payflex'].includes(provider)) {
     return res.status(400).json({ error: 'Please choose Ozow or Payflex.' })
   }
-  const isProviderConfigured = provider === 'ozow' ? ozow.isOzowConfigured : payflex.isPayflexConfigured
-  if (!isProviderConfigured) {
+  const balanceSettings = await getSystemSettings(req)
+  if (!isProviderEnabled(provider, balanceSettings)) {
     return res.status(503).json({ error: 'That payment method is not available right now.' })
   }
   try {
@@ -1841,8 +2143,9 @@ app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, async (req, re
 // same amount and purpose) - for when a deposit or full-price attempt was
 // cancelled or failed, before anything has been paid. Pay-balance above is
 // for a *new* balance payment once something already has been.
-app.post('/api/enrolments/:token/retry', enrolmentsLimiter, async (req, res) => {
+app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintenance, async (req, res) => {
   try {
+    const retrySettings = await getSystemSettings(req)
     const studentResult = await pool.query('SELECT * FROM students WHERE public_token = $1', [req.params.token])
     const student = studentResult.rows[0]
     if (!student) return res.status(404).json({ error: 'Enrolment not found' })
@@ -1866,7 +2169,7 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, async (req, res) => 
     const course = await getCourse(student.class_id)
 
     if (provider === 'ozow') {
-      if (!ozow.isOzowConfigured) return res.status(503).json({ error: 'Ozow payments are not available right now.' })
+      if (!isProviderEnabled('ozow', retrySettings)) return res.status(503).json({ error: 'Ozow payments are not available right now.' })
       const { transactionReference, amountStr, fields } = ozow.buildOzowFields(student.id, amount, {
         bankReferenceLabel: `HBH Training ${student.id}`,
       })
@@ -1878,7 +2181,7 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, async (req, res) => 
       return res.json({ action: 'https://pay.ozow.com/', fields })
     }
 
-    if (!payflex.isPayflexConfigured) return res.status(503).json({ error: 'Payflex payments are not available right now.' })
+    if (!isProviderEnabled('payflex', retrySettings)) return res.status(503).json({ error: 'Payflex payments are not available right now.' })
     const merchantReference = payflex.generateMerchantReference(student.id)
     const payflexOrder = await payflex.createPayflexOrder({
       amount,
