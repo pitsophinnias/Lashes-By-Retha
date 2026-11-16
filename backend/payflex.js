@@ -15,6 +15,11 @@ const isPayflexConfigured = !!(
   PUBLIC_API_URL && CUSTOMER_SITE_URL
 )
 
+// Payflex has no separate "is test" flag like Ozow - which mode you're in is
+// entirely a function of which API/auth URLs are configured (sandbox/UAT vs
+// production). Used by the sysadmin Payments page/monitor to show test or live.
+const PAYFLEX_IS_TEST = /uat/i.test(PAYFLEX_API_URL) || /uat|dev/i.test(PAYFLEX_AUTH_URL)
+
 console.log(`Payflex payments: ${isPayflexConfigured ? `enabled (api: ${PAYFLEX_API_URL})` : 'disabled'}`)
 
 // Allows index.js to hand us the admin notification helper without payflex.js
@@ -246,6 +251,7 @@ module.exports = {
   PUBLIC_API_URL,
   CUSTOMER_SITE_URL,
   isPayflexConfigured,
+  PAYFLEX_IS_TEST,
   generateMerchantReference,
   getAccessToken,
   getConfiguration,

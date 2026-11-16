@@ -1,5 +1,6 @@
 const { Pool } = require('pg')
 const siteSettingsDefaults = require('./src/siteSettings/defaults')
+const systemSettingsDefaults = require('./src/systemSettings/defaults')
 
 // Local Postgres (DATABASE_URL pointing at localhost) has no SSL listener,
 // but managed providers like Render require it.
@@ -288,6 +289,35 @@ const createTables = async () => {
     ALTER TABLE payflex_payments ADD COLUMN IF NOT EXISTS student_id INTEGER REFERENCES students(id);
     ALTER TABLE payflex_payments ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) NOT NULL DEFAULT 'order';
   `)
+
+  // System controls: maintenance mode and payment provider switches, mirroring
+  // site_settings's key/value/updated_at/updated_by shape. payment_events logs
+  // rejected Ozow notifications/Payflex callbacks and valid confirmations (for
+  // "last confirmation received"), for the sysadmin Payments monitor - never
+  // secrets or a full request body, just enough to see what happened and when.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_by INTEGER REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS payment_events (
+      id SERIAL PRIMARY KEY,
+      provider VARCHAR(20) NOT NULL,
+      reason VARCHAR(50) NOT NULL,
+      reference VARCHAR(100),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
+  for (const key of Object.keys(systemSettingsDefaults)) {
+    await pool.query(
+      `INSERT INTO system_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
+      [key, systemSettingsDefaults[key]]
+    )
+  }
 
   // Seed courses if none exist, using the same ids and values as the
   // hard-coded CLASSES list both frontends used before this table existed.

@@ -394,6 +394,38 @@ function PaymentChoiceButtons({ options, selected, onSelect }) {
 
 const OZOW_ICON = <img src="/ozow-logo.png" alt="Ozow" style={{ height: '22px', width: 'auto', display: 'block' }} />
 
+// Shown in place of the entire site while maintenance mode is on - see the
+// early return in App() below. siteContent is whatever's loaded so far
+// (DEFAULT_CONTENT until/unless /api/site-settings has answered), so the
+// WhatsApp link always works even if that fetch never completes.
+function MaintenanceScreen({ message, siteContent }) {
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', textAlign: 'center', padding: '24px', background: '#FFFAF8',
+      fontFamily: "'Lato', sans-serif", color: '#2C2C2C',
+    }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap');`}</style>
+      <img src="/logo.png" alt="Hair By Her" style={{ height: '72px', width: 'auto', objectFit: 'contain', marginBottom: '28px' }} />
+      <h1 style={{ fontSize: '22px', fontWeight: 700, marginBottom: '14px', maxWidth: '480px' }}>We'll be right back</h1>
+      <p style={{ fontSize: '15px', color: '#5A4A4E', maxWidth: '440px', lineHeight: 1.6, marginBottom: '22px' }}>
+        {message || "We're making a few improvements and will be back shortly. Thank you for your patience."}
+      </p>
+      <a
+        href={whatsAppHref(siteContent.contact.phone)}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          display: 'inline-block', padding: '12px 24px', borderRadius: '10px',
+          background: '#C47A8A', color: 'white', textDecoration: 'none', fontWeight: 700, fontSize: '14px',
+        }}
+      >
+        Message us on WhatsApp
+      </a>
+    </div>
+  )
+}
+
 function App() {
   const [showPolicies, setShowPolicies] = useState(false)
   const [cart, setCart] = useState([])
@@ -431,6 +463,12 @@ function App() {
   // 'checking' while we wait for a sleeping backend to wake up, 'ready' once
   // it responds, 'unreachable' once it fails to respond within the timeout.
   const [backendStatus, setBackendStatus] = useState('checking')
+  // Checked before anything else renders, so maintenance mode can replace
+  // the whole site with no flash of the shop first. Fails open (false) on a
+  // timeout or error, rather than leaving visitors on a blank screen forever
+  // if the status check itself can't be reached.
+  const [maintenanceChecked, setMaintenanceChecked] = useState(false)
+  const [maintenanceInfo, setMaintenanceInfo] = useState({ enabled: false, message: '' })
   // Live name/price/deposit by course id, merged over CLASSES below - the
   // descriptions and curriculum text stay hard-coded here for now.
   const [courseData, setCourseData] = useState({})
@@ -470,6 +508,19 @@ function App() {
       .then(r => { if (r.ok) setBackendStatus('ready'); else setBackendStatus('unreachable') })
       .catch(() => setBackendStatus('unreachable'))
       .finally(() => clearTimeout(timer))
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [])
+
+  // Runs in parallel with the backend wake-up check above - checked before
+  // the shop renders at all (see the early return below App's main JSX).
+  useEffect(() => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), BACKEND_WAKE_TIMEOUT_MS)
+    fetch(`${API}/api/system/status`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(data => { if (data?.maintenance) setMaintenanceInfo(data.maintenance) })
+      .catch(() => {})
+      .finally(() => { clearTimeout(timer); setMaintenanceChecked(true) })
     return () => { clearTimeout(timer); controller.abort() }
   }, [])
 
@@ -1286,6 +1337,11 @@ function App() {
       </div>
     )
   }
+
+  // Checked before anything else renders, so maintenance mode replaces the
+  // whole site with no flash of the shop first - not even the nav or hero.
+  if (!maintenanceChecked) return null
+  if (maintenanceInfo.enabled) return <MaintenanceScreen message={maintenanceInfo.message} siteContent={siteContent} />
 
   return (
     <div className="page">
