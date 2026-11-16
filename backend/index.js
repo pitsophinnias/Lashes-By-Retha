@@ -33,10 +33,24 @@ const {
 } = require('./src/siteSettings/store')
 const systemSettingsDefaults = require('./src/systemSettings/defaults')
 const { readSystemSettings, saveSystemSetting } = require('./src/systemSettings/store')
+const { logError, cleanupErrorLog } = require('./src/errorLog/store')
 
 const app = express()
 const PORT = process.env.PORT || 3002
 const isProd = process.env.NODE_ENV === 'production'
+
+// Shown on the sysadmin System Health page as the running code version.
+// Render sets RENDER_GIT_COMMIT itself; outside Render (local dev, another
+// host), the git commit is read once here rather than on every health
+// check. Never throws - a repo-less deploy (e.g. a tarball with no .git)
+// just falls back to 'unknown'.
+const GIT_COMMIT = process.env.RENDER_GIT_COMMIT || (() => {
+  try {
+    return require('child_process').execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim()
+  } catch {
+    return 'unknown'
+  }
+})()
 
 // Flat courier fee for a delivery order. The one place this is defined -
 // orders always get their fee computed here, never from the browser.
@@ -458,6 +472,21 @@ const maskName = (name) => {
   return parts[0].length > 2 ? `${parts[0].slice(0, 2)}***` : parts[0]
 }
 
+// Shared by the payments monitor and the system health overview - a payment
+// attempt started or pending for over an hour is almost certainly never
+// coming back.
+const getStuckPaymentsCount = async () => {
+  const result = await pool.query(
+    `SELECT COUNT(*) FROM (
+       SELECT status, created_at FROM ozow_payments WHERE status IN ('started', 'pending')
+       UNION ALL
+       SELECT status, created_at FROM payflex_payments WHERE status IN ('started', 'pending')
+     ) stuck_candidates
+     WHERE created_at < NOW() - INTERVAL '1 hour'`
+  )
+  return parseInt(result.rows[0].count)
+}
+
 // ── Auto-archive notifications older than 7 days ─────────────────────────────
 const archiveOldNotifications = async () => {
   try {
@@ -496,6 +525,9 @@ const archiveOldOrders = async () => {
 }
 
 setInterval(archiveOldOrders, 60 * 60 * 1000)
+
+// ── Error log cleanup ────────────────────────────────────────────────────────
+setInterval(cleanupErrorLog, 24 * 60 * 60 * 1000)
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
@@ -541,8 +573,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       }
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Login failed' })
+    await logError('POST /api/auth/login', err, req)
   }
 })
 
@@ -737,8 +769,8 @@ app.get('/api/site-settings', async (req, res) => {
       theme: fillMissingWithDefaults(stored.theme, siteSettingsDefaults.theme),
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch site settings' })
+    await logError('GET /api/site-settings', err, req)
   }
 })
 
@@ -750,8 +782,8 @@ app.get('/api/system/status', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=15')
     res.json({ maintenance: settings.maintenance })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch system status' })
+    await logError('GET /api/system/status', err, req)
   }
 })
 
@@ -767,8 +799,8 @@ app.put('/api/admin/site-settings/content', authenticate, requireRole('sysadmin'
     if (err instanceof SiteSettingsValidationError) {
       return res.status(400).json({ error: err.message, field: err.field })
     }
-    console.error(err)
     res.status(500).json({ error: 'Failed to update site content' })
+    await logError('PUT /api/admin/site-settings/content', err, req)
   }
 })
 
@@ -790,8 +822,8 @@ app.put('/api/admin/site-settings/theme', authenticate, requireRole('sysadmin'),
     if (err instanceof SiteSettingsValidationError) {
       return res.status(400).json({ error: err.message, field: err.field })
     }
-    console.error(err)
     res.status(500).json({ error: 'Failed to update site theme' })
+    await logError('PUT /api/admin/site-settings/theme', err, req)
   }
 })
 
@@ -808,8 +840,8 @@ app.get('/api/admin/site-settings/:key/history', authenticate, requireSiteSettin
     )
     res.json(result.rows)
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch site settings history' })
+    await logError('GET /api/admin/site-settings/:key/history', err, req)
   }
 })
 
@@ -826,8 +858,8 @@ app.post('/api/admin/site-settings/:key/restore/:historyId', authenticate, requi
       `Restored ${key} from history #${historyId}`, req.ip)
     res.json({ success: true, value: rows[0].value })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to restore site settings' })
+    await logError('POST /api/admin/site-settings/:key/restore/:historyId', err, req)
   }
 })
 
@@ -838,8 +870,8 @@ app.post('/api/admin/site-settings/:key/reset', authenticate, requireSiteSetting
     await addAuditLog(req.user.id, req.user.username, 'SITE_SETTINGS_RESET', `Reset ${key} to defaults`, req.ip)
     res.json({ success: true, value: siteSettingsDefaults[key] })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to reset site settings' })
+    await logError('POST /api/admin/site-settings/:key/reset', err, req)
   }
 })
 
@@ -855,8 +887,8 @@ app.get('/api/admin/system/settings', authenticate, requireRole('sysadmin'), asy
       },
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch system settings' })
+    await logError('GET /api/admin/system/settings', err, req)
   }
 })
 
@@ -882,8 +914,8 @@ app.put('/api/admin/system/maintenance', authenticate, requireRole('sysadmin'), 
       `Maintenance mode turned ${enabled ? 'ON' : 'OFF'}`, req.ip)
     res.json(value)
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to update maintenance settings' })
+    await logError('PUT /api/admin/system/maintenance', err, req)
   }
 })
 
@@ -899,8 +931,8 @@ app.put('/api/admin/system/payments', authenticate, requireRole('sysadmin'), asy
       `Ozow ${ozowEnabled ? 'ON' : 'OFF'}, Payflex ${payflexEnabled ? 'ON' : 'OFF'}`, req.ip)
     res.json(value)
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to update payment switches' })
+    await logError('PUT /api/admin/system/payments', err, req)
   }
 })
 
@@ -954,14 +986,7 @@ app.get('/api/admin/payments', authenticate, requireRole('sysadmin'), async (req
       [payflex.PAYFLEX_IS_TEST, provider, status, mode, since]
     )
 
-    const stuckResult = await pool.query(
-      `SELECT COUNT(*) FROM (
-         SELECT status, created_at FROM ozow_payments WHERE status IN ('started', 'pending')
-         UNION ALL
-         SELECT status, created_at FROM payflex_payments WHERE status IN ('started', 'pending')
-       ) stuck_candidates
-       WHERE created_at < NOW() - INTERVAL '1 hour'`
-    )
+    const stuckCount = await getStuckPaymentsCount()
 
     const confirmationResult = await pool.query(
       `SELECT provider, MAX(created_at) AS last_at FROM payment_events
@@ -972,15 +997,15 @@ app.get('/api/admin/payments', authenticate, requireRole('sysadmin'), async (req
 
     res.json({
       summary: {
-        stuckCount: parseInt(stuckResult.rows[0].count),
+        stuckCount,
         lastOzowNotifyAt: lastConfirmation.ozow || null,
         lastPayflexCallbackAt: lastConfirmation.payflex || null,
       },
       payments: result.rows.map(formatPaymentRow),
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch payments' })
+    await logError('GET /api/admin/payments', err, req)
   }
 })
 
@@ -1014,8 +1039,8 @@ app.post('/api/admin/payments/:provider/:id/recheck', authenticate, requireRole(
       is_test: provider === 'ozow' ? refreshed.is_test : payflex.PAYFLEX_IS_TEST,
     }))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to recheck payment' })
+    await logError('POST /api/admin/payments/:provider/:id/recheck', err, req)
   }
 })
 
@@ -1029,8 +1054,156 @@ app.get('/api/admin/payment-events', authenticate, requireRole('sysadmin'), asyn
     )
     res.json(result.rows)
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch payment events' })
+    await logError('GET /api/admin/payment-events', err, req)
+  }
+})
+
+// ── System health (sysadmin only) ────────────────────────────────────────────
+app.get('/api/admin/system/health', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const FREE_PLAN_DB_LIMIT_BYTES = 1024 * 1024 * 1024 // Render's free Postgres plan
+
+  const database = { reachable: false, responseTimeMs: null, sizeBytes: null, sizePercent: null, rowCounts: {} }
+  try {
+    const startedAt = Date.now()
+    await pool.query('SELECT 1')
+    database.reachable = true
+    database.responseTimeMs = Date.now() - startedAt
+
+    const [sizeResult, orders, students, products, users, ozowPayments, payflexPayments] = await Promise.all([
+      pool.query('SELECT pg_database_size(current_database()) AS size'),
+      pool.query('SELECT COUNT(*) FROM orders'),
+      pool.query('SELECT COUNT(*) FROM students'),
+      pool.query('SELECT COUNT(*) FROM products'),
+      pool.query('SELECT COUNT(*) FROM users'),
+      pool.query('SELECT COUNT(*) FROM ozow_payments'),
+      pool.query('SELECT COUNT(*) FROM payflex_payments'),
+    ])
+    const sizeBytes = parseInt(sizeResult.rows[0].size)
+    database.sizeBytes = sizeBytes
+    database.sizePercent = Math.round((sizeBytes / FREE_PLAN_DB_LIMIT_BYTES) * 1000) / 10
+    database.rowCounts = {
+      orders: parseInt(orders.rows[0].count),
+      students: parseInt(students.rows[0].count),
+      products: parseInt(products.rows[0].count),
+      users: parseInt(users.rows[0].count),
+      ozowPayments: parseInt(ozowPayments.rows[0].count),
+      payflexPayments: parseInt(payflexPayments.rows[0].count),
+    }
+  } catch (err) {
+    await logError('GET /api/admin/system/health', err, req)
+  }
+
+  let stuckCount = 0
+  try {
+    stuckCount = await getStuckPaymentsCount()
+  } catch (err) {
+    await logError('GET /api/admin/system/health', err, req)
+  }
+
+  let errorsLast24h = 0
+  try {
+    const result = await pool.query(`SELECT COUNT(*) FROM error_log WHERE created_at > NOW() - INTERVAL '24 hours'`)
+    errorsLast24h = parseInt(result.rows[0].count)
+  } catch (err) {
+    await logError('GET /api/admin/system/health', err, req)
+  }
+
+  let settings = systemSettingsDefaults
+  try {
+    settings = await readSystemSettings()
+  } catch (err) {
+    await logError('GET /api/admin/system/health', err, req)
+  }
+
+  const warnings = []
+  if (!database.reachable) warnings.push('Database is not reachable.')
+  if (database.sizePercent !== null && database.sizePercent > 80) warnings.push('Database is over 80% of the free-plan limit.')
+  if (stuckCount > 0) warnings.push(`${stuckCount} payment attempt${stuckCount === 1 ? '' : 's'} stuck for over an hour.`)
+  if (errorsLast24h > 0) warnings.push(`${errorsLast24h} error${errorsLast24h === 1 ? '' : 's'} in the last 24 hours.`)
+
+  const memory = process.memoryUsage()
+  res.json({
+    status: warnings.length === 0 ? 'ok' : 'warning',
+    warnings,
+    backend: {
+      uptimeSeconds: Math.round(process.uptime()),
+      nodeVersion: process.version,
+      memory: {
+        rssMb: Math.round(memory.rss / 1024 / 1024),
+        heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+        heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+      },
+      version: GIT_COMMIT,
+    },
+    database,
+    stuckPayments: stuckCount,
+    errorsLast24h,
+    services: {
+      ozow: { configured: ozow.isOzowConfigured, isTest: ozow.OZOW_IS_TEST },
+      payflex: { configured: payflex.isPayflexConfigured, isTest: payflex.PAYFLEX_IS_TEST },
+      cloudinary: { configured: isCloudinaryEnabled },
+    },
+    systemSettings: {
+      maintenance: { enabled: settings.maintenance.enabled },
+      payments: { ozowEnabled: settings.payments.ozowEnabled, payflexEnabled: settings.payments.payflexEnabled },
+    },
+  })
+})
+
+// ── Error log (sysadmin only) ─────────────────────────────────────────────────
+// Identical rows (same context/message/route/method/status) are grouped with
+// a count, newest group first, rather than listing every occurrence - a
+// single recurring bug otherwise buries everything else on the page.
+app.get('/api/admin/errors', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const onlyUnresolved = req.query.resolved === 'all' ? null : true
+    const days = ['1', '7', '30'].includes(req.query.days) ? parseInt(req.query.days) : null
+    const since = days ? new Date(Date.now() - days * 24 * 60 * 60 * 1000) : null
+
+    const result = await pool.query(
+      `SELECT context, message, route, method, status,
+              COUNT(*) AS count, MAX(created_at) AS last_seen, MIN(created_at) AS first_seen,
+              array_agg(id ORDER BY created_at DESC) AS ids
+       FROM error_log
+       WHERE ($1::boolean IS NULL OR resolved_at IS NULL)
+         AND ($2::timestamptz IS NULL OR created_at >= $2)
+       GROUP BY context, message, route, method, status
+       ORDER BY last_seen DESC
+       LIMIT 200`,
+      [onlyUnresolved, since]
+    )
+    res.json(result.rows.map(r => ({
+      context: r.context,
+      message: r.message,
+      route: r.route,
+      method: r.method,
+      status: r.status,
+      count: parseInt(r.count),
+      lastSeen: r.last_seen,
+      firstSeen: r.first_seen,
+      ids: r.ids,
+    })))
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch error log' })
+    await logError('GET /api/admin/errors', err, req)
+  }
+})
+
+// Resolves one or many rows at once - the UI's single "Mark resolved" button
+// just sends a one-element array.
+app.post('/api/admin/errors/resolve', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { ids } = req.body
+  if (!Array.isArray(ids) || ids.length === 0 || !ids.every(id => Number.isInteger(id))) {
+    return res.status(400).json({ error: 'ids must be a non-empty array of integers' })
+  }
+  try {
+    await pool.query('UPDATE error_log SET resolved_at = NOW() WHERE id = ANY($1) AND resolved_at IS NULL', [ids])
+    await addAuditLog(req.user.id, req.user.username, 'ERROR_LOG_RESOLVED', `Resolved ${ids.length} error log row(s)`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to resolve errors' })
+    await logError('POST /api/admin/errors/resolve', err, req)
   }
 })
 
@@ -1059,8 +1232,8 @@ app.get('/api/products', async (req, res) => {
       }
     }))
   } catch (err) {
-    console.error(err)
     res.json([])
+    await logError('GET /api/products', err, req)
   }
 })
 
@@ -1086,8 +1259,8 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
       }
     }))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch products' })
+    await logError('GET /api/admin/products', err, req)
   }
 })
 
@@ -1118,8 +1291,8 @@ app.post('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), 
       lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to create product' })
+    await logError('POST /api/admin/products', err, req)
   }
 })
 
@@ -1160,8 +1333,8 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
       lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to update product' })
+    await logError('PATCH /api/admin/products/:id', err, req)
   }
 })
 
@@ -1193,8 +1366,8 @@ app.post('/api/admin/products/:id/stock', authenticate, requireRole('sysadmin', 
     const p = result.rows[0]
     res.json({ id: p.id, stockQuantity: p.stock_quantity })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to adjust stock' })
+    await logError('POST /api/admin/products/:id/stock', err, req)
   }
 })
 
@@ -1229,8 +1402,8 @@ app.post('/api/admin/products/:productId/variants/:variantId/stock', authenticat
     const v = result.rows[0]
     res.json({ id: v.id, stockQuantity: v.stock_quantity })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to adjust stock' })
+    await logError('POST /api/admin/products/:productId/variants/:variantId/stock', err, req)
   }
 })
 
@@ -1265,8 +1438,8 @@ app.get('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 
     )
     res.json(result.rows.map(s => serializeStudent(s, course)))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch students' })
+    await logError('GET /api/classes/:classId/students', err, req)
   }
 })
 
@@ -1286,8 +1459,8 @@ app.post('/api/classes/:classId/students', authenticate, requireRole('sysadmin',
     const course = await getCourse(req.params.classId)
     res.status(201).json(serializeStudent(s, course))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to add student' })
+    await logError('POST /api/classes/:classId/students', err, req)
   }
 })
 
@@ -1304,8 +1477,8 @@ app.patch('/api/classes/:classId/students/:studentId', authenticate, requireRole
     const course = await getCourse(req.params.classId)
     res.json(serializeStudent(result.rows[0], course))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to update student' })
+    await logError('PATCH /api/classes/:classId/students/:studentId', err, req)
   }
 })
 
@@ -1320,8 +1493,8 @@ app.delete('/api/classes/:classId/students/:studentId', authenticate, requireRol
     if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
     res.json({ success: true })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to remove student' })
+    await logError('DELETE /api/classes/:classId/students/:studentId', err, req)
   }
 })
 
@@ -1343,8 +1516,8 @@ app.post('/api/classes/:classId/students/:studentId/ensure-token', authenticate,
     const siteUrl = ozow.CUSTOMER_SITE_URL || payflex.CUSTOMER_SITE_URL || ''
     res.json({ token, link: `${siteUrl}/?enrolment=${token}` })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to generate link' })
+    await logError('POST /api/classes/:classId/students/:studentId/ensure-token', err, req)
   }
 })
 
@@ -1361,8 +1534,8 @@ app.patch('/api/classes/:classId/students/:studentId/complete', authenticate, re
     const course = await getCourse(req.params.classId)
     res.json(serializeStudent(result.rows[0], course))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to mark student as finished' })
+    await logError('PATCH /api/classes/:classId/students/:studentId/complete', err, req)
   }
 })
 
@@ -1378,8 +1551,8 @@ app.patch('/api/classes/:classId/students/:studentId/reactivate', authenticate, 
     const course = await getCourse(req.params.classId)
     res.json(serializeStudent(result.rows[0], course))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to move student back to current students' })
+    await logError('PATCH /api/classes/:classId/students/:studentId/reactivate', err, req)
   }
 })
 
@@ -1414,8 +1587,8 @@ app.get('/api/courses', async (req, res) => {
       price: parseFloat(c.price), deposit: parseFloat(c.deposit),
     })))
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch courses' })
+    await logError('GET /api/courses', err, req)
   }
 })
 
@@ -1481,8 +1654,8 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
 
     res.json({ students, orders })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch calendar data' })
+    await logError('GET /api/dashboard/calendar', err, req)
   }
 })
 
@@ -1616,8 +1789,8 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
     console.log('New order:', order.id)
     res.status(201).json({ success: true, orderId: order.id, orderToken: order.public_token })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to save order' })
+    await logError('POST /api/orders', err, req)
   }
 })
 
@@ -1678,8 +1851,8 @@ app.get('/api/orders', authenticate, async (req, res) => {
     }
     res.json(orders)
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch orders' })
+    await logError('GET /api/orders', err, req)
   }
 })
 
@@ -1689,8 +1862,9 @@ app.get('/api/payments/options', async (req, res) => {
   try {
     settings = await readSystemSettings()
   } catch (err) {
-    console.error('Failed to read system settings:', err.message)
-    return res.status(500).json({ error: 'Failed to fetch payment options' })
+    res.status(500).json({ error: 'Failed to fetch payment options' })
+    await logError('GET /api/payments/options', err, req)
+    return
   }
   const payflexEnabled = isProviderEnabled('payflex', settings)
   const payflexOptions = { enabled: payflexEnabled, minimumAmount: null, maximumAmount: null }
@@ -1737,8 +1911,8 @@ app.post('/api/payments/ozow/start', ordersLimiter, requireNotInMaintenance, asy
     )
     res.json({ action: 'https://pay.ozow.com/', fields })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to start Ozow payment' })
+    await logError('POST /api/payments/ozow/start', err, req)
   }
 })
 
@@ -1796,8 +1970,8 @@ app.post('/api/payments/payflex/start', ordersLimiter, requireNotInMaintenance, 
     )
     res.json({ redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
-    console.error('Failed to start Payflex payment:', err.message)
     res.status(500).json({ error: 'Failed to start Payflex payment' })
+    await logError('POST /api/payments/payflex/start', err, req)
   }
 })
 
@@ -1870,8 +2044,8 @@ app.get('/api/orders/by-token/:token', async (req, res) => {
       payflexStatus: latestPayflex ? latestPayflex.status : null,
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch order' })
+    await logError('GET /api/orders/by-token/:token', err, req)
   }
 })
 
@@ -1909,8 +2083,8 @@ app.patch('/api/orders/:token/switch-provider', async (req, res) => {
     )
     res.json({ success: true })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to switch payment method' })
+    await logError('PATCH /api/orders/:token/switch-provider', err, req)
   }
 })
 
@@ -1999,8 +2173,8 @@ app.post('/api/enrolments', enrolmentsLimiter, requireNotInMaintenance, async (r
       `${student.name} started enrolling for ${course.name}.`)
     res.status(201).json({ success: true, enrolmentToken: publicToken, redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
-    console.error('Failed to create enrolment:', err.message)
     res.status(500).json({ error: 'Failed to create enrolment' })
+    await logError('POST /api/enrolments', err, req)
   }
 })
 
@@ -2074,8 +2248,8 @@ app.get('/api/enrolments/by-token/:token', async (req, res) => {
       providers: { ozow: ozow.isOzowConfigured && balance > 0, payflex: payflexAvailableForBalance },
     })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to fetch enrolment' })
+    await logError('GET /api/enrolments/by-token/:token', err, req)
   }
 })
 
@@ -2134,8 +2308,8 @@ app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, requireNotInMa
     )
     res.json({ redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
-    console.error('Failed to start balance payment:', err.message)
     res.status(500).json({ error: 'Failed to start balance payment' })
+    await logError('POST /api/enrolments/:token/pay-balance', err, req)
   }
 })
 
@@ -2199,8 +2373,8 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintena
     )
     res.json({ redirectUrl: payflexOrder.redirectUrl })
   } catch (err) {
-    console.error('Failed to retry enrolment payment:', err.message)
     res.status(500).json({ error: 'Failed to retry payment' })
+    await logError('POST /api/enrolments/:token/retry', err, req)
   }
 })
 
@@ -2290,8 +2464,8 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
     res.json({ success: true })
   } catch (err) {
     await client.query('ROLLBACK')
-    console.error(err)
     res.status(500).json({ error: 'Failed to confirm order' })
+    await logError('PATCH /api/orders/:id/confirm', err, req)
   } finally {
     client.release()
   }
@@ -2336,8 +2510,8 @@ app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner')
     await addNotification('image', 'Image uploaded', `A new image was uploaded for ${type} (id: ${id}).`)
     res.json({ success: true, url })
   } catch (err) {
-    console.error('Upload failed:', err)
     res.status(500).json({ error: 'Failed to upload image' })
+    await logError('POST /api/upload/:type/:id', err, req)
   }
 })
 
@@ -2371,8 +2545,8 @@ app.post('/api/upload/gallery', authenticate, requireRole('sysadmin', 'owner'), 
     await addNotification('image', 'Gallery image added', 'A new file was added to the gallery.')
     res.json({ success: true, url, type: fileType })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to save gallery image' })
+    await logError('POST /api/upload/gallery', err, req)
   }
 })
 
@@ -2403,8 +2577,8 @@ app.delete('/api/gallery/:id', authenticate, requireRole('sysadmin', 'owner'), a
     await pool.query('DELETE FROM gallery_images WHERE id = $1', [id])
     res.json({ success: true })
   } catch (err) {
-    console.error('Failed to delete gallery item:', err)
     res.status(500).json({ error: 'Failed to delete gallery item' })
+    await logError('DELETE /api/gallery/:id', err, req)
   }
 })
 
@@ -2443,8 +2617,8 @@ app.post('/api/position/:type/:id', authenticate, requireRole('sysadmin', 'owner
     )
     res.json({ success: true })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to save position' })
+    await logError('POST /api/position/:type/:id', err, req)
   }
 })
 
@@ -2501,8 +2675,8 @@ app.delete('/api/categories/:id', authenticate, requireRole('sysadmin', 'owner')
       `The product section "${name}" was removed.`)
     res.json({ success: true })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to delete category' })
+    await logError('DELETE /api/categories/:id', err, req)
   }
 })
 
@@ -2550,8 +2724,8 @@ app.post('/api/categories/product/:productId', authenticate, requireRole('sysadm
     const catResult = await pool.query('SELECT name FROM categories WHERE id = $1', [categoryId])
     res.json({ success: true, categoryId, categoryName: catResult.rows[0]?.name })
   } catch (err) {
-    console.error(err)
     res.status(500).json({ error: 'Failed to assign category' })
+    await logError('POST /api/categories/product/:productId', err, req)
   }
 })
 
@@ -2613,21 +2787,28 @@ app.patch('/api/notifications/:id/read', authenticate, async (req, res) => {
   }
 })
 
-// ── CORS / upload error handler ──────────────────────────────────────────────
-// Without this, a blocked origin or an oversized upload falls through to
-// Express's default handler and comes back as an unhandled 500.
+// ── Error handler ─────────────────────────────────────────────────────────────
+// The last middleware in the chain - catches a blocked origin, an oversized
+// upload, and anything else that reached here uncaught, logging each one via
+// logError instead of letting it fall through to Express's default handler.
 app.use((err, req, res, next) => {
   if (err.message?.startsWith('CORS blocked')) {
-    console.error(err.message)
-    return res.status(403).json({ error: 'Origin not allowed' })
+    res.status(403).json({ error: 'Origin not allowed' })
+    logError('CORS', err, req)
+    return
   }
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(400).json({ error: 'File is too large. Videos must be under 100MB, images under 10MB.' })
+    res.status(400).json({ error: 'File is too large. Videos must be under 100MB, images under 10MB.' })
+    logError('Upload', err, req)
+    return
   }
   if (err.message === 'Only image and video files are allowed') {
-    return res.status(400).json({ error: err.message })
+    res.status(400).json({ error: err.message })
+    logError('Upload', err, req)
+    return
   }
-  next(err)
+  res.status(500).json({ error: 'Something went wrong' })
+  logError('Unhandled', err, req)
 })
 
 // ── Start server ──────────────────────────────────────────────────────────────
@@ -2636,6 +2817,7 @@ const start = async () => {
   await createTables()
   await archiveOldNotifications()
   await archiveOldOrders()
+  await cleanupErrorLog()
   server = app.listen(PORT, () => {
     console.log(`Lashes By Retha backend listening on port ${PORT}`)
   })

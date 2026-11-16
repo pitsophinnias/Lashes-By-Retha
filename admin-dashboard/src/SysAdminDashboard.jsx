@@ -42,6 +42,17 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [rechecking, setRechecking] = useState({})
   const [paymentEvents, setPaymentEvents] = useState([])
 
+  // System Health
+  const [health, setHealth] = useState(null)
+  const [healthLoading, setHealthLoading] = useState(false)
+
+  // Errors
+  const [errorGroups, setErrorGroups] = useState([])
+  const [errorFilters, setErrorFilters] = useState({ resolved: 'unresolved', days: '' })
+  const [errorsLoading, setErrorsLoading] = useState(false)
+  const [selectedErrorIds, setSelectedErrorIds] = useState([])
+  const [resolvingErrors, setResolvingErrors] = useState(false)
+
   const getHeaders = () => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
@@ -64,6 +75,14 @@ export default function SysAdminDashboard({ user, onLogout }) {
       fetchPaymentEvents()
     }
   }, [activePage, paymentFilters])
+
+  useEffect(() => {
+    if (activePage === 'health') fetchHealth()
+  }, [activePage])
+
+  useEffect(() => {
+    if (activePage === 'errors') fetchErrors()
+  }, [activePage, errorFilters])
 
   const fetchUsers = async () => {
     try {
@@ -269,6 +288,52 @@ export default function SysAdminDashboard({ user, onLogout }) {
     setRechecking(prev => ({ ...prev, [`${row.provider}-${row.id}`]: false }))
   }
 
+  const fetchHealth = async () => {
+    setHealthLoading(true)
+    try {
+      const res = await fetch(`${API}/api/admin/system/health`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && data.backend) setHealth(data)
+    } catch {}
+    setHealthLoading(false)
+  }
+
+  const fetchErrors = async () => {
+    setErrorsLoading(true)
+    try {
+      const params = new URLSearchParams()
+      params.set('resolved', errorFilters.resolved)
+      if (errorFilters.days) params.set('days', errorFilters.days)
+      const res = await fetch(`${API}/api/admin/errors?${params.toString()}`, { headers: getHeaders() })
+      const data = await res.json()
+      if (Array.isArray(data)) setErrorGroups(data)
+      setSelectedErrorIds([])
+    } catch {}
+    setErrorsLoading(false)
+  }
+
+  const resolveErrors = async (ids) => {
+    if (ids.length === 0) return
+    setResolvingErrors(true)
+    try {
+      await fetch(`${API}/api/admin/errors/resolve`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ ids }),
+      })
+      await fetchErrors()
+    } catch {}
+    setResolvingErrors(false)
+  }
+
+  const toggleErrorGroupSelected = (group) => {
+    setSelectedErrorIds(prev => {
+      const allSelected = group.ids.every(id => prev.includes(id))
+      if (allSelected) return prev.filter(id => !group.ids.includes(id))
+      return [...new Set([...prev, ...group.ids])]
+    })
+  }
+
   const roleColour = (role) => {
     if (role === 'sysadmin') return { bg: '#FDE8EC', color: '#C47A8A' }
     if (role === 'owner') return { bg: '#E8F0FA', color: '#3A5A8A' }
@@ -282,6 +347,8 @@ export default function SysAdminDashboard({ user, onLogout }) {
     { label: 'Audit Log', value: 'audit' },
     { label: 'System Controls', value: 'controls' },
     { label: 'Payments', value: 'payments' },
+    { label: 'System Health', value: 'health' },
+    { label: 'Errors', value: 'errors' },
     { label: 'Settings', value: 'settings' },
   ]
 
@@ -292,6 +359,8 @@ export default function SysAdminDashboard({ user, onLogout }) {
     audit: 'Audit Log',
     controls: 'System Controls',
     payments: 'Payments',
+    health: 'System Health',
+    errors: 'Errors',
     settings: 'Settings',
   }
 
@@ -300,6 +369,15 @@ export default function SysAdminDashboard({ user, onLogout }) {
     if (status === 'failed') return { background: '#FDE8EC', color: '#C47A8A' }
     if (status === 'cancelled') return { background: '#F5F5F5', color: '#9E9E9E' }
     return { background: '#FFF3E0', color: '#E65100' } // started / pending
+  }
+
+  const formatUptime = (seconds) => {
+    const d = Math.floor(seconds / 86400)
+    const h = Math.floor((seconds % 86400) / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    if (d > 0) return `${d}d ${h}h ${m}m`
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m`
   }
 
   return (
@@ -937,6 +1015,198 @@ export default function SysAdminDashboard({ user, onLogout }) {
                       </tbody>
                     </table>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* System Health */}
+            {activePage === 'health' && (
+              <div>
+                {health && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10, borderRadius: 10, padding: '14px 18px', marginBottom: 20,
+                    background: health.status === 'ok' ? '#E8F5E9' : '#FFF3E0',
+                  }}>
+                    <span className="sa-badge" style={{ background: health.status === 'ok' ? '#2E7D32' : '#E65100', color: 'white' }}>
+                      {health.status === 'ok' ? 'All Good' : 'Warning'}
+                    </span>
+                    {health.status === 'ok' ? (
+                      <span style={{ fontSize: 13, color: '#2E7D32', fontWeight: 600 }}>Everything looks healthy.</span>
+                    ) : (
+                      <span style={{ fontSize: 13, color: '#8C5A00', fontWeight: 600 }}>{health.warnings.join(' ')}</span>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                  <button className="sa-btn-secondary" disabled={healthLoading} onClick={fetchHealth}>
+                    {healthLoading ? 'Refreshing...' : 'Refresh'}
+                  </button>
+                </div>
+
+                {health && (
+                  <>
+                    <div className="admin-form-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                      <div className="sa-panel">
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 14 }}>Backend</div>
+                        {[
+                          ['Uptime', formatUptime(health.backend.uptimeSeconds)],
+                          ['Node version', health.backend.nodeVersion],
+                          ['Memory (RSS)', `${health.backend.memory.rssMb} MB`],
+                          ['Heap used / total', `${health.backend.memory.heapUsedMb} / ${health.backend.memory.heapTotalMb} MB`],
+                          ['Version', health.backend.version],
+                        ].map(([label, value]) => (
+                          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                            <span style={{ color: '#9A8A8E' }}>{label}</span>
+                            <span style={{ fontWeight: 600, color: '#2C1A20' }}>{value}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="sa-panel">
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 14 }}>Database</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Reachable</span>
+                          <span className="sa-badge" style={{ background: health.database.reachable ? '#E8F5E9' : '#FDE8EC', color: health.database.reachable ? '#2E7D32' : '#C47A8A' }}>
+                            {health.database.reachable ? 'Yes' : 'No'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Response time</span>
+                          <span style={{ fontWeight: 600, color: '#2C1A20' }}>{health.database.responseTimeMs ?? '-'} ms</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Size (of 1GB free plan)</span>
+                          <span style={{ fontWeight: 600, color: health.database.sizePercent > 80 ? '#C47A8A' : '#2C1A20' }}>
+                            {health.database.sizePercent ?? '-'}%
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, margin: '14px 0 8px' }}>Row Counts</div>
+                        {Object.entries(health.database.rowCounts).map(([table, count]) => (
+                          <div key={table} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 12 }}>
+                            <span style={{ color: '#9A8A8E', textTransform: 'capitalize' }}>{table.replace(/([A-Z])/g, ' $1')}</span>
+                            <span style={{ fontWeight: 600, color: '#2C1A20' }}>{count}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="sa-panel">
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 14 }}>Services</div>
+                        {[
+                          ['Ozow', health.services.ozow],
+                          ['Payflex', health.services.payflex],
+                          ['Cloudinary', health.services.cloudinary],
+                        ].map(([label, info]) => (
+                          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                            <span style={{ color: '#9A8A8E' }}>{label}</span>
+                            <span style={{ display: 'flex', gap: 6 }}>
+                              <span className="sa-badge" style={{ background: info.configured ? '#E8F5E9' : '#F5F5F5', color: info.configured ? '#2E7D32' : '#9E9E9E' }}>
+                                {info.configured ? 'Configured' : 'Not configured'}
+                              </span>
+                              {info.configured && 'isTest' in info && (
+                                <span className="sa-badge" style={{ background: '#F7EEF0', color: '#8C5A6A' }}>{info.isTest ? 'Test' : 'Live'}</span>
+                              )}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="sa-panel">
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 14 }}>System Settings</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Maintenance mode</span>
+                          <span className="sa-badge" style={{ background: health.systemSettings.maintenance.enabled ? '#E65100' : '#E8F5E9', color: health.systemSettings.maintenance.enabled ? 'white' : '#2E7D32' }}>
+                            {health.systemSettings.maintenance.enabled ? 'ON' : 'OFF'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Ozow switch</span>
+                          <span style={{ fontWeight: 600, color: '#2C1A20' }}>{health.systemSettings.payments.ozowEnabled ? 'On' : 'Off'}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Payflex switch</span>
+                          <span style={{ fontWeight: 600, color: '#2C1A20' }}>{health.systemSettings.payments.payflexEnabled ? 'On' : 'Off'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Errors */}
+            {activePage === 'errors' && (
+              <div>
+                <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <select className="sa-input" style={{ marginBottom: 0, width: 150 }} value={errorFilters.resolved} onChange={e => setErrorFilters(p => ({ ...p, resolved: e.target.value }))}>
+                      <option value="unresolved">Unresolved</option>
+                      <option value="all">All</option>
+                    </select>
+                    <select className="sa-input" style={{ marginBottom: 0, width: 150 }} value={errorFilters.days} onChange={e => setErrorFilters(p => ({ ...p, days: e.target.value }))}>
+                      <option value="">All time</option>
+                      <option value="1">Last 24 hours</option>
+                      <option value="7">Last 7 days</option>
+                      <option value="30">Last 30 days</option>
+                    </select>
+                  </div>
+                  <button
+                    className="sa-btn"
+                    disabled={selectedErrorIds.length === 0 || resolvingErrors}
+                    onClick={() => resolveErrors(selectedErrorIds)}
+                  >
+                    {resolvingErrors ? 'Resolving...' : `Mark Resolved (${selectedErrorIds.length})`}
+                  </button>
+                </div>
+
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Context</th>
+                        <th>Message</th>
+                        <th>Route</th>
+                        <th>Status</th>
+                        <th>Count</th>
+                        <th>Last Seen</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {errorGroups.map(group => {
+                        const groupSelected = group.ids.every(id => selectedErrorIds.includes(id))
+                        return (
+                          <tr key={`${group.context}-${group.message}-${group.route}-${group.status}`}>
+                            <td>
+                              <input type="checkbox" checked={groupSelected} onChange={() => toggleErrorGroupSelected(group)} />
+                            </td>
+                            <td style={{ fontWeight: 600 }}>{group.context || '-'}</td>
+                            <td style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={group.message}>{group.message}</td>
+                            <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>{group.method ? `${group.method} ${group.route || ''}` : '-'}</td>
+                            <td>{group.status || '-'}</td>
+                            <td><span className="sa-badge" style={{ background: '#F7EEF0', color: '#8C5A6A' }}>{group.count}</span></td>
+                            <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                              {new Date(group.lastSeen).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td>
+                              <button
+                                className="sa-btn-secondary"
+                                style={{ padding: '5px 10px', fontSize: 11 }}
+                                disabled={resolvingErrors}
+                                onClick={() => resolveErrors(group.ids)}
+                              >
+                                Mark Resolved
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {!errorsLoading && errorGroups.length === 0 && (
+                        <tr><td colSpan={8} style={{ color: '#AAAAAA', padding: '16px 0' }}>No errors match these filters.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
