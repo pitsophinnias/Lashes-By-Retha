@@ -47,14 +47,39 @@ let pool
 let JWT_SECRET
 let studentId
 let orderId
+let testUserIds = []
 
-const tokenFor = (role) => jwt.sign({ id: 999, username: 'route-test', role }, JWT_SECRET, { expiresIn: '1h' })
+// authenticate now loads the user fresh from the database on every request
+// (id, is_active, token_version, and the role itself) instead of trusting
+// the token's own claims - so a test token needs a real user row behind it,
+// not just an id of 999, and must carry that row's current token_version.
+const roleTokenInfo = {}
+const tokenFor = (role) => jwt.sign(
+  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion },
+  JWT_SECRET,
+  { expiresIn: '1h' }
+)
+
+const createTestUser = async (roleName) => {
+  const roleRow = (await pool.query('SELECT id FROM roles WHERE name = $1', [roleName])).rows[0]
+  const username = `route-test-${roleName}-${Date.now()}`
+  const result = await pool.query(
+    `INSERT INTO users (username, password_hash, role_id, is_active, must_change_password)
+     VALUES ($1, 'x', $2, TRUE, FALSE) RETURNING *`,
+    [username, roleRow.id]
+  )
+  testUserIds.push(result.rows[0].id)
+  roleTokenInfo[roleName] = { id: result.rows[0].id, username: result.rows[0].username, tokenVersion: result.rows[0].token_version }
+}
 
 before(async () => {
   api = require('../index')
   await waitForServer()
   pool = require('../db').pool
   JWT_SECRET = require('../auth').JWT_SECRET
+
+  await createTestUser('owner')
+  await createTestUser('staff')
 
   // class_id 1 is the R2500 course seeded by db.js's createTables - a known
   // price makes the balance assertion below exact rather than approximate.
@@ -125,6 +150,7 @@ test('GET /api/dashboard/calendar excludes a student and order outside the reque
 after(async () => {
   await pool.query('DELETE FROM students WHERE id = $1', [studentId])
   await pool.query('DELETE FROM orders WHERE id = $1', [orderId])
+  await pool.query('DELETE FROM users WHERE id = ANY($1)', [testUserIds])
   await new Promise((resolve) => api.getServer().close(resolve))
   await pool.end()
 })

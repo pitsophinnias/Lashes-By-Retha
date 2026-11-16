@@ -90,9 +90,33 @@ let api
 let pool
 let JWT_SECRET
 let sysadminUserId
-const tokenFor = (role, id = 999) => jwt.sign({ id, username: 'test-data-test', role }, JWT_SECRET, { expiresIn: '1h' })
-const sysadminHeaders = () => ({ Authorization: `Bearer ${tokenFor('sysadmin', sysadminUserId)}` })
-const ownerHeaders = () => ({ Authorization: `Bearer ${tokenFor('owner', sysadminUserId)}` })
+const testUserIds = []
+
+// authenticate now loads the user fresh from the database on every request
+// (id, is_active, token_version, and the role itself) instead of trusting
+// the token's own claims - so "owner" needs a real owner user row behind
+// it, not the sysadmin's id wearing a fake role claim (which would now
+// resolve to the sysadmin's real role and defeat the point of these tests).
+const roleTokenInfo = {}
+const tokenFor = (role) => jwt.sign(
+  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion },
+  JWT_SECRET,
+  { expiresIn: '1h' }
+)
+const sysadminHeaders = () => ({ Authorization: `Bearer ${tokenFor('sysadmin')}` })
+const ownerHeaders = () => ({ Authorization: `Bearer ${tokenFor('owner')}` })
+
+const createTestUser = async (roleName) => {
+  const roleRow = (await pool.query('SELECT id FROM roles WHERE name = $1', [roleName])).rows[0]
+  const username = `test-data-test-${roleName}-${Date.now()}`
+  const result = await pool.query(
+    `INSERT INTO users (username, password_hash, role_id, is_active, must_change_password)
+     VALUES ($1, 'x', $2, TRUE, FALSE) RETURNING *`,
+    [username, roleRow.id]
+  )
+  testUserIds.push(result.rows[0].id)
+  roleTokenInfo[roleName] = { id: result.rows[0].id, username: result.rows[0].username, tokenVersion: result.rows[0].token_version }
+}
 
 const createdOrderIds = []
 const createdStudentIds = []
@@ -135,9 +159,11 @@ before(async () => {
   pool = require('../db').pool
   JWT_SECRET = require('../auth').JWT_SECRET
   const userRow = await pool.query(
-    `SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
+    `SELECT u.id, u.username, u.token_version FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
   )
   sysadminUserId = userRow.rows[0].id
+  roleTokenInfo.sysadmin = { id: userRow.rows[0].id, username: userRow.rows[0].username, tokenVersion: userRow.rows[0].token_version }
+  await createTestUser('owner')
 })
 
 // ── Auto-marking ─────────────────────────────────────────────────────────────
@@ -364,34 +390,33 @@ test('deleting a confirmed test order restores stock (product and variant), remo
   assert.strictEqual(realStudentRow.rows.length, 1)
 })
 
-test('"delete all" removes every current test order and student, and nothing else', async (t) => {
+test('"delete all" removes every current test order and student, and nothing else', async () => {
   const testOrder1 = await createOrder({ isTest: true })
   const testOrder2 = await createOrder({ isTest: true })
   const testStudent = await createStudent({ isTest: true })
   const realOrder = await createOrder({ isTest: false })
 
-  // "all: true" deletes every is_test row in the whole database, not just
-  // ones this test created - it is only ever safe to actually invoke that
-  // here if nothing else in the database is currently flagged as test data
-  // (another process's rows, or real rows an earlier startup backfill
-  // marked as test). If anything foreign is present, skip rather than risk
-  // deleting someone else's data - the explicit-ids test above already
-  // covers this endpoint's deletion logic end to end.
-  const ownOrderIds = new Set([testOrder1.id, testOrder2.id])
-  const ownStudentIds = new Set([testStudent.id])
-  const existingTestOrders = (await pool.query('SELECT id FROM orders WHERE is_test = TRUE')).rows
-  const existingTestStudents = (await pool.query('SELECT id FROM students WHERE is_test = TRUE')).rows
-  const foreignOrders = existingTestOrders.filter(o => !ownOrderIds.has(o.id))
-  const foreignStudents = existingTestStudents.filter(s => !ownStudentIds.has(s.id))
-  if (foreignOrders.length > 0 || foreignStudents.length > 0) {
-    t.skip(`database already has ${foreignOrders.length} other test order(s) and ${foreignStudents.length} other test student(s) outside this test - skipping "all: true" to avoid deleting them`)
-    return
-  }
+  // "all: true" deletes every is_test row in the database, including any
+  // this file's earlier tests already left behind (each test file gets a
+  // clean slate - see test/setup.mjs - but tests within this file still
+  // share it with each other) - so the only safe expectation is "exactly
+  // however many are_test rows exist right now", not a fixed number.
+  const [pendingOrders, pendingStudents] = await Promise.all([
+    pool.query('SELECT COUNT(*) FROM orders WHERE is_test = TRUE'),
+    pool.query('SELECT COUNT(*) FROM students WHERE is_test = TRUE'),
+  ])
 
   const res = await request('POST', '/api/admin/test-data/delete', { all: true }, sysadminHeaders())
   assert.strictEqual(res.status, 200)
-  assert.strictEqual(res.data.ordersDeleted, 2)
-  assert.strictEqual(res.data.studentsDeleted, 1)
+  assert.strictEqual(res.data.ordersDeleted, parseInt(pendingOrders.rows[0].count))
+  assert.strictEqual(res.data.studentsDeleted, parseInt(pendingStudents.rows[0].count))
+
+  const [remainingOrders, remainingStudents] = await Promise.all([
+    pool.query('SELECT COUNT(*) FROM orders WHERE is_test = TRUE'),
+    pool.query('SELECT COUNT(*) FROM students WHERE is_test = TRUE'),
+  ])
+  assert.strictEqual(parseInt(remainingOrders.rows[0].count), 0)
+  assert.strictEqual(parseInt(remainingStudents.rows[0].count), 0)
 
   for (const id of [testOrder1.id, testOrder2.id]) {
     assert.strictEqual((await pool.query('SELECT 1 FROM orders WHERE id = $1', [id])).rows.length, 0)
@@ -427,6 +452,7 @@ after(async () => {
   await pool.query('DELETE FROM orders WHERE id = ANY($1)', [createdOrderIds])
   await pool.query('DELETE FROM students WHERE id = ANY($1)', [createdStudentIds])
   await pool.query('DELETE FROM products WHERE id = ANY($1)', [createdProductIds])
+  await pool.query('DELETE FROM users WHERE id = ANY($1)', [testUserIds])
 
   await new Promise((resolve) => api.getServer().close(resolve))
   await pool.end()

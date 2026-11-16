@@ -52,6 +52,24 @@ const GIT_COMMIT = process.env.RENDER_GIT_COMMIT || (() => {
   }
 })()
 
+// Authenticates backend/scripts/backup.sh's POST /api/system/backups/report
+// - a static shared secret rather than a user login, since the backup
+// script has no user to log in as. Left unset, that route is unreachable by
+// anyone, rather than falling back to some default.
+const BACKUP_REPORT_TOKEN = process.env.BACKUP_REPORT_TOKEN || ''
+
+// Constant-time string compare so a wrong token can't be brute-forced by
+// timing how quickly each guess is rejected. Deliberately rejects outright
+// (no comparison at all) when the lengths differ - crypto.timingSafeEqual
+// requires equal-length buffers, and a length mismatch alone leaks far less
+// than a full token would.
+const timingSafeStringEqual = (a, b) => {
+  const bufA = Buffer.from(String(a))
+  const bufB = Buffer.from(String(b))
+  if (bufA.length !== bufB.length) return false
+  return crypto.timingSafeEqual(bufA, bufB)
+}
+
 // Flat courier fee for a delivery order. The one place this is defined -
 // orders always get their fee computed here, never from the browser.
 const DELIVERY_FEE = 120
@@ -609,7 +627,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password' })
     }
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role_name },
+      { id: user.id, username: user.username, role: user.role_name, tokenVersion: user.token_version },
       JWT_SECRET,
       { expiresIn: '8h' }
     )
@@ -762,6 +780,64 @@ app.post('/api/users/:id/reset-password', authenticate, requireRole('sysadmin'),
   }
 })
 
+// Logs a user out of every device/session at once by bumping token_version -
+// authenticate rejects any token whose own tokenVersion claim no longer
+// matches, so this takes effect on that user's very next request. Never
+// touches must_change_password.
+app.post('/api/admin/users/:id/logout-everywhere', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'UPDATE users SET token_version = token_version + 1 WHERE id = $1 RETURNING username',
+      [req.params.id]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' })
+    await addAuditLog(req.user.id, req.user.username, 'USER_LOGGED_OUT_EVERYWHERE',
+      `Logged out all sessions for "${result.rows[0].username}"`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to log out user' })
+    await logError('POST /api/admin/users/:id/logout-everywhere', err, req)
+  }
+})
+
+// Login Activity page: recent successful/failed logins, how many failed in
+// the last 24 hours, and each user's most recent successful login - all
+// read from audit_logs, which POST /api/auth/login already writes to.
+app.get('/api/admin/login-activity', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const [recentResult, failedLast24hResult, byUserResult] = await Promise.all([
+      pool.query(
+        `SELECT id, user_id, username, action, ip_address, created_at FROM audit_logs
+         WHERE action IN ('LOGIN', 'LOGIN_FAILED')
+         ORDER BY created_at DESC LIMIT 100`
+      ),
+      pool.query(
+        `SELECT COUNT(*) FROM audit_logs
+         WHERE action = 'LOGIN_FAILED' AND created_at > NOW() - INTERVAL '24 hours'`
+      ),
+      pool.query(
+        `SELECT u.id, u.username, u.is_active, r.name AS role,
+                (SELECT MAX(created_at) FROM audit_logs a WHERE a.user_id = u.id AND a.action = 'LOGIN') AS last_login_at
+         FROM users u JOIN roles r ON r.id = u.role_id
+         ORDER BY u.username ASC`
+      ),
+    ])
+    res.json({
+      recentLogins: recentResult.rows.map(r => ({
+        id: r.id, userId: r.user_id, username: r.username, action: r.action,
+        ipAddress: r.ip_address, createdAt: r.created_at,
+      })),
+      failedLast24h: parseInt(failedLast24hResult.rows[0].count),
+      lastLoginByUser: byUserResult.rows.map(r => ({
+        id: r.id, username: r.username, role: r.role, isActive: r.is_active, lastLoginAt: r.last_login_at,
+      })),
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch login activity' })
+    await logError('GET /api/admin/login-activity', err, req)
+  }
+})
+
 // Get roles (sysadmin only)
 app.get('/api/roles', authenticate, requireRole('sysadmin'), async (req, res) => {
   try {
@@ -835,6 +911,63 @@ app.get('/api/system/status', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch system status' })
     await logError('GET /api/system/status', err, req)
+  }
+})
+
+// Called by backend/scripts/backup.sh on the server that hosts the database
+// - no user login (the script has no user to log in as), just a shared
+// token. Rejected outright if BACKUP_REPORT_TOKEN isn't set at all, so this
+// route is simply unreachable until a sysadmin deliberately configures it.
+app.post('/api/system/backups/report', async (req, res) => {
+  if (!BACKUP_REPORT_TOKEN) return res.status(403).json({ error: 'Backup reporting is not configured' })
+  const header = req.headers['authorization']
+  const token = header && header.startsWith('Bearer ') ? header.slice(7) : ''
+  if (!token || !timingSafeStringEqual(token, BACKUP_REPORT_TOKEN)) {
+    return res.status(401).json({ error: 'Invalid token' })
+  }
+  const { startedAt, finishedAt, status, sizeBytes, location, message } = req.body || {}
+  if (!startedAt || !['ok', 'failed'].includes(status)) {
+    return res.status(400).json({ error: 'startedAt and a valid status (ok or failed) are required' })
+  }
+  try {
+    await pool.query(
+      `INSERT INTO backup_runs (started_at, finished_at, status, size_bytes, location, message)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [startedAt, finishedAt || null, status, sizeBytes || null, location || null, message || null]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to record backup run' })
+    await logError('POST /api/system/backups/report', err, req)
+  }
+})
+
+// Backups page (sysadmin only): the last 30 runs, when the last successful
+// one was, and whether a warning banner should show (no successful backup
+// within the last 26 hours, or the most recent run failed outright).
+app.get('/api/admin/backups', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const [runsResult, lastSuccessResult] = await Promise.all([
+      pool.query('SELECT * FROM backup_runs ORDER BY started_at DESC LIMIT 30'),
+      pool.query(`SELECT started_at FROM backup_runs WHERE status = 'ok' ORDER BY started_at DESC LIMIT 1`),
+    ])
+    const setUp = runsResult.rows.length > 0
+    const lastSuccessAt = lastSuccessResult.rows[0]?.started_at || null
+    const hoursSinceLastSuccess = lastSuccessAt ? (Date.now() - new Date(lastSuccessAt).getTime()) / (1000 * 60 * 60) : null
+    const lastRunFailed = setUp && runsResult.rows[0].status === 'failed'
+    const lastSuccessStale = hoursSinceLastSuccess === null || hoursSinceLastSuccess > 26
+    res.json({
+      setUp,
+      runs: runsResult.rows.map(r => ({
+        id: r.id, startedAt: r.started_at, finishedAt: r.finished_at, status: r.status,
+        sizeBytes: r.size_bytes, location: r.location, message: r.message,
+      })),
+      lastSuccessAt,
+      warning: setUp && (lastRunFailed || lastSuccessStale),
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch backup runs' })
+    await logError('GET /api/admin/backups', err, req)
   }
 })
 
