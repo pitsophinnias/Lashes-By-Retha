@@ -1761,12 +1761,20 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
 
 // A pre-order deposit must be a real part-payment, never free and never the
 // whole price - at least R10, and strictly less than the product's price.
-// Returns an error string, or null when valid.
+// Returns an error string, or null when valid. Only ever checked while
+// pre-order is actually switched on for the product - see the two call
+// sites below - so an unrelated product is never blocked by this at all.
 const validatePreorderDeposit = (deposit, price) => {
   if (isNaN(deposit) || deposit < 10) return 'Pre-order deposit must be at least R10.'
   if (deposit >= price) return 'Pre-order deposit must be less than the price.'
   return null
 }
+
+// The R500 default suits most products, but would always fail validation on
+// anything priced at R500 or less - half the price (rounded, at least R10)
+// so a cheap item can be switched straight to pre-order with no separate
+// deposit entry required.
+const suggestedPreorderDeposit = (price) => (price > 500 ? 500 : Math.max(10, Math.round(price / 2)))
 
 app.post('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const { name, description, detail, price, badge, stockQuantity, lowStockThreshold, preorderEnabled, preorderDeposit } = req.body
@@ -1774,9 +1782,14 @@ app.post('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), 
     return res.status(400).json({ error: 'Name and price are required' })
   }
   const parsedPrice = parseFloat(price)
-  const deposit = preorderDeposit !== undefined && preorderDeposit !== '' ? parseFloat(preorderDeposit) : 500
-  const depositError = validatePreorderDeposit(deposit, parsedPrice)
-  if (depositError) return res.status(400).json({ error: depositError })
+  const preorderOn = !!preorderEnabled
+  const deposit = preorderDeposit !== undefined && preorderDeposit !== ''
+    ? parseFloat(preorderDeposit)
+    : (preorderOn ? suggestedPreorderDeposit(parsedPrice) : 500)
+  if (preorderOn) {
+    const depositError = validatePreorderDeposit(deposit, parsedPrice)
+    if (depositError) return res.status(400).json({ error: depositError })
+  }
   try {
     const result = await pool.query(
       `INSERT INTO products (name, description, detail, price, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit)
@@ -1827,12 +1840,27 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
         ? parseInt(lowStockThreshold) : existing.low_stock_threshold,
       is_active: isActive !== undefined ? !!isActive : existing.is_active,
       preorder_enabled: preorderEnabled !== undefined ? !!preorderEnabled : existing.preorder_enabled,
-      preorder_deposit: preorderDeposit !== undefined && preorderDeposit !== ''
-        ? parseFloat(preorderDeposit) : parseFloat(existing.preorder_deposit),
     }
 
-    const depositError = validatePreorderDeposit(merged.preorder_deposit, parseFloat(merged.price))
-    if (depositError) return res.status(400).json({ error: depositError })
+    if (preorderDeposit !== undefined && preorderDeposit !== '') {
+      merged.preorder_deposit = parseFloat(preorderDeposit)
+    } else {
+      // No deposit sent - keep the existing one, unless pre-order is on and
+      // it no longer makes sense for this price (e.g. switching pre-order
+      // on for a product priced at R500 or less, still carrying the R500
+      // default), in which case a sensible one is suggested instead of
+      // failing on a value nobody actually chose.
+      const existingDeposit = parseFloat(existing.preorder_deposit)
+      const existingDepositStillValid = !validatePreorderDeposit(existingDeposit, merged.price)
+      merged.preorder_deposit = (merged.preorder_enabled && !existingDepositStillValid)
+        ? suggestedPreorderDeposit(merged.price)
+        : existingDeposit
+    }
+
+    if (merged.preorder_enabled) {
+      const depositError = validatePreorderDeposit(merged.preorder_deposit, parseFloat(merged.price))
+      if (depositError) return res.status(400).json({ error: depositError })
+    }
 
     const result = await pool.query(
       `UPDATE products SET name=$1, description=$2, detail=$3, price=$4, badge=$5,

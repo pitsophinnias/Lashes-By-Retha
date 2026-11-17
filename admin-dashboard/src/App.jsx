@@ -2856,7 +2856,23 @@ export default function App({ user, onLogout }) {
                                 <input
                                   type="checkbox"
                                   checked={!!editingProduct.preorderEnabled}
-                                  onChange={e => setEditingProduct(prev => ({ ...prev, preorderEnabled: e.target.checked }))}
+                                  onChange={e => {
+                                    const checked = e.target.checked
+                                    setEditingProduct(prev => {
+                                      const price = parseFloat(prev.price) || 0
+                                      const currentDeposit = parseFloat(prev.preorderDeposit)
+                                      // The deposit carried over from before (often still the R500
+                                      // default) may no longer make sense for this price - suggest a
+                                      // better one instead of letting Save fail on a value nobody chose.
+                                      const depositStillValid = !isNaN(currentDeposit) && currentDeposit >= 10 && currentDeposit < price
+                                      const suggestedDeposit = price > 500 ? 500 : Math.max(10, Math.round(price / 2))
+                                      return {
+                                        ...prev,
+                                        preorderEnabled: checked,
+                                        preorderDeposit: (checked && !depositStillValid) ? suggestedDeposit : prev.preorderDeposit,
+                                      }
+                                    })
+                                  }}
                                 />
                                 Pre-order
                               </label>
