@@ -12,4 +12,12 @@ const payments = {
   payflexEnabled: true,
 }
 
-module.exports = { maintenance, payments }
+// How long a pre-order customer is told to expect to wait, counted from the
+// day their deposit is paid. Editable by owner and sysadmin on the
+// Pre-orders page - see PUT /api/admin/system/preorders.
+const preorders = {
+  minDays: 14,
+  maxDays: 21,
+}
+
+module.exports = { maintenance, payments, preorders }

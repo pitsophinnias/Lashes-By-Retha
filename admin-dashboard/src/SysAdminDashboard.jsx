@@ -54,10 +54,11 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [resolvingErrors, setResolvingErrors] = useState(false)
 
   // Test Data
-  const [testData, setTestData] = useState({ orders: [], students: [], totals: { orderCount: 0, studentCount: 0, orderTotal: 0, studentAmountPaid: 0 } })
+  const [testData, setTestData] = useState({ orders: [], students: [], preorders: [], totals: { orderCount: 0, studentCount: 0, preorderCount: 0, orderTotal: 0, studentAmountPaid: 0, preorderAmountPaid: 0 } })
   const [testDataLoading, setTestDataLoading] = useState(false)
   const [selectedTestOrderIds, setSelectedTestOrderIds] = useState([])
   const [selectedTestStudentIds, setSelectedTestStudentIds] = useState([])
+  const [selectedTestPreorderIds, setSelectedTestPreorderIds] = useState([])
   const [testDataConfirm, setTestDataConfirm] = useState(null) // { mode: 'selected' | 'all' }
   const [testDataDeleting, setTestDataDeleting] = useState(false)
   const [testDataMsg, setTestDataMsg] = useState('')
@@ -374,12 +375,16 @@ export default function SysAdminDashboard({ user, onLogout }) {
       if (data && data.totals) setTestData(data)
       setSelectedTestOrderIds([])
       setSelectedTestStudentIds([])
+      setSelectedTestPreorderIds([])
     } catch {}
     setTestDataLoading(false)
   }
 
   const toggleTestOrderSelected = (id) => {
     setSelectedTestOrderIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+  const toggleTestPreorderSelected = (id) => {
+    setSelectedTestPreorderIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
   const toggleTestStudentSelected = (id) => {
     setSelectedTestStudentIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -1342,12 +1347,13 @@ export default function SysAdminDashboard({ user, onLogout }) {
             {/* Test Data */}
             {activePage === 'testData' && (
               <div>
-                <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 20 }}>
+                <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 20 }}>
                   {[
                     { label: 'Test Orders', value: testData.totals.orderCount, bg: '#C47A8A' },
                     { label: 'Test Students', value: testData.totals.studentCount, bg: '#7A9E8A' },
+                    { label: 'Test Pre-orders', value: testData.totals.preorderCount, bg: '#6A1B9A' },
                     { label: 'Test Order Value', value: `R ${Number(testData.totals.orderTotal).toLocaleString('en-ZA')}`, bg: '#8C5A6A' },
-                    { label: 'Test Amount Paid', value: `R ${Number(testData.totals.studentAmountPaid).toLocaleString('en-ZA')}`, bg: '#9A8A8E' },
+                    { label: 'Test Amount Paid', value: `R ${Number(testData.totals.studentAmountPaid + testData.totals.preorderAmountPaid).toLocaleString('en-ZA')}`, bg: '#9A8A8E' },
                   ].map(stat => (
                     <div key={stat.label} style={{ background: stat.bg, borderRadius: 12, padding: '22px 24px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
                       <div style={{ fontSize: 22, fontWeight: 700, color: 'white', marginBottom: 4 }}>{stat.value}</div>
@@ -1359,14 +1365,14 @@ export default function SysAdminDashboard({ user, onLogout }) {
                 <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
                   <button
                     className="sa-btn-secondary"
-                    disabled={selectedTestOrderIds.length === 0 && selectedTestStudentIds.length === 0}
+                    disabled={selectedTestOrderIds.length === 0 && selectedTestStudentIds.length === 0 && selectedTestPreorderIds.length === 0}
                     onClick={() => setTestDataConfirm({ mode: 'selected' })}
                   >
                     Delete Selected
                   </button>
                   <button
                     className="sa-btn-danger"
-                    disabled={testData.totals.orderCount === 0 && testData.totals.studentCount === 0}
+                    disabled={testData.totals.orderCount === 0 && testData.totals.studentCount === 0 && testData.totals.preorderCount === 0}
                     onClick={() => setTestDataConfirm({ mode: 'all' })}
                   >
                     Delete All Test Data
@@ -1380,9 +1386,9 @@ export default function SysAdminDashboard({ user, onLogout }) {
                   <div style={{ background: '#FFF3E0', border: '1px solid #FFD591', borderRadius: 8, padding: '14px 16px', marginBottom: 16 }}>
                     <div style={{ fontSize: 13, color: '#8C5A00', fontWeight: 600, marginBottom: 10 }}>
                       {testDataConfirm.mode === 'all' ? (
-                        <>This will permanently delete all {testData.totals.orderCount} test order(s) and {testData.totals.studentCount} test student(s) - their order items, payment attempts and notifications, restoring any stock that was deducted from a confirmed test order. This cannot be undone.</>
+                        <>This will permanently delete all {testData.totals.orderCount} test order(s), {testData.totals.studentCount} test student(s) and {testData.totals.preorderCount} test pre-order(s) - their order items, payment attempts and notifications, restoring any stock that was deducted from a confirmed test order. This cannot be undone.</>
                       ) : (
-                        <>This will permanently delete {selectedTestOrderIds.length} selected order(s) and {selectedTestStudentIds.length} selected student(s) - their order items, payment attempts and notifications, restoring any stock that was deducted from a confirmed test order. This cannot be undone.</>
+                        <>This will permanently delete {selectedTestOrderIds.length} selected order(s), {selectedTestStudentIds.length} selected student(s) and {selectedTestPreorderIds.length} selected pre-order(s) - their order items, payment attempts and notifications, restoring any stock that was deducted from a confirmed test order. This cannot be undone.</>
                       )}
                     </div>
                     <div style={{ display: 'flex', gap: 10 }}>
@@ -1391,7 +1397,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
                         disabled={testDataDeleting}
                         onClick={() => testDataConfirm.mode === 'all'
                           ? runTestDataDelete({ all: true })
-                          : runTestDataDelete({ orderIds: selectedTestOrderIds, studentIds: selectedTestStudentIds })}
+                          : runTestDataDelete({ orderIds: selectedTestOrderIds, studentIds: selectedTestStudentIds, preorderIds: selectedTestPreorderIds })}
                       >
                         {testDataDeleting ? 'Deleting...' : 'Yes, delete it'}
                       </button>
@@ -1471,6 +1477,37 @@ export default function SysAdminDashboard({ user, onLogout }) {
                       ))}
                       {testData.students.length === 0 && (
                         <tr><td colSpan={7} style={{ color: '#AAAAAA', padding: '16px 0' }}>No test students.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="sa-panel" style={{ overflowX: 'auto', marginTop: 20 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#2C1A20', marginBottom: 16 }}>Test Pre-orders</div>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Product</th>
+                        <th>Status</th>
+                        <th>Amount Paid</th>
+                        <th>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {testData.preorders.map(p => (
+                        <tr key={p.id}>
+                          <td><input type="checkbox" checked={selectedTestPreorderIds.includes(p.id)} onChange={() => toggleTestPreorderSelected(p.id)} /></td>
+                          <td style={{ fontWeight: 600 }}>{p.productName}</td>
+                          <td><span className="sa-badge" style={{ background: '#F7EEF0', color: '#8C5A6A' }}>{p.status.replace(/_/g, ' ')}</span></td>
+                          <td>R{p.amountPaid.toFixed(2)}</td>
+                          <td style={{ color: '#9A8A8E', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            {new Date(p.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                        </tr>
+                      ))}
+                      {testData.preorders.length === 0 && (
+                        <tr><td colSpan={5} style={{ color: '#AAAAAA', padding: '16px 0' }}>No test pre-orders.</td></tr>
                       )}
                     </tbody>
                   </table>

@@ -109,6 +109,16 @@ export default function App({ user, onLogout }) {
   const [ordersView, setOrdersView] = useState('active')
   const [orderCounts, setOrderCounts] = useState({ active: 0, archived: 0 })
 
+  // ── Pre-orders ────────────────────────────────────────────────────────────
+  const [preorderGroups, setPreorderGroups] = useState([]) // [{ productId, productName, preorders, statusCounts }]
+  const [preorderRefundableCount, setPreorderRefundableCount] = useState(0)
+  const [preorderLoading, setPreorderLoading] = useState(false)
+  const [preorderActionStatus, setPreorderActionStatus] = useState(null) // { id, message } | null
+  const [preorderLeadTime, setPreorderLeadTime] = useState({ minDays: 14, maxDays: 21 })
+  const [preorderLeadTimeDraft, setPreorderLeadTimeDraft] = useState({ minDays: 14, maxDays: 21 })
+  const [preorderSettingsStatus, setPreorderSettingsStatus] = useState(null)
+  const [courierTrackingDraft, setCourierTrackingDraft] = useState({}) // preorderId -> text
+
   // ── Business calendar ────────────────────────────────────────────────────
   // Months from the real current month that the dashboard calendar is
   // showing - 0 is this month, 1 is next month, -1 is last month.
@@ -228,6 +238,136 @@ export default function App({ user, onLogout }) {
     fetchOrders(view)
   }
 
+  const fetchPreorders = async () => {
+    setPreorderLoading(true)
+    try {
+      const res = await apiFetch('/api/admin/preorders')
+      const data = await res.json()
+      if (res.ok && data) {
+        setPreorderGroups(Array.isArray(data.products) ? data.products : [])
+        setPreorderRefundableCount(data.refundableCount || 0)
+      }
+    } catch {
+      // silent fail
+    } finally {
+      setPreorderLoading(false)
+    }
+  }
+
+  const fetchPreorderLeadTime = async () => {
+    try {
+      const res = await fetch(`${API}/api/preorder-settings`)
+      const data = await res.json()
+      if (res.ok && data) {
+        setPreorderLeadTime(data)
+        setPreorderLeadTimeDraft(data)
+      }
+    } catch {
+      // silent fail
+    }
+  }
+
+  const savePreorderLeadTime = async () => {
+    setPreorderSettingsStatus(null)
+    try {
+      const res = await apiFetch('/api/admin/system/preorders', {
+        method: 'PUT',
+        body: JSON.stringify({ minDays: parseInt(preorderLeadTimeDraft.minDays), maxDays: parseInt(preorderLeadTimeDraft.maxDays) }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setPreorderLeadTime(data)
+        setPreorderLeadTimeDraft(data)
+        setPreorderSettingsStatus({ ok: true, message: 'Lead time saved.' })
+      } else {
+        setPreorderSettingsStatus({ ok: false, message: data.error || 'Failed to save lead time.' })
+      }
+    } catch {
+      setPreorderSettingsStatus({ ok: false, message: 'Failed to save lead time.' })
+    }
+  }
+
+  const markPreorderArrived = async (preorder) => {
+    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as arrived?`)) return
+    const res = await apiFetch('/api/admin/preorders/mark-arrived', { method: 'POST', body: JSON.stringify({ id: preorder.id }) })
+    if (res.ok) { await fetchPreorders() } else {
+      const data = await res.json().catch(() => ({}))
+      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as arrived.' })
+    }
+  }
+
+  const markProductPreordersArrived = async (group) => {
+    const count = group.statusCounts.deposit_paid || 0
+    if (count === 0) return
+    if (!window.confirm(`Mark all ${count} deposit-paid pre-order(s) for "${group.productName}" as arrived?`)) return
+    const res = await apiFetch('/api/admin/preorders/mark-arrived', { method: 'POST', body: JSON.stringify({ productId: group.productId }) })
+    if (res.ok) await fetchPreorders()
+  }
+
+  const dispatchPreorder = async (preorder) => {
+    const tracking = courierTrackingDraft[preorder.id] || ''
+    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as dispatched? This also confirms its order.`)) return
+    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/dispatch`, { method: 'PATCH', body: JSON.stringify({ courierTracking: tracking }) })
+    if (res.ok) { await fetchPreorders() } else {
+      const data = await res.json().catch(() => ({}))
+      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as dispatched.' })
+    }
+  }
+
+  const collectPreorder = async (preorder) => {
+    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as collected? This also confirms its order.`)) return
+    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/collect`, { method: 'PATCH' })
+    if (res.ok) { await fetchPreorders() } else {
+      const data = await res.json().catch(() => ({}))
+      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as collected.' })
+    }
+  }
+
+  const cancelPreorder = async (preorder) => {
+    if (!window.confirm(`Cancel the pre-order for "${preorder.productName}" (${preorder.customerName})? This only records a status change - any refund is done in the Ozow dashboard.`)) return
+    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/cancel`, { method: 'PATCH' })
+    if (res.ok) { await fetchPreorders() } else {
+      const data = await res.json().catch(() => ({}))
+      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to cancel pre-order.' })
+    }
+  }
+
+  const refundPreorder = async (preorder) => {
+    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as refunded? This only records a status change - do the actual refund in the Ozow dashboard first.`)) return
+    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/refund`, { method: 'PATCH' })
+    if (res.ok) { await fetchPreorders() } else {
+      const data = await res.json().catch(() => ({}))
+      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as refunded.' })
+    }
+  }
+
+  const copyPreorderBalanceLink = async (preorder) => {
+    try {
+      await navigator.clipboard.writeText(preorder.link)
+      setPreorderActionStatus({ id: preorder.id, message: 'Balance link copied.' })
+    } catch {
+      // silent fail
+    }
+  }
+
+  const copyPreorderWhatsAppMessage = async (preorder) => {
+    const firstName = (preorder.customerName || '').split(' ')[0]
+    const message = `Hi ${firstName}, good news! Your ${preorder.productName} has arrived. Your balance is R${preorder.balance.toFixed(2)}. You can pay it securely here: ${preorder.link}. Thank you for your patience.`
+    try {
+      await navigator.clipboard.writeText(message)
+      setPreorderActionStatus({ id: preorder.id, message: 'WhatsApp message copied.' })
+    } catch {
+      // silent fail
+    }
+  }
+
+  const preorderDaysLabel = (preorder) => {
+    if (preorder.daysLeft === null || preorder.daysLeft === undefined) return null
+    if (preorder.daysLeft > 0) return `${preorder.daysLeft} day${preorder.daysLeft !== 1 ? 's' : ''} left`
+    if (preorder.daysLeft === 0) return 'Due today'
+    return `${Math.abs(preorder.daysLeft)} day${Math.abs(preorder.daysLeft) !== 1 ? 's' : ''} late`
+  }
+
   useEffect(() => {
     const token = localStorage.getItem('hbh_token')
     if (!token) return
@@ -343,6 +483,10 @@ export default function App({ user, onLogout }) {
       fetchContentHistory()
     }
     fetchOrders()
+    if (user?.role !== 'staff') {
+      fetchPreorders()
+      fetchPreorderLeadTime()
+    }
   }, [])
 
   // Fetches whatever months the business calendar needs: the one currently
@@ -1795,6 +1939,7 @@ export default function App({ user, onLogout }) {
                 { label: 'Image Management', value: 'images' },
                 { label: 'Lash Training', value: 'training' },
                 { label: 'Website Content', value: 'content' },
+                { label: 'Pre-orders', value: 'preorders' },
               ] : []),
               { label: 'Orders', value: 'orders' },
               { label: 'Notifications', value: 'notifications' },
@@ -1896,12 +2041,12 @@ export default function App({ user, onLogout }) {
                 <span style={{ width: 20, height: 2, background: '#FFFFFF', borderRadius: 2 }} />
               </button>
               <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF', letterSpacing: '0.3px' }}>
-                {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', orders: 'Orders', notifications: 'Notifications', settings: 'Settings' }[activePage]}
+                {{ dashboard: 'Dashboard', products: 'Products', images: 'Image Management', training: 'Lash Training', preorders: 'Pre-orders', orders: 'Orders', notifications: 'Notifications', settings: 'Settings' }[activePage]}
               </div>
             </div>
             <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 20, fontWeight: 600, whiteSpace: 'nowrap' }}>
               {user?.role === 'staff' ? 'Staff View' : (
-                { dashboard: 'Overview', products: `${categories.length} sections`, images: imageTab === 'products' ? '4 products' : imageTab === 'classes' ? '3 classes' : `${galleryImages.length} files`, training: '3 classes', orders: `${orders.length} order${orders.length !== 1 ? 's' : ''}`, notifications: `${unreadCount} unread`, settings: 'Account' }[activePage]
+                { dashboard: 'Overview', products: `${categories.length} sections`, images: imageTab === 'products' ? '4 products' : imageTab === 'classes' ? '3 classes' : `${galleryImages.length} files`, training: '3 classes', preorders: preorderGroups.length ? `${preorderGroups.length} product${preorderGroups.length !== 1 ? 's' : ''}` : 'No pre-orders', orders: `${orders.length} order${orders.length !== 1 ? 's' : ''}`, notifications: `${unreadCount} unread`, settings: 'Account' }[activePage]
               )}
             </div>
           </div>
@@ -1926,6 +2071,7 @@ export default function App({ user, onLogout }) {
               const monthData = calendarCache[monthKey]
               const monthStudents = (monthData && monthData !== 'loading') ? monthData.students : []
               const monthOrders = (monthData && monthData !== 'loading') ? monthData.orders : []
+              const monthPreorders = (monthData && monthData !== 'loading') ? (monthData.preorders || []) : []
 
               // Build calendar days
               const firstDay = new Date(year, month, 1).getDay()
@@ -1946,12 +2092,20 @@ export default function App({ user, onLogout }) {
                 const day = new Date(o.createdAt).getDate()
                 ;(ordersByDay[day] = ordersByDay[day] || []).push(o)
               })
+              const preordersByDay = {}
+              monthPreorders.forEach(p => {
+                if (!p.promisedByDate) return
+                const day = new Date(p.promisedByDate).getDate()
+                ;(preordersByDay[day] = preordersByDay[day] || []).push(p)
+              })
               const itemsForDay = (day) => [
                 ...(studentsByDay[day] || []).map(s => ({ kind: 'student', data: s })),
                 ...(ordersByDay[day] || []).map(o => ({ kind: 'order', data: o })),
+                ...(preordersByDay[day] || []).map(p => ({ kind: 'preorder', data: p })),
               ]
               const dotColor = (item) => item.kind === 'student'
                 ? (item.data.hasBalance ? '#C47A8A' : '#7A9E8A')
+                : item.kind === 'preorder' ? '#6A1B9A'
                 : (item.data.needsConfirmation ? '#E65100' : '#8C5A6A')
 
               const calDays = []
@@ -2024,6 +2178,15 @@ export default function App({ user, onLogout }) {
                   textColor: '#FFFFFF',
                   labelColor: 'rgba(255,255,255,0.75)',
                 },
+                ...(user?.role !== 'staff' ? [{
+                  label: 'Pre-order Deposits',
+                  value: `R ${preorderGroups.reduce((sum, g) => sum + g.preorders.reduce(
+                    (s, p) => s + (p.status !== 'awaiting_deposit' ? p.deposit : 0), 0
+                  ), 0).toLocaleString('en-ZA')}`,
+                  bg: '#9E5A6A',
+                  textColor: '#FFFFFF',
+                  labelColor: 'rgba(255,255,255,0.75)',
+                }] : []),
               ]
 
               return (
@@ -2049,7 +2212,7 @@ export default function App({ user, onLogout }) {
                   </div>
 
                   {/* Stats row */}
-                  <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+                  <div className="admin-stat-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 24 }}>
                     {statCards.map(stat => (
                       <div
                         key={stat.label}
@@ -2219,7 +2382,18 @@ export default function App({ user, onLogout }) {
                                   x
                                 </button>
                               </div>
-                              {items.map((item, idx) => item.kind === 'student' ? (
+                              {items.map((item, idx) => item.kind === 'preorder' ? (
+                                <div
+                                  key={`p-${idx}`}
+                                  onClick={() => { setSelectedCalendarDay(null); setActivePage('preorders') }}
+                                  style={{ padding: '8px 0', borderBottom: '1px solid #F7EEF0', cursor: 'pointer' }}
+                                >
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: '#2C1A20' }}>{item.data.productName}</div>
+                                  <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                                    {item.data.customerName} - ready by this date ({item.data.status.replace(/_/g, ' ')})
+                                  </div>
+                                </div>
+                              ) : item.kind === 'student' ? (
                                 <div
                                   key={`s-${idx}`}
                                   onClick={user?.role !== 'staff' ? () => goToClassStudents(item.data.classId) : undefined}
@@ -2577,6 +2751,11 @@ export default function App({ user, onLogout }) {
                                   Inactive
                                 </span>
                               )}
+                              {p.preorderEnabled && (
+                                <span style={{ fontSize: 11, fontWeight: 700, color: '#C47A8A', textTransform: 'uppercase', marginLeft: 8 }}>
+                                  Pre-order
+                                </span>
+                              )}
                             </div>
                             <div style={{ fontSize: 12, color: '#7A6670', lineHeight: 1.5, marginBottom: 6 }}>
                               {p.description}
@@ -2661,6 +2840,31 @@ export default function App({ user, onLogout }) {
                                 placeholder="Low stock at"
                               />
                             </div>
+                            <div style={{ marginTop: 10, padding: '10px 12px', background: '#FAF6F4', borderRadius: 8 }}>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: '#3E2A30', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!editingProduct.preorderEnabled}
+                                  onChange={e => setEditingProduct(prev => ({ ...prev, preorderEnabled: e.target.checked }))}
+                                />
+                                Pre-order
+                              </label>
+                              {editingProduct.preorderEnabled && (
+                                <div style={{ marginTop: 8 }}>
+                                  <input
+                                    className="category-input"
+                                    type="number"
+                                    style={{ width: 140 }}
+                                    value={editingProduct.preorderDeposit}
+                                    onChange={e => setEditingProduct(prev => ({ ...prev, preorderDeposit: e.target.value }))}
+                                    placeholder="Deposit (R)"
+                                  />
+                                  <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 6 }}>
+                                    Pre-orders are ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days (change this on the Pre-orders page).
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </>
                         )}
                       </div>
@@ -2672,6 +2876,7 @@ export default function App({ user, onLogout }) {
                               onClick={() => setEditingProduct({
                                 id: p.id, name: p.name, description: p.description, detail: p.detail,
                                 price: p.price, badge: p.badge || '', lowStockThreshold: p.lowStockThreshold,
+                                preorderEnabled: p.preorderEnabled, preorderDeposit: p.preorderDeposit,
                               })}
                             >
                               Edit
@@ -3343,6 +3548,186 @@ export default function App({ user, onLogout }) {
                         </div>
                       ))}
                     </div>
+                  </div>
+                </div>
+              )
+            })()}
+
+            {activePage === 'preorders' && user?.role !== 'staff' && (() => {
+              const totalPreorders = preorderGroups.reduce((sum, g) => sum + g.preorders.length, 0)
+              const statusColors = {
+                awaiting_deposit: { bg: '#FFF3E0', color: '#E65100' },
+                deposit_paid: { bg: '#E3F2FD', color: '#1565C0' },
+                arrived: { bg: '#F3E5F5', color: '#6A1B9A' },
+                paid_in_full: { bg: '#E8F5E9', color: '#2E7D32' },
+                dispatched: { bg: '#E8F5E9', color: '#2E7D32' },
+                collected: { bg: '#E8F5E9', color: '#2E7D32' },
+                cancelled: { bg: '#F0F0F0', color: '#888888' },
+                refunded: { bg: '#FDE8EC', color: '#C47A8A' },
+              }
+              const cancellable = (status) => !['dispatched', 'collected', 'cancelled', 'refunded'].includes(status)
+              return (
+                <div>
+                  <div style={{
+                    background: 'linear-gradient(135deg, #C47A8A 0%, #9E5A6A 100%)',
+                    borderRadius: 14,
+                    padding: '20px 24px',
+                    marginBottom: 20,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                  }}>
+                    <div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: 'white', marginBottom: 4 }}>
+                        {totalPreorders} pre-order{totalPreorders !== 1 ? 's' : ''}
+                      </div>
+                      <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
+                        Grouped by product
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => fetchPreorders()}
+                      style={{
+                        background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.3)', color: 'white',
+                        borderRadius: 8, padding: '8px 16px', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600,
+                      }}
+                    >
+                      Refresh
+                    </button>
+                  </div>
+
+                  {preorderRefundableCount > 0 && (
+                    <div style={{ background: '#FDE8EC', border: '1px solid #C47A8A', borderRadius: 10, padding: '12px 16px', marginBottom: 20, color: '#9E3A50', fontSize: 13, fontWeight: 600 }}>
+                      Past {preorderLeadTime.maxDays} days: {preorderRefundableCount} pre-order{preorderRefundableCount !== 1 ? 's' : ''} may be eligible for a refund.
+                    </div>
+                  )}
+
+                  <div className="panel" style={{ padding: 20, marginBottom: 24 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#3E2A30', marginBottom: 10 }}>Pre-order settings</div>
+                    <div style={{ fontSize: 12, color: '#9A8A8E', marginBottom: 12 }}>
+                      Pre-orders are ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days from when the deposit is paid.
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <label style={{ fontSize: 12, color: '#9A8A8E' }}>
+                        Minimum days
+                        <input
+                          type="number" min="1" max="120" value={preorderLeadTimeDraft.minDays}
+                          onChange={e => setPreorderLeadTimeDraft(prev => ({ ...prev, minDays: e.target.value }))}
+                          style={{ display: 'block', marginTop: 4, width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #E8E8E8', fontFamily: 'inherit' }}
+                        />
+                      </label>
+                      <label style={{ fontSize: 12, color: '#9A8A8E' }}>
+                        Maximum days
+                        <input
+                          type="number" min="1" max="120" value={preorderLeadTimeDraft.maxDays}
+                          onChange={e => setPreorderLeadTimeDraft(prev => ({ ...prev, maxDays: e.target.value }))}
+                          style={{ display: 'block', marginTop: 4, width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #E8E8E8', fontFamily: 'inherit' }}
+                        />
+                      </label>
+                      <button className="secondary-btn" onClick={savePreorderLeadTime}>Save</button>
+                    </div>
+                    {preorderSettingsStatus && (
+                      <div style={{ marginTop: 10, fontSize: 12, color: preorderSettingsStatus.ok ? '#2E7D32' : '#C0392B' }}>
+                        {preorderSettingsStatus.message}
+                      </div>
+                    )}
+                  </div>
+
+                  {preorderLoading && <div style={{ color: '#9A8A8E', fontSize: 13 }}>Loading...</div>}
+                  {!preorderLoading && preorderGroups.length === 0 && (
+                    <div style={{ color: '#9A8A8E', fontSize: 13 }}>No pre-orders yet.</div>
+                  )}
+
+                  {preorderGroups.map(group => (
+                    <div key={group.productId} className="panel" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
+                      <div style={{ padding: '16px 20px', borderBottom: '1px solid #F0F0F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: '#3E2A30' }}>{group.productName}</div>
+                          <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
+                            {Object.entries(group.statusCounts).map(([status, count]) => `${count} ${status.replace(/_/g, ' ')}`).join(' · ')}
+                          </div>
+                        </div>
+                        {(group.statusCounts.deposit_paid || 0) > 0 && (
+                          <button className="secondary-btn" onClick={() => markProductPreordersArrived(group)}>
+                            Mark all deposit-paid as arrived ({group.statusCounts.deposit_paid})
+                          </button>
+                        )}
+                      </div>
+                      <div>
+                        {group.preorders.map(preorder => (
+                          <div key={preorder.id} style={{ padding: '14px 20px', borderBottom: '1px solid #F5F5F5', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                            <div style={{ minWidth: 220 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#3E2A30' }}>
+                                {preorder.customerName} <span style={{ color: '#9A8A8E', fontWeight: 400 }}>· {preorder.quantity}x</span>
+                                {preorder.isTest && (
+                                  <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#C47A8A', background: '#FDE8EC', borderRadius: 4, padding: '1px 6px' }}>TEST</span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
+                                Deposit R{preorder.deposit.toFixed(2)} · Paid R{preorder.amountPaid.toFixed(2)} · Balance R{preorder.balance.toFixed(2)}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
+                                {new Date(preorder.createdAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                {preorder.promisedByDate && ` · Ready by ${new Date(preorder.promisedByDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                                {preorderDaysLabel(preorder) && ` · ${preorderDaysLabel(preorder)}`}
+                              </div>
+                              {preorder.refundable && (
+                                <div style={{ fontSize: 11, color: '#C0392B', fontWeight: 700, marginTop: 4 }}>
+                                  Past {preorderLeadTime.maxDays} days: customer may request a refund
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                              <span style={{
+                                background: (statusColors[preorder.status] || {}).bg || '#F0F0F0',
+                                color: (statusColors[preorder.status] || {}).color || '#888888',
+                                borderRadius: 10, padding: '3px 10px', fontSize: 11, fontWeight: 700, textTransform: 'capitalize',
+                              }}>
+                                {preorder.status.replace(/_/g, ' ')}
+                              </span>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                {preorder.status === 'deposit_paid' && (
+                                  <button className="secondary-btn" onClick={() => markPreorderArrived(preorder)}>Mark arrived</button>
+                                )}
+                                {preorder.status === 'arrived' && preorder.balance > 0 && (
+                                  <>
+                                    <button className="secondary-btn" onClick={() => copyPreorderBalanceLink(preorder)}>Copy balance link</button>
+                                    <button className="secondary-btn" onClick={() => copyPreorderWhatsAppMessage(preorder)}>Copy WhatsApp message</button>
+                                  </>
+                                )}
+                                {preorder.status === 'paid_in_full' && (
+                                  <>
+                                    <input
+                                      placeholder="Courier tracking (optional)"
+                                      value={courierTrackingDraft[preorder.id] || ''}
+                                      onChange={e => setCourierTrackingDraft(prev => ({ ...prev, [preorder.id]: e.target.value }))}
+                                      style={{ fontSize: 12, padding: '5px 8px', borderRadius: 6, border: '1px solid #E8E8E8', width: 150, fontFamily: 'inherit' }}
+                                    />
+                                    <button className="secondary-btn" onClick={() => dispatchPreorder(preorder)}>Mark dispatched</button>
+                                    <button className="secondary-btn" onClick={() => collectPreorder(preorder)}>Mark collected</button>
+                                  </>
+                                )}
+                                {cancellable(preorder.status) && (
+                                  <>
+                                    <button className="secondary-btn" onClick={() => cancelPreorder(preorder)}>Cancel</button>
+                                    <button className="secondary-btn" onClick={() => refundPreorder(preorder)}>Mark refunded</button>
+                                  </>
+                                )}
+                              </div>
+                              {preorderActionStatus?.id === preorder.id && (
+                                <div style={{ fontSize: 11, color: '#9A8A8E' }}>{preorderActionStatus.message}</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 10 }}>
+                    Refunds are done in the Ozow dashboard - Cancel and Mark refunded here only record the status change.
                   </div>
                 </div>
               )
