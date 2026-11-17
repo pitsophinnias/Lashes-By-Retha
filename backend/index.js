@@ -496,9 +496,18 @@ const maskName = (name) => {
   return parts[0].length > 2 ? `${parts[0].slice(0, 2)}***` : parts[0]
 }
 
-// Owner/staff never see test data (orders, students, the calendar,
-// notifications tied to either) - a sysadmin can opt in with ?includeTest=true.
-const canIncludeTestData = (req) => req.user.role === 'sysadmin' && req.query.includeTest === 'true'
+// Owner/staff never see test data (orders, pre-orders, students, the
+// calendar, notifications tied to any of them) - a sysadmin can opt in for
+// themselves with ?includeTest=true, or turn on the "Show test data in the
+// owner dashboard" switch to show it to every role (see PUT
+// /api/admin/system/show-test-data). Reads the setting fresh every call, the
+// same as isProviderEnabled/requireNotInMaintenance, so flipping the switch
+// takes effect immediately.
+const canIncludeTestData = async (req) => {
+  if (req.user.role === 'sysadmin' && req.query.includeTest === 'true') return true
+  const settings = await getSystemSettings(req)
+  return !!settings.showTestData.enabled
+}
 
 // Called right after a new Ozow/Payflex payment attempt is inserted - once
 // an order or student has any test attempt, it stays marked as test data
@@ -914,7 +923,7 @@ app.get('/api/system/status', async (req, res) => {
   try {
     const settings = await readSystemSettings()
     res.set('Cache-Control', 'public, max-age=15')
-    res.json({ maintenance: settings.maintenance })
+    res.json({ maintenance: settings.maintenance, showTestData: settings.showTestData })
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch system status' })
     await logError('GET /api/system/status', err, req)
@@ -1077,6 +1086,7 @@ app.get('/api/admin/system/settings', authenticate, requireRole('sysadmin'), asy
         payflex: { enabled: settings.payments.payflexEnabled, configured: payflex.isPayflexConfigured, isTest: payflex.PAYFLEX_IS_TEST },
       },
       preorders: settings.preorders,
+      showTestData: settings.showTestData,
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch system settings' })
@@ -1125,6 +1135,26 @@ app.put('/api/admin/system/payments', authenticate, requireRole('sysadmin'), asy
   } catch (err) {
     res.status(500).json({ error: 'Failed to update payment switches' })
     await logError('PUT /api/admin/system/payments', err, req)
+  }
+})
+
+// Sysadmin only - shows test orders/pre-orders/students/notifications in
+// every owner and staff view too, for testing on the live site without a
+// separate account. See canIncludeTestData.
+app.put('/api/admin/system/show-test-data', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const { enabled } = req.body
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be true or false' })
+  }
+  try {
+    const value = { enabled }
+    await saveSystemSetting('showTestData', value, req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'SHOW_TEST_DATA_CHANGED',
+      `Show test data in the owner dashboard turned ${enabled ? 'ON' : 'OFF'}`, req.ip)
+    res.json(value)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update the show-test-data setting' })
+    await logError('PUT /api/admin/system/show-test-data', err, req)
   }
 })
 
@@ -1942,7 +1972,7 @@ const serializePreorder = (p) => {
 app.get('/api/admin/preorders', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   try {
     const conditions = []
-    if (!canIncludeTestData(req)) conditions.push('pre.is_test = FALSE')
+    if (!(await canIncludeTestData(req))) conditions.push('pre.is_test = FALSE')
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
     const result = await pool.query(
       `SELECT pre.*, prod.name AS product_name FROM preorders pre
@@ -2099,7 +2129,7 @@ app.get('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 
   try {
     const course = await getCourse(req.params.classId)
     const result = await pool.query(
-      canIncludeTestData(req)
+      (await canIncludeTestData(req))
         ? 'SELECT * FROM students WHERE class_id = $1 ORDER BY enrolled_at DESC'
         : 'SELECT * FROM students WHERE class_id = $1 AND is_test = FALSE ORDER BY enrolled_at DESC',
       [req.params.classId]
@@ -2272,8 +2302,8 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
   const [year, mon] = month.split('-').map(Number)
   const start = new Date(year, mon - 1, 1)
   const end = new Date(year, mon, 1)
-  const includeTest = canIncludeTestData(req)
   try {
+    const includeTest = await canIncludeTestData(req)
     const studentsResult = await pool.query(
       `SELECT s.id, s.class_id, s.name, s.status, s.preferred_start_date, s.amount_paid,
               c.name AS course_name, c.price AS course_price
@@ -2489,7 +2519,7 @@ app.get('/api/orders', authenticate, async (req, res) => {
     const conditions = []
     if (view === 'active') conditions.push('archived = FALSE')
     if (view === 'archived') conditions.push('archived = TRUE')
-    if (!canIncludeTestData(req)) conditions.push('is_test = FALSE')
+    if (!(await canIncludeTestData(req))) conditions.push('is_test = FALSE')
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
     const ordersResult = await pool.query(`SELECT * FROM orders ${where} ORDER BY created_at DESC`)
     const orders = ordersResult.rows
@@ -3778,7 +3808,7 @@ app.get('/api/notifications/archived', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT * FROM notifications WHERE archived = TRUE
-       ${canIncludeTestData(req) ? '' : TEST_NOTIFICATION_EXCLUSION}
+       ${(await canIncludeTestData(req)) ? '' : TEST_NOTIFICATION_EXCLUSION}
        ORDER BY created_at DESC LIMIT 100`
     )
     res.json(result.rows.map(r => ({
@@ -3794,7 +3824,7 @@ app.get('/api/notifications/unread-count', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT COUNT(*) FROM notifications WHERE read = FALSE AND archived = FALSE
-       ${canIncludeTestData(req) ? '' : TEST_NOTIFICATION_EXCLUSION}`
+       ${(await canIncludeTestData(req)) ? '' : TEST_NOTIFICATION_EXCLUSION}`
     )
     res.json({ count: parseInt(result.rows[0].count) })
   } catch {
@@ -3806,7 +3836,7 @@ app.get('/api/notifications', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT * FROM notifications WHERE archived = FALSE
-       ${canIncludeTestData(req) ? '' : TEST_NOTIFICATION_EXCLUSION}
+       ${(await canIncludeTestData(req)) ? '' : TEST_NOTIFICATION_EXCLUSION}
        ORDER BY created_at DESC LIMIT 50`
     )
     res.json(result.rows.map(r => ({

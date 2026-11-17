@@ -118,6 +118,7 @@ export default function App({ user, onLogout }) {
   const [preorderLeadTimeDraft, setPreorderLeadTimeDraft] = useState({ minDays: 14, maxDays: 21 })
   const [preorderSettingsStatus, setPreorderSettingsStatus] = useState(null)
   const [courierTrackingDraft, setCourierTrackingDraft] = useState({}) // preorderId -> text
+  const [showTestDataEnabled, setShowTestDataEnabled] = useState(false)
 
   // ── Business calendar ────────────────────────────────────────────────────
   // Months from the real current month that the dashboard calendar is
@@ -487,6 +488,10 @@ export default function App({ user, onLogout }) {
       fetchPreorders()
       fetchPreorderLeadTime()
     }
+    fetch(`${API}/api/system/status`)
+      .then(r => r.json())
+      .then(data => setShowTestDataEnabled(!!data?.showTestData?.enabled))
+      .catch(() => {})
   }, [])
 
   // Fetches whatever months the business calendar needs: the one currently
@@ -2051,6 +2056,12 @@ export default function App({ user, onLogout }) {
             </div>
           </div>
 
+          {showTestDataEnabled && (
+            <div style={{ background: '#9E9E9E', color: 'white', textAlign: 'center', padding: '6px 12px', fontSize: 12, fontWeight: 700, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+              Test data is showing
+            </div>
+          )}
+
           {/* Content */}
           <div className="admin-content" style={{ padding: 32, maxWidth: 1200 }}>
 
@@ -3406,6 +3417,9 @@ export default function App({ user, onLogout }) {
                                   Website
                                 </span>
                               )}
+                              {student.isTest && (
+                                <span style={{ fontSize: 10, fontWeight: 700, color: '#9E9E9E', background: '#F5F5F5', borderRadius: 4, padding: '2px 6px', textTransform: 'uppercase' }}>Test</span>
+                              )}
                             </div>
                             <div style={{ fontSize: 12, color: '#9A8A8E' }}>
                               {student.whatsapp}{student.email ? ` · ${student.email}` : ''}
@@ -3485,8 +3499,11 @@ export default function App({ user, onLogout }) {
                         {awaitingPaymentStudents.map(student => (
                           <div key={student.id} className="student-row">
                             <div>
-                              <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                                 {student.name}
+                                {student.isTest && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: '#9E9E9E', background: '#F5F5F5', borderRadius: 4, padding: '2px 6px', textTransform: 'uppercase' }}>Test</span>
+                                )}
                               </div>
                               <div style={{ fontSize: 12, color: '#9A8A8E' }}>
                                 {student.whatsapp}{student.email ? ` · ${student.email}` : ''}
@@ -3524,8 +3541,11 @@ export default function App({ user, onLogout }) {
                       {!studentsLoading && pastStudents.map(student => (
                         <div key={student.id} className="student-row">
                           <div>
-                            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2 }}>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                               {student.name}
+                              {student.isTest && (
+                                <span style={{ fontSize: 10, fontWeight: 700, color: '#9E9E9E', background: '#F5F5F5', borderRadius: 4, padding: '2px 6px', textTransform: 'uppercase' }}>Test</span>
+                              )}
                             </div>
                             <div style={{ fontSize: 12, color: '#9A8A8E' }}>
                               {student.whatsapp}
@@ -3662,7 +3682,7 @@ export default function App({ user, onLogout }) {
                               <div style={{ fontSize: 13, fontWeight: 600, color: '#3E2A30' }}>
                                 {preorder.customerName} <span style={{ color: '#9A8A8E', fontWeight: 400 }}>· {preorder.quantity}x</span>
                                 {preorder.isTest && (
-                                  <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#C47A8A', background: '#FDE8EC', borderRadius: 4, padding: '1px 6px' }}>TEST</span>
+                                  <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#9E9E9E', background: '#F5F5F5', borderRadius: 4, padding: '1px 6px', textTransform: 'uppercase' }}>Test</span>
                                 )}
                               </div>
                               <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
@@ -4126,6 +4146,9 @@ export default function App({ user, onLogout }) {
                         <div>
                           <div style={{ fontSize: 15, fontWeight: 700, color: '#1A1A1A', marginBottom: 4 }}>
                             {order.customerName}
+                            {order.isTest && (
+                              <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#9E9E9E', background: '#F5F5F5', borderRadius: 4, padding: '1px 6px', textTransform: 'uppercase' }}>Test</span>
+                            )}
                           </div>
                           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                             <span style={{ fontSize: 12, color: '#AAAAAA' }}>{order.customerPhone}</span>
