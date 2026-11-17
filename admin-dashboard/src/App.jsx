@@ -407,6 +407,7 @@ export default function App({ user, onLogout }) {
         if (type === 'products') setProductImages(prev => ({ ...prev, [id]: data.url }))
         if (type === 'classes') setClassImages(prev => ({ ...prev, [id]: data.url }))
         if (type === 'gallery') fetchGallery()
+        if (type === 'categories') setCategories(prev => prev.map(c => c.id === id ? { ...c, imageUrl: data.url } : c))
         setUploadStatus(prev => ({ ...prev, [key]: 'success' }))
         setTimeout(() => setUploadStatus(prev => ({ ...prev, [key]: null })), 3000)
       } else {
@@ -511,6 +512,25 @@ export default function App({ user, onLogout }) {
     } catch {
       setCategoryStatus({ type: 'error', message: 'Failed to remove section.' })
     }
+  }
+
+  const moveCategory = async (id, direction) => {
+    try {
+      const res = await apiFetch(`/api/categories/${id}/move`, {
+        method: 'PATCH',
+        body: JSON.stringify({ direction }),
+      })
+      const data = await res.json()
+      if (res.ok && Array.isArray(data)) setCategories(data)
+    } catch {}
+  }
+
+  const removeCategoryImage = async (id) => {
+    if (!window.confirm('Remove this section\'s cover image?')) return
+    try {
+      const res = await apiFetch(`/api/categories/${id}/image`, { method: 'DELETE' })
+      if (res.ok) setCategories(prev => prev.map(c => c.id === id ? { ...c, imageUrl: null } : c))
+    } catch {}
   }
 
   const assignCategory = async (productId, categoryId) => {
@@ -2358,7 +2378,7 @@ export default function App({ user, onLogout }) {
                 </div>
                 <div className="section-heading">Product Sections</div>
                 <p style={{ fontSize: 14, color: '#7A6670', marginBottom: 20, lineHeight: 1.6 }}>
-                  Sections group your products on the customer-facing shop. Create a new section below or remove one you no longer need. Products can be assigned to a section from the Products tab.
+                  Sections group your products on the customer-facing shop as "Shop by category" cards. Create a new section below, give it a cover photo, and use the arrows to set the order they appear in. Products can be assigned to a section from the Products tab.
                 </p>
 
                 <div className="category-input-row">
@@ -2384,17 +2404,49 @@ export default function App({ user, onLogout }) {
                   {categories.length === 0 && (
                     <p style={{ fontSize: 14, color: '#9A7A82' }}>No sections yet. Add one above.</p>
                   )}
-                  {categories.map(c => {
+                  {categories.map((c, index) => {
                     const count = Object.values(productCategories).filter(id => id === c.id).length
+                    const uploadKey = `categories-${c.id}`
                     return (
-                      <div key={c.id} className="category-item">
-                        <div>
-                          <div className="category-name">{c.name}</div>
-                          <div className="category-count">{count} product{count !== 1 ? 's' : ''}</div>
+                      <div key={c.id} style={{ marginBottom: 8 }}>
+                        <div className="category-item">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            {c.imageUrl ? (
+                              <img src={c.imageUrl} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />
+                            ) : (
+                              <div style={{ width: 44, height: 44, borderRadius: 8, background: '#FADADD', flexShrink: 0 }} />
+                            )}
+                            <div>
+                              <div className="category-name">{c.name}</div>
+                              <div className="category-count">{count} product{count !== 1 ? 's' : ''}</div>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            <button className="adj-btn" disabled={index === 0} onClick={() => moveCategory(c.id, 'up')} title="Move up">^</button>
+                            <button className="adj-btn" disabled={index === categories.length - 1} onClick={() => moveCategory(c.id, 'down')} title="Move down">v</button>
+                            <label htmlFor={`file-category-${c.id}`} className="upload-btn" style={{ fontSize: 12, padding: '6px 10px' }}>
+                              {c.imageUrl ? 'Replace Image' : 'Upload Image'}
+                            </label>
+                            <input
+                              id={`file-category-${c.id}`}
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => handleUpload('categories', c.id, e.target.files[0])}
+                            />
+                            {c.imageUrl && (
+                              <button className="delete-btn" onClick={() => removeCategoryImage(c.id)}>Remove Image</button>
+                            )}
+                            <button className="delete-btn" onClick={() => deleteCategory(c.id, c.name)}>
+                              Remove
+                            </button>
+                          </div>
                         </div>
-                        <button className="delete-btn" onClick={() => deleteCategory(c.id, c.name)}>
-                          Remove
-                        </button>
+                        {uploadStatus[uploadKey] === 'success' && (
+                          <div className="success-msg" style={{ marginTop: 6 }}>Uploaded successfully</div>
+                        )}
+                        {uploadStatus[uploadKey] && uploadStatus[uploadKey] !== 'uploading' && uploadStatus[uploadKey] !== 'success' && (
+                          <div className="error-msg" style={{ marginTop: 6 }}>{uploadStatus[uploadKey]}</div>
+                        )}
                       </div>
                     )
                   })}

@@ -406,6 +406,42 @@ const createTables = async () => {
     `)
   }
 
+  // "Shop by category" grid on the customer site - position orders the
+  // category cards, image_url/image_public_id hold an optional Cloudinary
+  // cover photo per category (mirrors media's url/public_id columns, but
+  // kept directly on categories since there's only ever one cover image).
+  await pool.query(`
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS position INTEGER;
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS image_url TEXT;
+    ALTER TABLE categories ADD COLUMN IF NOT EXISTS image_public_id TEXT;
+  `)
+
+  // One-time initial order for whichever of these categories already exist
+  // (matched case-insensitively by name) - never creates a missing one,
+  // Retha adds those herself in the admin. Guarded on no category having a
+  // position yet, so this never runs again once any category has one,
+  // whether from this migration or a sysadmin/owner reordering afterwards.
+  const { rows: positionedRows } = await pool.query('SELECT COUNT(*) FROM categories WHERE position IS NOT NULL')
+  if (parseInt(positionedRows[0].count) === 0) {
+    const desiredOrder = ['Wigs', 'Nigerian Makeup', 'Lash extensions', 'Lash disposables', 'Lash tools & accessories']
+    const allCategories = (await pool.query('SELECT id, name FROM categories ORDER BY id ASC')).rows
+    const assignedIds = new Set()
+    for (let i = 0; i < desiredOrder.length; i++) {
+      const match = allCategories.find(c => c.name.toLowerCase() === desiredOrder[i].toLowerCase())
+      if (match) {
+        await pool.query('UPDATE categories SET position = $1 WHERE id = $2', [i + 1, match.id])
+        assignedIds.add(match.id)
+      }
+    }
+    let nextPosition = desiredOrder.length + 1
+    for (const cat of allCategories) {
+      if (assignedIds.has(cat.id)) continue
+      await pool.query('UPDATE categories SET position = $1 WHERE id = $2', [nextPosition, cat.id])
+      nextPosition++
+    }
+    if (allCategories.length > 0) console.log('Initial category order set')
+  }
+
   // Seed roles if none exist
   const { rows: roleRows } = await pool.query('SELECT COUNT(*) FROM roles')
   if (parseInt(roleRows[0].count) === 0) {
