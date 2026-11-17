@@ -307,12 +307,13 @@ const UPLOAD_DIR = path.join(__dirname, 'uploads')
 const PRODUCT_DIR = path.join(UPLOAD_DIR, 'products')
 const CLASS_DIR = path.join(UPLOAD_DIR, 'classes')
 const GALLERY_DIR = path.join(UPLOAD_DIR, 'gallery')
+const CATEGORY_DIR = path.join(UPLOAD_DIR, 'categories')
 
-;[UPLOAD_DIR, PRODUCT_DIR, CLASS_DIR, GALLERY_DIR].forEach(dir => {
+;[UPLOAD_DIR, PRODUCT_DIR, CLASS_DIR, GALLERY_DIR, CATEGORY_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
 })
 
-const TYPE_DIRS = { products: PRODUCT_DIR, classes: CLASS_DIR, gallery: GALLERY_DIR }
+const TYPE_DIRS = { products: PRODUCT_DIR, classes: CLASS_DIR, gallery: GALLERY_DIR, categories: CATEGORY_DIR }
 
 // Matches only the exact type-id with any extension (e.g. "products-2.jpg"),
 // never a prefix collision like "products-1" matching "products-10.jpg".
@@ -2866,6 +2867,17 @@ app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner')
         invalidate: true,
         resource_type: 'auto',
       })
+      // A category's cover image lives directly on categories.image_url -
+      // never in media, which is keyed by (type, item_id) for everything
+      // else. It's a cover photo, not operational content, so it's never
+      // worth its own "Image uploaded" notification either.
+      if (type === 'categories') {
+        await pool.query(
+          'UPDATE categories SET image_url = $1, image_public_id = $2 WHERE id = $3',
+          [result.secure_url, result.public_id, id]
+        )
+        return res.json({ success: true, url: result.secure_url })
+      }
       await pool.query(
         `INSERT INTO media (type, item_id, url, public_id, resource_type, updated_at)
          VALUES ($1, $2, $3, $4, $5, NOW())
@@ -2885,6 +2897,10 @@ app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner')
       .filter(f => f !== req.file.filename)
       .forEach(f => { try { fs.unlinkSync(path.join(dir, f)) } catch {} })
     const url = `/uploads/${type}/${req.file.filename}`
+    if (type === 'categories') {
+      await pool.query('UPDATE categories SET image_url = $1, image_public_id = NULL WHERE id = $2', [url, id])
+      return res.json({ success: true, url })
+    }
     await addNotification('image', 'Image uploaded', `A new image was uploaded for ${type} (id: ${id}).`)
     res.json({ success: true, url })
   } catch (err) {
@@ -3015,10 +3031,14 @@ app.get('/api/position/:type/:id', async (req, res) => {
 })
 
 // ── Categories ────────────────────────────────────────────────────────────────
+const serializeCategory = (r) => ({
+  id: r.id, name: r.name, position: r.position, imageUrl: r.image_url, createdAt: r.created_at,
+})
+
 app.get('/api/categories', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM categories ORDER BY id ASC')
-    res.json(result.rows.map(r => ({ id: r.id, name: r.name, createdAt: r.created_at })))
+    const result = await pool.query('SELECT * FROM categories ORDER BY position ASC NULLS LAST, id ASC')
+    res.json(result.rows.map(serializeCategory))
   } catch {
     res.json([])
   }
@@ -3029,25 +3049,98 @@ app.post('/api/categories', authenticate, requireRole('sysadmin', 'owner'), asyn
   if (!name || !name.trim()) return res.status(400).json({ error: 'Category name is required' })
   const trimmed = name.trim()
   try {
+    // New sections go to the end of the shop-by-category order - a
+    // sysadmin/owner can move them with the up/down buttons afterwards.
     const result = await pool.query(
-      'INSERT INTO categories (name) VALUES ($1) RETURNING *',
+      `INSERT INTO categories (name, position)
+       VALUES ($1, (SELECT COALESCE(MAX(position), 0) + 1 FROM categories))
+       RETURNING *`,
       [trimmed]
     )
     await addNotification('section', 'Section created',
       `A new product section "${trimmed}" was created.`)
-    res.status(201).json({ id: result.rows[0].id, name: result.rows[0].name })
+    res.status(201).json(serializeCategory(result.rows[0]))
   } catch (err) {
     if (err.code === '23505') return res.status(400).json({ error: 'A category with that name already exists' })
     res.status(500).json({ error: 'Failed to create category' })
   }
 })
 
+// Swaps this category's position with its neighbour above/below in the
+// current order. Normalises every category to sequential 1..N positions
+// first, so the swap is well-defined even if positions have gaps (a
+// category created before this feature shipped, etc).
+app.patch('/api/categories/:id/move', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { direction } = req.body
+  if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: 'direction must be up or down' })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const ordered = (await client.query(
+      'SELECT id FROM categories ORDER BY position ASC NULLS LAST, id ASC FOR UPDATE'
+    )).rows
+    const idx = ordered.findIndex(c => c.id === id)
+    if (idx === -1) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Category not found' })
+    }
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= ordered.length) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: `This section is already at the ${direction === 'up' ? 'top' : 'bottom'}` })
+    }
+    for (let i = 0; i < ordered.length; i++) {
+      await client.query('UPDATE categories SET position = $1 WHERE id = $2', [i + 1, ordered[i].id])
+    }
+    await client.query('UPDATE categories SET position = $1 WHERE id = $2', [swapIdx + 1, ordered[idx].id])
+    await client.query('UPDATE categories SET position = $1 WHERE id = $2', [idx + 1, ordered[swapIdx].id])
+    await client.query('COMMIT')
+    const result = await pool.query('SELECT * FROM categories ORDER BY position ASC NULLS LAST, id ASC')
+    res.json(result.rows.map(serializeCategory))
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to reorder category' })
+    await logError('PATCH /api/categories/:id/move', err, req)
+  } finally {
+    client.release()
+  }
+})
+
+app.delete('/api/categories/:id/image', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const id = parseInt(req.params.id)
+  try {
+    const result = await pool.query('SELECT image_url, image_public_id FROM categories WHERE id = $1', [id])
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Category not found' })
+    const { image_public_id: publicId } = result.rows[0]
+    if (isCloudinaryEnabled && publicId) {
+      await cloudinary.uploader.destroy(publicId)
+    } else if (!isCloudinaryEnabled) {
+      findFilesForId(CATEGORY_DIR, 'categories', id).forEach(f => {
+        try { fs.unlinkSync(path.join(CATEGORY_DIR, f)) } catch {}
+      })
+    }
+    await pool.query('UPDATE categories SET image_url = NULL, image_public_id = NULL WHERE id = $1', [id])
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to remove category image' })
+    await logError('DELETE /api/categories/:id/image', err, req)
+  }
+})
+
 app.delete('/api/categories/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const id = parseInt(req.params.id)
   try {
-    const catResult = await pool.query('SELECT name FROM categories WHERE id = $1', [id])
+    const catResult = await pool.query('SELECT name, image_public_id FROM categories WHERE id = $1', [id])
     if (catResult.rows.length === 0) return res.status(404).json({ error: 'Category not found' })
-    const name = catResult.rows[0].name
+    const { name, image_public_id: publicId } = catResult.rows[0]
+    if (isCloudinaryEnabled && publicId) {
+      try { await cloudinary.uploader.destroy(publicId) } catch {}
+    } else if (!isCloudinaryEnabled) {
+      findFilesForId(CATEGORY_DIR, 'categories', id).forEach(f => {
+        try { fs.unlinkSync(path.join(CATEGORY_DIR, f)) } catch {}
+      })
+    }
     await pool.query('DELETE FROM categories WHERE id = $1', [id])
     await addNotification('section', 'Section removed',
       `The product section "${name}" was removed.`)

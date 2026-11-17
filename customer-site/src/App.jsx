@@ -250,6 +250,14 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 // need the API host in front of them.
 const mediaUrl = (url) => (url && /^https?:\/\//.test(url) ? url : `${API}${url}`)
 
+// For #shop-<slug> deep links - a simple, stable slug from a category name
+// ("Lash tools & accessories" -> "lash-tools-accessories").
+const slugify = (name) => String(name || '')
+  .toLowerCase()
+  .trim()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '')
+
 // Matches the backend's DELIVERY_FEE - used here only to show a live order
 // summary before checkout; the server always computes the real charge.
 const DELIVERY_FEE = 120
@@ -457,6 +465,12 @@ function App() {
   const [galleryImages, setGalleryImages] = useState([])
   const [categories, setCategories] = useState([])
   const [productCategories, setProductCategories] = useState({})
+  // "Shop by category" grid - only one category's products expanded at a
+  // time, directly under the grid row it's in (see shopColumns below).
+  const [expandedCategoryId, setExpandedCategoryId] = useState(null)
+  const [shopColumns, setShopColumns] = useState(2)
+  const expandedPanelRef = useRef(null)
+  const hashHandledRef = useRef(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [expandedClassId, setExpandedClassId] = useState(null)
@@ -497,6 +511,47 @@ function App() {
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
   }, [])
+
+  // Mirrors the .category-grid column counts in the stylesheet below - kept
+  // in JS too so the expanded category panel can be inserted right after
+  // the last card of whichever row it belongs to.
+  useEffect(() => {
+    const computeColumns = () => {
+      const w = window.innerWidth
+      setShopColumns(w <= 768 ? 2 : w <= 1100 ? 3 : 4)
+    }
+    computeColumns()
+    window.addEventListener('resize', computeColumns)
+    return () => window.removeEventListener('resize', computeColumns)
+  }, [])
+
+  // Smooth-scrolls the expanded category's products into view - for a
+  // #shop-<slug> deep link landing straight on a closed grid, and for
+  // tapping a card lower down the page on mobile.
+  useEffect(() => {
+    if (!expandedCategoryId) return
+    const frame = requestAnimationFrame(() => {
+      expandedPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [expandedCategoryId])
+
+  // Supports #shop-<category-slug> links opening straight to that
+  // category's products - checked once categories have loaded.
+  useEffect(() => {
+    if (hashHandledRef.current || categories.length === 0) return
+    const match = window.location.hash.match(/^#shop-(.+)$/)
+    if (match) {
+      const slug = match[1]
+      if (slug === 'other-products') {
+        setExpandedCategoryId('other')
+      } else {
+        const target = categories.find(c => slugify(c.name) === slug)
+        if (target) setExpandedCategoryId(target.id)
+      }
+    }
+    hashHandledRef.current = true
+  }, [categories])
 
   // Wakes a sleeping Render backend before we rely on it for anything. The
   // rest of the page (hero, about, training, contact, policies) is static
@@ -1575,6 +1630,115 @@ function App() {
           50% { opacity: 0.45; }
         }
 
+        /* Shop by category */
+        .category-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 20px;
+          max-width: 1200px;
+          margin: 0 auto;
+        }
+
+        @media (max-width: 1100px) {
+          .category-grid { grid-template-columns: repeat(3, 1fr) !important; }
+        }
+
+        @media (max-width: 768px) {
+          .category-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 14px !important; }
+        }
+
+        .category-card {
+          background: #FFFFFF;
+          border: 2px solid #F5DDE2;
+          border-radius: 16px;
+          overflow: hidden;
+          cursor: pointer;
+          padding: 0;
+          font-family: inherit;
+          text-align: center;
+          box-shadow: 0 2px 16px rgba(196, 122, 138, 0.10);
+          transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .category-card:hover {
+          transform: translateY(-2px);
+        }
+
+        .category-card-open {
+          border-color: #C47A8A;
+          box-shadow: 0 4px 20px rgba(196, 122, 138, 0.3);
+        }
+
+        .category-card-image {
+          height: 150px;
+          background-color: #FADADD;
+          background-size: cover;
+          background-position: center;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .category-card-logo {
+          height: 46px;
+          width: auto;
+          opacity: 0.85;
+        }
+
+        .category-card-name {
+          padding: 12px 8px;
+          font-weight: 700;
+          font-size: 15px;
+          color: #C47A8A;
+          letter-spacing: 0.3px;
+        }
+
+        @media (max-width: 768px) {
+          .category-card-image { height: 100px !important; }
+          .category-card-logo { height: 34px !important; }
+          .category-card-name { font-size: 13px !important; padding: 10px 6px !important; }
+        }
+
+        .category-expanded-panel {
+          grid-column: 1 / -1;
+          background: #FDF6F4;
+          border-radius: 16px;
+          padding: 24px;
+          margin: -4px 0 8px 0;
+          text-align: left;
+        }
+
+        .category-expanded-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          margin-bottom: 20px;
+          gap: 12px;
+        }
+
+        .category-expanded-header h3 {
+          font-family: 'Cormorant Garamond', serif;
+          font-size: 26px;
+          font-weight: 700;
+          color: #2C2C2C;
+        }
+
+        .show-less-link {
+          background: none;
+          border: none;
+          color: #C47A8A;
+          font-weight: 700;
+          font-size: 14px;
+          cursor: pointer;
+          text-decoration: underline;
+          white-space: nowrap;
+          font-family: inherit;
+        }
+
+        @media (max-width: 768px) {
+          .category-expanded-panel { padding: 16px !important; }
+        }
+
         /* Products */
         .products-grid {
           display: grid;
@@ -2185,56 +2349,95 @@ function App() {
       <section id="shop" className="section products-section">
         <h2 className="section-heading">{siteContent.sectionHeadings.products}</h2>
         {backendStatus !== 'ready' ? renderBackendStatus() : (() => {
-          const grouped = []
+          // Categories already come back from the API in their saved
+          // "Shop by category" order - only ones with at least one active
+          // product (already the only kind the public /api/products
+          // returns) get a card.
+          const shopCategories = categories
+            .map(cat => ({
+              id: cat.id,
+              name: cat.name,
+              imageUrl: cat.imageUrl,
+              products: products.filter(p => productCategories[p.id] === cat.id),
+            }))
+            .filter(group => group.products.length > 0)
 
-          // Add categorised groups in order
-          categories.forEach(cat => {
-            const catProducts = products.filter(p => productCategories[p.id] === cat.id)
-            if (catProducts.length > 0) {
-              grouped.push({ id: cat.id, name: cat.name, products: catProducts })
-            }
+          const uncategorisedProducts = products.filter(p => {
+            const catId = productCategories[p.id]
+            return !catId || !categories.some(c => c.id === catId)
           })
-
-          // Add uncategorised products at the end
-          const uncategorised = products.filter(p => !productCategories[p.id])
-          if (uncategorised.length > 0) {
-            grouped.push({ id: 'uncategorised', name: null, products: uncategorised })
+          if (uncategorisedProducts.length > 0) {
+            shopCategories.push({ id: 'other', name: 'Other products', imageUrl: null, products: uncategorisedProducts })
           }
 
-          // If no categories loaded yet, show all products flat (fallback)
-          if (grouped.length === 0) {
-            return (
+          // Categories failed to load, or none have an active product yet,
+          // but there are still products - show them in one flat grid
+          // rather than an empty section.
+          if (shopCategories.length === 0) {
+            return products.length === 0 ? null : (
               <div className="product-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '24px', textAlign: 'left', alignItems: 'start' }}>
                 {products.map(product => renderProductCard(product))}
               </div>
             )
           }
 
-          return grouped.map(group => (
-            <div key={group.id} style={{ marginBottom: '48px', textAlign: 'left' }}>
-              {group.name && (
-                <div style={{ marginBottom: '20px', paddingLeft: '8px' }}>
-                  <h3 style={{
-                    fontFamily: "'Cormorant Garamond', serif",
-                    fontSize: '24px',
-                    fontWeight: '700',
-                    color: '#2C2C2C',
-                    marginBottom: '6px',
-                    letterSpacing: '0.3px',
-                  }}>{group.name}</h3>
-                  <div style={{ width: '28px', height: '2px', background: '#C47A8A', marginLeft: '2px' }} />
+          const expandedIndex = expandedCategoryId != null
+            ? shopCategories.findIndex(c => c.id === expandedCategoryId)
+            : -1
+          const toggleCategory = (id) => setExpandedCategoryId(prev => (prev === id ? null : id))
+
+          const cards = []
+          shopCategories.forEach((cat, index) => {
+            const isOpen = index === expandedIndex
+            const coverImage = cat.imageUrl || productImages[cat.products[0]?.id] || null
+            cards.push(
+              <button
+                key={cat.id}
+                type="button"
+                className={`category-card${isOpen ? ' category-card-open' : ''}`}
+                onClick={() => toggleCategory(cat.id)}
+              >
+                <div
+                  className="category-card-image"
+                  style={coverImage ? { backgroundImage: `url(${mediaUrl(coverImage)})` } : undefined}
+                >
+                  {!coverImage && <img src="/logo.png" alt="" className="category-card-logo" />}
                 </div>
-              )}
-              <div className="product-grid" style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '24px',
-                alignItems: 'start',
-              }}>
-                {group.products.map(product => renderProductCard(product))}
-              </div>
-            </div>
-          ))
+                <div className="category-card-name">{cat.name}</div>
+              </button>
+            )
+
+            // Once we reach the last card of the row the open category is
+            // in, insert its products directly after - same row, any
+            // column width.
+            if (expandedIndex !== -1) {
+              const rowStart = Math.floor(expandedIndex / shopColumns) * shopColumns
+              const rowEnd = Math.min(rowStart + shopColumns - 1, shopCategories.length - 1)
+              if (index === rowEnd) {
+                const openCategory = shopCategories[expandedIndex]
+                cards.push(
+                  <div key={`expanded-${openCategory.id}`} className="category-expanded-panel" ref={expandedPanelRef}>
+                    <div className="category-expanded-header">
+                      <h3>{openCategory.name}</h3>
+                      <button type="button" className="show-less-link" onClick={() => setExpandedCategoryId(null)}>
+                        Show less
+                      </button>
+                    </div>
+                    <div className="product-grid" style={{
+                      display: 'grid',
+                      gridTemplateColumns: `repeat(${shopColumns}, 1fr)`,
+                      gap: '24px',
+                      alignItems: 'start',
+                    }}>
+                      {openCategory.products.map(product => renderProductCard(product))}
+                    </div>
+                  </div>
+                )
+              }
+            }
+          })
+
+          return <div className="category-grid">{cards}</div>
         })()}
       </section>
 
