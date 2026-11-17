@@ -33,6 +33,9 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [paymentsDraft, setPaymentsDraft] = useState({ ozowEnabled: true, payflexEnabled: true })
   const [paymentSwitchesSaving, setPaymentSwitchesSaving] = useState(false)
   const [paymentSwitchesMsg, setPaymentSwitchesMsg] = useState('')
+  const [showTestDataDraft, setShowTestDataDraft] = useState(false)
+  const [showTestDataSaving, setShowTestDataSaving] = useState(false)
+  const [showTestDataMsg, setShowTestDataMsg] = useState('')
 
   // Payments monitor
   const [paymentRows, setPaymentRows] = useState([])
@@ -238,6 +241,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
         setSystemSettings(data)
         setMaintenanceDraft({ enabled: data.maintenance.enabled, message: data.maintenance.message })
         setPaymentsDraft({ ozowEnabled: data.payments.ozow.enabled, payflexEnabled: data.payments.payflex.enabled })
+        setShowTestDataDraft(!!data.showTestData?.enabled)
       }
     } catch {}
   }
@@ -280,6 +284,27 @@ export default function SysAdminDashboard({ user, onLogout }) {
       setPaymentSwitchesMsg('Failed to update payment switches.')
     } finally {
       setPaymentSwitchesSaving(false)
+    }
+  }
+
+  const saveShowTestData = async (enabled) => {
+    setShowTestDataSaving(true)
+    setShowTestDataMsg('')
+    try {
+      const res = await fetch(`${API}/api/admin/system/show-test-data`, {
+        method: 'PUT',
+        headers: getHeaders(),
+        body: JSON.stringify({ enabled }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setShowTestDataMsg(data.error || 'Failed to update this setting.'); return }
+      setShowTestDataDraft(enabled)
+      setShowTestDataMsg(`Show test data is now ${enabled ? 'ON' : 'OFF'}.`)
+      fetchSystemSettings()
+    } catch {
+      setShowTestDataMsg('Failed to update this setting.')
+    } finally {
+      setShowTestDataSaving(false)
     }
   }
 
@@ -1012,6 +1037,25 @@ export default function SysAdminDashboard({ user, onLogout }) {
                   </button>
                   {paymentSwitchesMsg && (
                     <div style={{ fontSize: 13, fontWeight: 600, marginTop: 12, color: paymentSwitchesMsg.includes('saved') ? '#2E7D32' : '#C47A8A' }}>{paymentSwitchesMsg}</div>
+                  )}
+                </div>
+
+                <div className="sa-panel" style={{ maxWidth: 560 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20' }}>Show test data in the owner dashboard</div>
+                    <button
+                      className={showTestDataDraft ? 'sa-btn' : 'sa-btn-secondary'}
+                      disabled={showTestDataSaving}
+                      onClick={() => saveShowTestData(!showTestDataDraft)}
+                    >
+                      {showTestDataDraft ? 'On' : 'Off'}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 13, color: '#9A8A8E', marginTop: 10 }}>
+                    Turn this off before launch so Retha's figures only show real customers.
+                  </div>
+                  {showTestDataMsg && (
+                    <div style={{ fontSize: 13, fontWeight: 600, marginTop: 12, color: showTestDataMsg.includes('now') ? '#2E7D32' : '#C47A8A' }}>{showTestDataMsg}</div>
                   )}
                 </div>
               </div>
