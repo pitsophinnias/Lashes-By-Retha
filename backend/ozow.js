@@ -1,6 +1,6 @@
 const crypto = require('crypto')
 const { pool } = require('./db')
-const { applyOrderOutcome, applyStudentOutcome } = require('./paymentOutcomes')
+const { applyOrderOutcome, applyStudentOutcome, applyPreorderOutcome } = require('./paymentOutcomes')
 
 const OZOW_SITE_CODE = process.env.OZOW_SITE_CODE || ''
 const OZOW_PRIVATE_KEY = process.env.OZOW_PRIVATE_KEY || ''
@@ -190,6 +190,7 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
     const client = await pool.connect()
     let paidOrder = null
     let paidStudent = null
+    let paidPreorder = null
     try {
       await client.query('BEGIN')
 
@@ -208,6 +209,8 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
         // attempt twice if Ozow's notification is ever delivered more than
         // once for an attempt we already marked paid.
         paidStudent = await applyStudentOutcome(client, payment)
+      } else if (payment.preorder_id && isPaid && payment.status !== 'paid') {
+        paidPreorder = await applyPreorderOutcome(client, payment)
       }
 
       await client.query('COMMIT')
@@ -230,6 +233,18 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
       await notifyAdmin('section', 'New training payment',
         `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`,
         { studentId: paidStudent.id })
+    }
+    if (paidPreorder) {
+      const productName = paidPreorder.product ? paidPreorder.product.name : 'their pre-order'
+      if (paidPreorder.justPaidInFull) {
+        await notifyAdmin('order', 'Pre-order paid in full',
+          `${paidPreorder.preorder.customer_name} paid the balance on "${productName}" (R${parseFloat(payment.amount).toFixed(2)}). Order #${paidPreorder.orderId} is ready to confirm and pack.`,
+          { orderId: paidPreorder.orderId })
+      } else if (paidPreorder.justDepositPaid) {
+        await notifyAdmin('order', 'Pre-order deposit received',
+          `${paidPreorder.preorder.customer_name} paid a deposit for "${productName}" (R${parseFloat(payment.amount).toFixed(2)}).`,
+          { preorderId: paidPreorder.preorder.id })
+      }
     }
   } catch (err) {
     console.error('reconcileOzowPayment failed:', err.message)

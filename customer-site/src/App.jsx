@@ -134,6 +134,24 @@ const POLICIES = {
       body: "We understand that plans change. If you let us know at least 48 hours before your course starts, we'll gladly move you to another available date and your deposit will carry over. If you cancel or postpone with less than 48 hours' notice, or don't attend, your deposit will unfortunately be forfeited.",
     },
   ],
+  preorders: [
+    {
+      heading: 'Securing Your Pre-order',
+      body: "Pre-orders are paid with Ozow, straight from your own banking app. Your deposit secures your item and is deducted from the price, so you only ever pay the difference as your balance.",
+    },
+    {
+      heading: 'Paying The Balance',
+      body: "Once your item has arrived at the studio, we'll send you a link to pay the balance online with Ozow. Pre-orders are usually ready in 14 to 21 days from the day your deposit is paid.",
+    },
+    {
+      heading: 'Refunds',
+      body: "Your deposit is non-refundable if you simply change your mind. However, it's refunded in full if we're unable to supply your item, or if you'd like a refund after 21 days and we haven't yet sent your order to you. Once your order has been sent by courier within South Africa, it can no longer be refunded.",
+    },
+    {
+      heading: "We'll Keep You Updated",
+      body: "We'll keep you updated on WhatsApp if anything changes with your pre-order.",
+    },
+  ],
   privacy: [
     {
       heading: 'Your Privacy Matters',
@@ -502,6 +520,28 @@ function App() {
   const [enrolmentResult, setEnrolmentResult] = useState(null)
   const [enrolmentResultLoading, setEnrolmentResultLoading] = useState(false)
   const [enrolPendingPollCount, setEnrolPendingPollCount] = useState(0)
+
+  // ── Pre-orders ────────────────────────────────────────────────────────────
+  const [preorderLeadTime, setPreorderLeadTime] = useState({ minDays: 14, maxDays: 21 })
+  const [preorderFormOpenFor, setPreorderFormOpenFor] = useState(null) // product id, or null
+  const [preorderName, setPreorderName] = useState('')
+  const [preorderPhone, setPreorderPhone] = useState('')
+  const [preorderPhoneTouched, setPreorderPhoneTouched] = useState(false)
+  const [preorderEmail, setPreorderEmail] = useState('')
+  const [preorderEmailTouched, setPreorderEmailTouched] = useState(false)
+  const [preorderFulfilmentMethod, setPreorderFulfilmentMethod] = useState(null)
+  const [preorderDeliveryAddress, setPreorderDeliveryAddress] = useState('')
+  const [preorderDeliverySuburb, setPreorderDeliverySuburb] = useState('')
+  const [preorderDeliveryCity, setPreorderDeliveryCity] = useState('')
+  const [preorderDeliveryPostalCode, setPreorderDeliveryPostalCode] = useState('')
+  const [preorderDeliveryNotes, setPreorderDeliveryNotes] = useState('')
+  const [preorderAcceptedTerms, setPreorderAcceptedTerms] = useState(false)
+  const [preorderSubmitting, setPreorderSubmitting] = useState(false)
+  const [preorderError, setPreorderError] = useState('')
+  const [preorderResult, setPreorderResult] = useState(null)
+  const [preorderResultLoading, setPreorderResultLoading] = useState(false)
+  const [preorderPendingPollCount, setPreorderPendingPollCount] = useState(0)
+
   const bookingUrl = 'https://lashesbyretha.setmore.com'
 
   useEffect(() => {
@@ -620,6 +660,10 @@ function App() {
         },
       }))
       .catch(() => setPaymentOptions({ ozow: false, payflex: { enabled: false, minimumAmount: null, maximumAmount: null } }))
+    fetch(`${API}/api/preorder-settings`)
+      .then(r => r.json())
+      .then(data => { if (data?.minDays && data?.maxDays) setPreorderLeadTime(data) })
+      .catch(() => {})
     fetch(`${API}/api/courses`)
       .then(r => r.json())
       .then(data => {
@@ -653,6 +697,14 @@ function App() {
     return data
   }
 
+  // Looks up a pre-order by its token for the pre-order result/balance panel below.
+  const fetchPreorderByToken = async (token) => {
+    const res = await fetch(`${API}/api/preorders/by-token/${token}`)
+    const data = await res.json().catch(() => null)
+    if (!res.ok || !data) return null
+    return data
+  }
+
   // Reads ?payment=&order= (shop) or ?payment=&enrolment= left behind by a
   // provider redirect, or a bare ?enrolment= balance link Retha sends
   // directly (no payment= - there was no redirect), then removes it from
@@ -662,8 +714,17 @@ function App() {
     const payment = params.get('payment')
     const orderToken = params.get('order')
     const enrolmentToken = params.get('enrolment')
-    if (!payment && !enrolmentToken) return
+    const preorderToken = params.get('preorder')
+    if (!payment && !enrolmentToken && !preorderToken) return
     window.history.replaceState({}, '', window.location.pathname)
+    if (preorderToken) {
+      setPreorderResultLoading(true)
+      fetchPreorderByToken(preorderToken).then(data => {
+        setPreorderResult({ outcome: payment || null, data, token: preorderToken })
+        setPreorderResultLoading(false)
+      })
+      return
+    }
     if (enrolmentToken) {
       setEnrolmentResultLoading(true)
       fetchEnrolmentByToken(enrolmentToken).then(data => {
@@ -712,6 +773,20 @@ function App() {
     }, 5000)
     return () => clearTimeout(timer)
   }, [enrolmentResult, enrolPendingPollCount])
+
+  // Same pending re-check, for the pre-order result panel.
+  useEffect(() => {
+    if (!preorderResult || !preorderResult.token) return
+    const latestStatus = preorderResult.data?.latestStatus
+    const isPendingLike = latestStatus === 'pending' || latestStatus === 'started'
+    if (!isPendingLike || preorderPendingPollCount >= 12) return
+    const timer = setTimeout(async () => {
+      const data = await fetchPreorderByToken(preorderResult.token)
+      if (data) setPreorderResult(prev => (prev ? { ...prev, data } : prev))
+      setPreorderPendingPollCount(c => c + 1)
+    }, 5000)
+    return () => clearTimeout(timer)
+  }, [preorderResult, preorderPendingPollCount])
 
   // Product images and positions depend on the product list having loaded.
   useEffect(() => {
@@ -921,6 +996,11 @@ function App() {
     setEnrolPendingPollCount(0)
   }
 
+  const closePreorderResult = () => {
+    setPreorderResult(null)
+    setPreorderPendingPollCount(0)
+  }
+
   const openCourse = enrolFormOpenFor != null ? coursesMerged.find(c => c.id === enrolFormOpenFor) : null
   const normalisedEnrolPhone = normaliseSaPhone(enrolPhone)
   const enrolPhoneError = (enrolPhoneTouched && !normalisedEnrolPhone) ? SA_PHONE_ERROR : ''
@@ -1018,6 +1098,117 @@ function App() {
       console.error('Pay balance failed:', err)
       setEnrolError("I couldn't reach the shop just now. Please check your connection and try again.")
       setEnrolmentResultLoading(false)
+    }
+  }
+
+  // ── Pre-orders ────────────────────────────────────────────────────────────
+  const preorderProduct = preorderFormOpenFor != null ? products.find(p => p.id === preorderFormOpenFor) : null
+  const normalisedPreorderPhone = normaliseSaPhone(preorderPhone)
+  const preorderPhoneError = (preorderPhoneTouched && !normalisedPreorderPhone) ? SA_PHONE_ERROR : ''
+  const preorderEmailOk = !!preorderEmail.trim() && isValidEmail(preorderEmail)
+  const preorderEmailError = (preorderEmailTouched && !preorderEmailOk) ? EMAIL_ERROR : ''
+  const preorderDeliveryAddressComplete = !!(preorderDeliveryAddress.trim() && preorderDeliverySuburb.trim() &&
+    preorderDeliveryCity.trim() && preorderDeliveryPostalCode.trim())
+  const preorderDeliveryFeeApplicable = preorderFulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
+  const canSubmitPreorder = !!(preorderProduct && paymentOptions.ozow && preorderName.trim() && normalisedPreorderPhone &&
+    preorderEmailOk && preorderFulfilmentMethod && (preorderFulfilmentMethod === 'pickup' || preorderDeliveryAddressComplete) &&
+    preorderAcceptedTerms)
+
+  const closePreorderForm = () => {
+    setPreorderFormOpenFor(null)
+    setPreorderName('')
+    setPreorderPhone('')
+    setPreorderPhoneTouched(false)
+    setPreorderEmail('')
+    setPreorderEmailTouched(false)
+    setPreorderFulfilmentMethod(null)
+    setPreorderDeliveryAddress('')
+    setPreorderDeliverySuburb('')
+    setPreorderDeliveryCity('')
+    setPreorderDeliveryPostalCode('')
+    setPreorderDeliveryNotes('')
+    setPreorderAcceptedTerms(false)
+    setPreorderError('')
+  }
+
+  const submitPreorder = async () => {
+    setPreorderPhoneTouched(true)
+    setPreorderEmailTouched(true)
+    if (!canSubmitPreorder) return
+    setPreorderError('')
+    setPreorderSubmitting(true)
+    try {
+      const res = await fetch(`${API}/api/preorders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: preorderProduct.id,
+          name: preorderName,
+          phone: preorderPhone,
+          email: preorderEmail,
+          fulfilmentMethod: preorderFulfilmentMethod,
+          deliveryAddress: preorderFulfilmentMethod === 'delivery' ? preorderDeliveryAddress : undefined,
+          deliverySuburb: preorderFulfilmentMethod === 'delivery' ? preorderDeliverySuburb : undefined,
+          deliveryCity: preorderFulfilmentMethod === 'delivery' ? preorderDeliveryCity : undefined,
+          deliveryPostalCode: preorderFulfilmentMethod === 'delivery' ? preorderDeliveryPostalCode : undefined,
+          deliveryNotes: preorderFulfilmentMethod === 'delivery' ? preorderDeliveryNotes : undefined,
+          acceptedTerms: preorderAcceptedTerms,
+        }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.success) {
+        setPreorderError(data?.error || "I couldn't start your pre-order just now. Please try again in a moment.")
+        setPreorderSubmitting(false)
+        return
+      }
+      if (data.action && data.fields) submitOzowForm(data.action, data.fields)
+    } catch (err) {
+      console.error('Pre-order failed:', err)
+      setPreorderError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setPreorderSubmitting(false)
+    }
+  }
+
+  // Retries the deposit payment exactly as it was - for when it was
+  // cancelled or failed before anything was paid.
+  const retryPreorderPayment = async () => {
+    if (!preorderResult?.token) return
+    setPreorderError('')
+    setPreorderResultLoading(true)
+    try {
+      const res = await fetch(`${API}/api/preorders/${preorderResult.token}/retry`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setPreorderError(data?.error || "I couldn't retry that payment just now. Please try again.")
+        setPreorderResultLoading(false)
+        return
+      }
+      if (data.action && data.fields) submitOzowForm(data.action, data.fields)
+    } catch (err) {
+      console.error('Retry pre-order payment failed:', err)
+      setPreorderError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setPreorderResultLoading(false)
+    }
+  }
+
+  // Starts the balance payment, once the item has arrived.
+  const payPreorderBalance = async () => {
+    if (!preorderResult?.token) return
+    setPreorderError('')
+    setPreorderResultLoading(true)
+    try {
+      const res = await fetch(`${API}/api/preorders/${preorderResult.token}/pay-balance`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        setPreorderError(data?.error || "I couldn't start that payment just now. Please try again.")
+        setPreorderResultLoading(false)
+        return
+      }
+      if (data.action && data.fields) submitOzowForm(data.action, data.fields)
+    } catch (err) {
+      console.error('Pay pre-order balance failed:', err)
+      setPreorderError("I couldn't reach the shop just now. Please check your connection and try again.")
+      setPreorderResultLoading(false)
     }
   }
 
@@ -1151,7 +1342,52 @@ function App() {
     else if (paymentMethod === 'ozow') startOzowPayment()
   }
 
+  // A pre-order product never takes stock/cart logic - it always shows its
+  // own badge, lead time and a Pre-order button in place of Add to Cart.
+  const renderPreorderCard = (product) => (
+    <div className="product-card" key={product.id}>
+      <div style={{ height: '240px', overflow: 'hidden', position: 'relative' }}>
+        {productImages[product.id] ? (
+          <img
+            className="product-img"
+            src={mediaUrl(productImages[product.id])}
+            alt={product.name}
+            style={{
+              width: '100%', height: '240px', objectFit: 'cover', display: 'block',
+              objectPosition: productPositions[product.id]
+                ? `${productPositions[product.id].x}% ${productPositions[product.id].y}%`
+                : '50% 50%',
+            }}
+          />
+        ) : (
+          <div className="product-image-placeholder">Product Image</div>
+        )}
+      </div>
+      <div className="product-card-body" style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <span className="product-badge" style={{ marginBottom: '8px', background: '#6A1B9A' }}>Pre-order</span>
+        <h3 className="product-name">{product.name}</h3>
+        <p className="product-description">{product.description}</p>
+        <div className="product-detail-line" style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
+          {product.detail}
+        </div>
+        <p className="product-price">R {product.price}</p>
+        <div style={{ fontSize: '12px', color: '#7A6670', marginBottom: '12px' }}>
+          Ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days
+        </div>
+        <button
+          className="btn-add-cart add-to-cart-btn"
+          onClick={() => setPreorderFormOpenFor(product.id)}
+          disabled={!paymentOptions.ozow}
+          style={!paymentOptions.ozow ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+        >
+          Pre-order
+        </button>
+      </div>
+    </div>
+  )
+
   const renderProductCard = (product) => {
+    if (product.preorderEnabled) return renderPreorderCard(product)
     const hasOptions = product.options && product.options.length > 0
     const sel = selectedOptions[product.id] || {}
     const lengths = hasOptions ? [...new Set(product.options.map(o => o.lengthMm))].sort((a, b) => a - b) : []
@@ -2863,6 +3099,234 @@ function App() {
         )
       })()}
 
+      {preorderFormOpenFor != null && preorderProduct && (() => {
+        const fieldStyle = (error) => ({
+          width: '100%', padding: '12px 14px', borderRadius: '10px',
+          border: `1px solid ${error ? '#C47A8A' : '#F5DDE2'}`, fontSize: '14px',
+          marginBottom: error ? '6px' : '12px', background: 'white', color: '#2C2C2C',
+          fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
+        })
+        const balancePreview = Math.max(0, parseFloat(preorderProduct.price) + preorderDeliveryFeeApplicable - parseFloat(preorderProduct.preorderDeposit))
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.5)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+            <div style={{ position: 'relative', background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '440px', width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+              <button
+                onClick={closePreorderForm}
+                style={{ position: 'absolute', top: '16px', right: '16px', background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#7A6670' }}
+              >
+                x
+              </button>
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '4px' }}>
+                Pre-order {preorderProduct.name}
+              </div>
+              <p style={{ fontSize: '13px', color: '#9A7A82', marginTop: 0, marginBottom: '16px' }}>
+                Price R{preorderProduct.price} · Deposit R{preorderProduct.preorderDeposit} · Ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days
+              </p>
+
+              <input
+                type="text"
+                placeholder="Full name"
+                value={preorderName}
+                onChange={(e) => setPreorderName(e.target.value)}
+                style={fieldStyle(false)}
+              />
+              <input
+                type="tel"
+                inputMode="tel"
+                placeholder="e.g. 082 123 4567"
+                value={preorderPhone}
+                onChange={(e) => setPreorderPhone(e.target.value)}
+                onBlur={() => setPreorderPhoneTouched(true)}
+                style={fieldStyle(preorderPhoneError)}
+              />
+              {preorderPhoneError && renderFieldError(preorderPhoneError)}
+              <input
+                type="email"
+                inputMode="email"
+                placeholder="Your email address"
+                value={preorderEmail}
+                onChange={(e) => setPreorderEmail(e.target.value)}
+                onBlur={() => setPreorderEmailTouched(true)}
+                style={fieldStyle(preorderEmailError)}
+              />
+              {preorderEmailError && renderFieldError(preorderEmailError)}
+
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 700, color: '#2C2C2C', margin: '8px 0 12px' }}>
+                Delivery or Pickup
+              </div>
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+                {['delivery', 'pickup'].map((method) => (
+                  <button
+                    key={method}
+                    type="button"
+                    onClick={() => setPreorderFulfilmentMethod(method)}
+                    style={{
+                      flex: 1, padding: '12px', borderRadius: '10px', fontSize: '14px', fontWeight: 700, textTransform: 'capitalize',
+                      border: `1px solid ${preorderFulfilmentMethod === method ? '#C47A8A' : '#F5DDE2'}`,
+                      background: preorderFulfilmentMethod === method ? '#C47A8A' : 'white',
+                      color: preorderFulfilmentMethod === method ? 'white' : '#2C2C2C',
+                      cursor: 'pointer', fontFamily: 'inherit',
+                    }}
+                  >
+                    {method}
+                  </button>
+                ))}
+              </div>
+
+              {preorderFulfilmentMethod === 'delivery' && (
+                <div style={{ marginBottom: '16px' }}>
+                  <input type="text" placeholder="Street address" value={preorderDeliveryAddress} onChange={(e) => setPreorderDeliveryAddress(e.target.value)} style={fieldStyle(false)} />
+                  <input type="text" placeholder="Suburb" value={preorderDeliverySuburb} onChange={(e) => setPreorderDeliverySuburb(e.target.value)} style={fieldStyle(false)} />
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+                    <input type="text" placeholder="Town or city" value={preorderDeliveryCity} onChange={(e) => setPreorderDeliveryCity(e.target.value)} style={{ ...fieldStyle(false), flex: 1, marginBottom: 0 }} />
+                    <input type="text" placeholder="Postal code" value={preorderDeliveryPostalCode} onChange={(e) => setPreorderDeliveryPostalCode(e.target.value)} style={{ ...fieldStyle(false), width: '120px', marginBottom: 0 }} />
+                  </div>
+                  <input type="text" placeholder="Delivery notes (optional)" value={preorderDeliveryNotes} onChange={(e) => setPreorderDeliveryNotes(e.target.value)} style={{ ...fieldStyle(false), marginBottom: 0 }} />
+                </div>
+              )}
+              {preorderFulfilmentMethod === 'pickup' && (
+                <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '14px 18px', marginBottom: '16px', border: '1px solid #F5DDE2' }}>
+                  <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7 }}>Pickup from {PICKUP_ADDRESS}</div>
+                  <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.7 }}>{PICKUP_HOURS}</div>
+                </div>
+              )}
+
+              {preorderFulfilmentMethod && (
+                <p style={{ fontSize: '13px', color: '#2C2C2C', fontWeight: 600, marginBottom: '16px' }}>
+                  Balance of R{balancePreview.toFixed(2)} payable once your item arrives.
+                </p>
+              )}
+
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 700, color: '#2C2C2C', margin: '8px 0 12px' }}>
+                How You'll Pay
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '10px', border: '1px solid #F5DDE2', background: 'white', marginBottom: '6px' }}>
+                {OZOW_ICON}
+              </div>
+              <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '0', marginBottom: '16px', lineHeight: 1.6 }}>
+                Pay securely from your own banking app.
+              </p>
+
+              {!paymentOptions.ozow && (
+                <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '16px 20px', marginBottom: '16px', border: '1px solid #F5DDE2' }}>
+                  <p style={{ fontSize: '13px', color: '#2C2C2C', margin: 0, lineHeight: 1.7 }}>
+                    Online payments are taking a short break. Please message us on{' '}
+                    <a href={whatsAppHref(siteContent.contact.phone)} target="_blank" rel="noopener noreferrer" style={{ color: '#C47A8A', fontWeight: 600 }}>
+                      WhatsApp at {localPhoneDisplay(siteContent.contact.phone)}
+                    </a>{' '}and we'll gladly help you secure your pre-order.
+                  </p>
+                </div>
+              )}
+
+              <label style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', marginBottom: '16px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={preorderAcceptedTerms}
+                  onChange={(e) => setPreorderAcceptedTerms(e.target.checked)}
+                  style={{ marginTop: '3px' }}
+                />
+                <span style={{ fontSize: '12px', color: '#7A6670', lineHeight: 1.6 }}>
+                  I understand my R{preorderProduct.preorderDeposit} deposit secures my order and is non-refundable if I change my mind.
+                  My deposit will be refunded in full if Hair By Her is unable to supply my item, or if it hasn't been sent to me within{' '}
+                  {preorderLeadTime.maxDays} days of my deposit being paid. Once my order has been sent, it can no longer be refunded.
+                </span>
+              </label>
+
+              {preorderError && renderFieldError(preorderError)}
+
+              <button
+                onClick={submitPreorder}
+                disabled={!canSubmitPreorder || preorderSubmitting}
+                style={{
+                  width: '100%', background: '#C47A8A', color: 'white', border: 'none', borderRadius: '24px',
+                  padding: '14px 22px', fontSize: '15px', fontWeight: 700, fontFamily: 'inherit',
+                  cursor: (!canSubmitPreorder || preorderSubmitting) ? 'not-allowed' : 'pointer',
+                  opacity: (!canSubmitPreorder || preorderSubmitting) ? 0.6 : 1,
+                }}
+              >
+                {preorderSubmitting ? 'Taking you to Ozow...' : `Pay R${preorderProduct.preorderDeposit} deposit with Ozow`}
+              </button>
+            </div>
+          </div>
+        )
+      })()}
+
+      {preorderResult && (() => {
+        const data = preorderResult.data
+        const status = !data ? 'error'
+          : data.status === 'paid_in_full' || data.status === 'dispatched' || data.status === 'collected' ? 'paid_in_full'
+          : data.status === 'arrived' ? 'arrived'
+          : (data.latestStatus === 'cancelled' || data.latestStatus === 'failed') ? data.latestStatus
+          : 'pending'
+
+        const btnPrimary = {
+          background: '#C47A8A', color: 'white', border: 'none', borderRadius: '24px',
+          padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+        }
+        const btnSecondary = {
+          background: 'white', color: '#C47A8A', border: '1px solid #C47A8A', borderRadius: '24px',
+          padding: '12px 22px', fontSize: '14px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+        }
+        const heading = { fontFamily: "'Cormorant Garamond', serif", fontSize: '22px', fontWeight: 700, color: '#2C2C2C', marginBottom: '12px' }
+        const body = { fontSize: '14px', color: '#7A6670', lineHeight: 1.7, marginBottom: '20px' }
+
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.5)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+            <div style={{ background: '#FFFAF8', borderRadius: '16px', padding: '32px', maxWidth: '420px', width: '100%', boxShadow: '0 8px 32px rgba(44,44,44,0.2)' }}>
+              {preorderResultLoading ? (
+                <p style={{ fontSize: '14px', color: '#7A6670', textAlign: 'center', margin: 0 }}>
+                  Just a moment while we check on your payment...
+                </p>
+              ) : status === 'paid_in_full' ? (
+                <>
+                  <div style={heading}>Thank you!</div>
+                  <p style={body}>
+                    Your {data.productName} is paid in full. We'll be in touch about delivery or collection.
+                  </p>
+                  <button onClick={closePreorderResult} style={btnPrimary}>Close</button>
+                </>
+              ) : status === 'arrived' ? (
+                <>
+                  <div style={heading}>Your {data.productName} has arrived</div>
+                  <p style={body}>
+                    Your balance of R{data.balance.toFixed(2)} is ready to pay with Ozow.
+                  </p>
+                  {preorderError && renderFieldError(preorderError)}
+                  <button onClick={payPreorderBalance} style={btnPrimary}>Pay my balance with Ozow</button>
+                  <button onClick={closePreorderResult} style={{ ...btnSecondary, marginTop: '8px', marginLeft: '8px' }}>Close</button>
+                </>
+              ) : status === 'pending' ? (
+                <>
+                  <div style={heading}>Thank you, your pre-order is secured</div>
+                  <p style={body}>
+                    {data
+                      ? <>We've received your deposit of R{data.deposit.toFixed(2)} for {data.productName}. Your item will be ready by{' '}
+                          {data.promisedByDate ? new Date(data.promisedByDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'long', year: 'numeric' }) : 'the date we promised'}. We're still confirming your payment, this usually only takes a moment.</>
+                      : 'We are still confirming your payment.'}
+                  </p>
+                  <button onClick={closePreorderResult} style={btnSecondary}>Close</button>
+                </>
+              ) : (
+                <>
+                  <div style={heading}>
+                    {status === 'error' ? "We couldn't find that pre-order" : "It looks like your payment didn't go through"}
+                  </div>
+                  <p style={body}>
+                    Not to worry, your pre-order is still here for you. Please don't hesitate to try paying again.
+                  </p>
+                  {preorderError && renderFieldError(preorderError)}
+                  {data ? (
+                    <button onClick={retryPreorderPayment} style={btnPrimary}>Try paying again</button>
+                  ) : (
+                    <button onClick={closePreorderResult} style={btnPrimary}>Close</button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+
       <section id="gallery" className="section section-alt gallery-section">
         <h2 className="section-heading">{siteContent.sectionHeadings.gallery}</h2>
         <p className="section-text gallery-subheading">A glimpse of the sets we create</p>
@@ -3159,6 +3623,7 @@ function App() {
                 ['returns', 'Returns'],
                 ['delivery', 'Delivery'],
                 ['training', 'Lash Training'],
+                ['preorders', 'Pre-orders'],
                 ['privacy', 'Privacy'],
                 ['terms', 'Terms'],
               ].map(([tab, label]) => (

@@ -133,22 +133,24 @@ const withTimeout = (promise, ms) => Promise.race([
   new Promise((resolve) => setTimeout(resolve, ms)),
 ])
 
-// A payment row belongs to either an order or a student (training
-// enrolment) - looks up whichever public token it resolves to, and which
+// A payment row belongs to an order, a student (training enrolment) or a
+// pre-order - looks up whichever public token it resolves to, and which
 // query param name the customer site expects it back under. whereClause
 // must reference the payment row as "p".
 async function lookupPublicToken(table, whereClause, params) {
   const result = await pool.query(
-    `SELECT o.public_token AS order_token, s.public_token AS student_token
+    `SELECT o.public_token AS order_token, s.public_token AS student_token, pre.public_token AS preorder_token
      FROM ${table} p
      LEFT JOIN orders o ON o.id = p.order_id
      LEFT JOIN students s ON s.id = p.student_id
+     LEFT JOIN preorders pre ON pre.id = p.preorder_id
      WHERE ${whereClause}`,
     params
   )
   const row = result.rows[0]
   if (row?.order_token) return { param: 'order', token: row.order_token }
   if (row?.student_token) return { param: 'enrolment', token: row.student_token }
+  if (row?.preorder_token) return { param: 'preorder', token: row.preorder_token }
   return null
 }
 
@@ -374,14 +376,14 @@ const checkFileSize = (file) => {
 }
 
 // ── Notification helper ───────────────────────────────────────────────────────
-// orderId/studentId (optional) tag a notification to the order or student it
-// came from, so it can be hidden from owner/staff along with the rest of
-// that test order's or student's data - see canIncludeTestData.
-const addNotification = async (type, title, message, { orderId, studentId } = {}) => {
+// orderId/studentId/preorderId (optional) tag a notification to the order,
+// student or pre-order it came from, so it can be hidden from owner/staff
+// along with the rest of that test row's data - see canIncludeTestData.
+const addNotification = async (type, title, message, { orderId, studentId, preorderId } = {}) => {
   try {
     await pool.query(
-      'INSERT INTO notifications (type, title, message, order_id, student_id) VALUES ($1, $2, $3, $4, $5)',
-      [type, title, message, orderId || null, studentId || null]
+      'INSERT INTO notifications (type, title, message, order_id, student_id, preorder_id) VALUES ($1, $2, $3, $4, $5, $6)',
+      [type, title, message, orderId || null, studentId || null, preorderId || null]
     )
   } catch (err) {
     console.error('Failed to add notification:', err.message)
@@ -509,6 +511,10 @@ const markOrderTestIfNeeded = async (orderId, isTest) => {
 const markStudentTestIfNeeded = async (studentId, isTest) => {
   if (!isTest || !studentId) return
   await pool.query('UPDATE students SET is_test = TRUE WHERE id = $1', [studentId])
+}
+const markPreorderTestIfNeeded = async (preorderId, isTest) => {
+  if (!isTest || !preorderId) return
+  await pool.query('UPDATE preorders SET is_test = TRUE WHERE id = $1', [preorderId])
 }
 
 // Run once at startup (see start() below) to mark any order/student that
@@ -1070,6 +1076,7 @@ app.get('/api/admin/system/settings', authenticate, requireRole('sysadmin'), asy
         ozow: { enabled: settings.payments.ozowEnabled, configured: ozow.isOzowConfigured, isTest: ozow.OZOW_IS_TEST },
         payflex: { enabled: settings.payments.payflexEnabled, configured: payflex.isPayflexConfigured, isTest: payflex.PAYFLEX_IS_TEST },
       },
+      preorders: settings.preorders,
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch system settings' })
@@ -1121,6 +1128,42 @@ app.put('/api/admin/system/payments', authenticate, requireRole('sysadmin'), asy
   }
 })
 
+// Public - the customer site and the product editor's "ready in X to Y
+// days" note both need the current lead time, with no login required.
+app.get('/api/preorder-settings', async (req, res) => {
+  try {
+    const settings = await readSystemSettings()
+    res.json(settings.preorders)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch pre-order settings' })
+    await logError('GET /api/preorder-settings', err, req)
+  }
+})
+
+// Owner and sysadmin (not sysadmin-only, unlike maintenance/payments) - see
+// the "Pre-order settings" box on the Pre-orders page.
+app.put('/api/admin/system/preorders', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { minDays, maxDays } = req.body
+  const min = parseInt(minDays)
+  const max = parseInt(maxDays)
+  if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || min > 120 || max < 1 || max > 120) {
+    return res.status(400).json({ error: 'Lead time must be between 1 and 120 days' })
+  }
+  if (min > max) {
+    return res.status(400).json({ error: 'Minimum days cannot be more than maximum days' })
+  }
+  try {
+    const value = { minDays: min, maxDays: max }
+    await saveSystemSetting('preorders', value, req.user.id)
+    await addAuditLog(req.user.id, req.user.username, 'PREORDER_SETTINGS_CHANGED',
+      `Pre-order lead time set to ${min}-${max} days`, req.ip)
+    res.json(value)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update pre-order settings' })
+    await logError('PUT /api/admin/system/preorders', err, req)
+  }
+})
+
 // ── Payments monitor (sysadmin only) ─────────────────────────────────────────
 // A payment row belongs to either an order (shown as its order number, never
 // sensitive) or a training enrolment (shown as a masked student name - see
@@ -1130,9 +1173,12 @@ const formatPaymentRow = (row) => ({
   id: row.id,
   provider: row.provider,
   purpose: row.purpose,
-  identifier: row.order_id ? `Order #${row.order_id}` : maskName(row.student_name),
+  identifier: row.order_id
+    ? `Order #${row.order_id}`
+    : row.preorder_id ? `Pre-order #${row.preorder_id} (${maskName(row.preorder_customer_name)})` : maskName(row.student_name),
   orderId: row.order_id,
   studentId: row.student_id,
+  preorderId: row.preorder_id,
   amount: parseFloat(row.amount),
   status: row.status,
   isTest: row.is_test,
@@ -1152,13 +1198,14 @@ app.get('/api/admin/payments', authenticate, requireRole('sysadmin'), async (req
 
     const result = await pool.query(
       `SELECT * FROM (
-         SELECT 'ozow' AS provider, p.id, p.order_id, p.student_id, p.purpose, p.amount, p.status, p.is_test,
-                p.created_at, p.updated_at, s.name AS student_name
+         SELECT 'ozow' AS provider, p.id, p.order_id, p.student_id, p.preorder_id, p.purpose, p.amount, p.status, p.is_test,
+                p.created_at, p.updated_at, s.name AS student_name, pre.customer_name AS preorder_customer_name
          FROM ozow_payments p
          LEFT JOIN students s ON s.id = p.student_id
+         LEFT JOIN preorders pre ON pre.id = p.preorder_id
          UNION ALL
-         SELECT 'payflex' AS provider, p.id, p.order_id, p.student_id, p.purpose, p.amount, p.status,
-                $1::boolean AS is_test, p.created_at, p.updated_at, s.name AS student_name
+         SELECT 'payflex' AS provider, p.id, p.order_id, p.student_id, NULL::integer AS preorder_id, p.purpose, p.amount, p.status,
+                $1::boolean AS is_test, p.created_at, p.updated_at, s.name AS student_name, NULL::text AS preorder_customer_name
          FROM payflex_payments p
          LEFT JOIN students s ON s.id = p.student_id
        ) combined
@@ -1212,7 +1259,16 @@ app.post('/api/admin/payments/:provider/:id/recheck', authenticate, requireRole(
     }
 
     const refreshedResult = await pool.query(
-      `SELECT p.*, s.name AS student_name FROM ${table} p LEFT JOIN students s ON s.id = p.student_id WHERE p.id = $1`,
+      provider === 'ozow'
+        ? `SELECT p.*, s.name AS student_name, pre.customer_name AS preorder_customer_name
+           FROM ozow_payments p
+           LEFT JOIN students s ON s.id = p.student_id
+           LEFT JOIN preorders pre ON pre.id = p.preorder_id
+           WHERE p.id = $1`
+        : `SELECT p.*, s.name AS student_name, NULL::text AS preorder_customer_name
+           FROM payflex_payments p
+           LEFT JOIN students s ON s.id = p.student_id
+           WHERE p.id = $1`,
       [id]
     )
     const refreshed = refreshedResult.rows[0]
@@ -1433,6 +1489,10 @@ app.get('/api/admin/test-data', authenticate, requireRole('sysadmin'), async (re
       `SELECT s.*, c.name AS course_name FROM students s LEFT JOIN courses c ON c.id = s.class_id
        WHERE s.is_test = TRUE ORDER BY s.enrolled_at DESC`
     )
+    const preordersResult = await pool.query(
+      `SELECT pre.*, prod.name AS product_name FROM preorders pre JOIN products prod ON prod.id = pre.product_id
+       WHERE pre.is_test = TRUE ORDER BY pre.created_at DESC`
+    )
     const orders = ordersResult.rows.map(o => ({
       id: o.id, customerName: o.customer_name, total: parseFloat(o.total), status: o.status,
       paymentStatus: o.payment_status, paymentMethod: o.payment_method, createdAt: o.created_at,
@@ -1442,14 +1502,21 @@ app.get('/api/admin/test-data', authenticate, requireRole('sysadmin'), async (re
       id: s.id, name: s.name, courseName: s.course_name, status: s.status, paymentStatus: s.payment_status,
       amountPaid: parseFloat(s.amount_paid || 0), enrolledAt: s.enrolled_at,
     }))
+    const preorders = preordersResult.rows.map(p => ({
+      id: p.id, productName: p.product_name, status: p.status,
+      amountPaid: parseFloat(p.amount_paid || 0), createdAt: p.created_at,
+    }))
     res.json({
       orders,
       students,
+      preorders,
       totals: {
         orderCount: orders.length,
         studentCount: students.length,
+        preorderCount: preorders.length,
         orderTotal: orders.reduce((sum, o) => sum + o.total, 0),
         studentAmountPaid: students.reduce((sum, s) => sum + s.amountPaid, 0),
+        preorderAmountPaid: preorders.reduce((sum, p) => sum + p.amountPaid, 0),
       },
     })
   } catch (err) {
@@ -1501,7 +1568,13 @@ const deleteTestOrders = async (client, candidateIds, userId) => {
   const orderIds = testOrders.map(o => o.id)
   if (orderIds.length === 0) return { ordersDeleted: 0, stockRestoredMovements: 0, stockRestoredUnits: 0 }
 
-  const confirmedIds = testOrders.filter(o => o.status === 'confirmed').map(o => o.id)
+  // Orders created from a pre-order never had stock deducted when confirmed
+  // (see PATCH /api/orders/:id/confirm) - restoring stock for them here
+  // would credit units that were never taken out.
+  const preorderOrderIds = new Set(
+    (await client.query('SELECT order_id FROM preorders WHERE order_id = ANY($1)', [orderIds])).rows.map(r => r.order_id)
+  )
+  const confirmedIds = testOrders.filter(o => o.status === 'confirmed' && !preorderOrderIds.has(o.id)).map(o => o.id)
   const { stockRestoredMovements, stockRestoredUnits } = await restoreStockForTestOrders(client, confirmedIds, userId)
 
   // The order's own stock_movements history (the original 'sale' deductions)
@@ -1529,10 +1602,31 @@ const deleteTestStudents = async (client, candidateIds) => {
   return { studentsDeleted: deleted.rowCount }
 }
 
+// A pre-order that reached paid_in_full has a linked, is_test = TRUE order -
+// that's deleted the same way any other test order is, via deleteTestOrders,
+// before the pre-order row itself goes.
+const deleteTestPreorders = async (client, candidateIds, userId) => {
+  if (candidateIds.length === 0) return { preordersDeleted: 0 }
+  const preorders = (await client.query(
+    'SELECT id, order_id FROM preorders WHERE id = ANY($1) AND is_test = TRUE FOR UPDATE', [candidateIds]
+  )).rows
+  if (preorders.length === 0) return { preordersDeleted: 0 }
+
+  const preorderIds = preorders.map(p => p.id)
+  const linkedOrderIds = preorders.map(p => p.order_id).filter(Boolean)
+  if (linkedOrderIds.length > 0) await deleteTestOrders(client, linkedOrderIds, userId)
+
+  await client.query('DELETE FROM ozow_payments WHERE preorder_id = ANY($1)', [preorderIds])
+  await client.query('DELETE FROM notifications WHERE preorder_id = ANY($1)', [preorderIds])
+  const deleted = await client.query('DELETE FROM preorders WHERE id = ANY($1)', [preorderIds])
+  return { preordersDeleted: deleted.rowCount }
+}
+
 app.post('/api/admin/test-data/delete', authenticate, requireRole('sysadmin'), async (req, res) => {
-  const { orderIds, studentIds, all } = req.body
+  const { orderIds, studentIds, preorderIds, all } = req.body
   let requestedOrderIds = Array.isArray(orderIds) ? orderIds.filter(Number.isInteger) : []
   let requestedStudentIds = Array.isArray(studentIds) ? studentIds.filter(Number.isInteger) : []
+  let requestedPreorderIds = Array.isArray(preorderIds) ? preorderIds.filter(Number.isInteger) : []
 
   const client = await pool.connect()
   try {
@@ -1541,24 +1635,30 @@ app.post('/api/admin/test-data/delete', authenticate, requireRole('sysadmin'), a
     if (all === true) {
       requestedOrderIds = (await client.query('SELECT id FROM orders WHERE is_test = TRUE')).rows.map(r => r.id)
       requestedStudentIds = (await client.query('SELECT id FROM students WHERE is_test = TRUE')).rows.map(r => r.id)
+      requestedPreorderIds = (await client.query('SELECT id FROM preorders WHERE is_test = TRUE')).rows.map(r => r.id)
     }
 
-    if (requestedOrderIds.length === 0 && requestedStudentIds.length === 0) {
+    if (requestedOrderIds.length === 0 && requestedStudentIds.length === 0 && requestedPreorderIds.length === 0) {
       await client.query('ROLLBACK')
       return res.status(400).json({ error: 'Nothing to delete' })
     }
 
+    // Pre-orders first - a paid-in-full test pre-order's linked order would
+    // otherwise also get swept up (harmlessly, but redundantly) by the plain
+    // order delete below if it were also passed there directly.
+    const preorderSummary = await deleteTestPreorders(client, requestedPreorderIds, req.user.id)
     const orderSummary = await deleteTestOrders(client, requestedOrderIds, req.user.id)
     const studentSummary = await deleteTestStudents(client, requestedStudentIds)
 
     await client.query('COMMIT')
 
     await addAuditLog(req.user.id, req.user.username, 'TEST_DATA_DELETED',
-      `Deleted ${orderSummary.ordersDeleted} test order(s) and ${studentSummary.studentsDeleted} test student(s); ` +
-      `restored stock on ${orderSummary.stockRestoredMovements} line item(s) (${orderSummary.stockRestoredUnits} units).`,
+      `Deleted ${orderSummary.ordersDeleted} test order(s), ${studentSummary.studentsDeleted} test student(s) and ` +
+      `${preorderSummary.preordersDeleted} test pre-order(s); restored stock on ${orderSummary.stockRestoredMovements} ` +
+      `line item(s) (${orderSummary.stockRestoredUnits} units).`,
       req.ip)
 
-    res.json({ success: true, ...orderSummary, ...studentSummary })
+    res.json({ success: true, ...orderSummary, ...studentSummary, ...preorderSummary })
   } catch (err) {
     await client.query('ROLLBACK')
     res.status(500).json({ error: 'Failed to delete test data' })
@@ -1573,7 +1673,7 @@ app.post('/api/admin/test-data/delete', authenticate, requireRole('sysadmin'), a
 app.get('/api/products', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, description, detail, price, badge, stock_quantity, low_stock_threshold
+      `SELECT id, name, description, detail, price, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit
        FROM products WHERE is_active = TRUE ORDER BY id ASC`
     )
     const variantsByProduct = await fetchVariantsByProduct(false)
@@ -1590,6 +1690,8 @@ app.get('/api/products', async (req, res) => {
         lowStockThreshold: p.low_stock_threshold,
         hasOptions: options.length > 0,
         options,
+        preorderEnabled: p.preorder_enabled,
+        preorderDeposit: parseFloat(p.preorder_deposit),
       }
     }))
   } catch (err) {
@@ -1617,6 +1719,8 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
         isActive: p.is_active,
         hasOptions: options.length > 0,
         options,
+        preorderEnabled: p.preorder_enabled,
+        preorderDeposit: parseFloat(p.preorder_deposit),
       }
     }))
   } catch (err) {
@@ -1625,23 +1729,38 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
   }
 })
 
+// A pre-order deposit must be a real part-payment, never free and never the
+// whole price - at least R10, and strictly less than the product's price.
+// Returns an error string, or null when valid.
+const validatePreorderDeposit = (deposit, price) => {
+  if (isNaN(deposit) || deposit < 10) return 'Pre-order deposit must be at least R10.'
+  if (deposit >= price) return 'Pre-order deposit must be less than the price.'
+  return null
+}
+
 app.post('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
-  const { name, description, detail, price, badge, stockQuantity, lowStockThreshold } = req.body
+  const { name, description, detail, price, badge, stockQuantity, lowStockThreshold, preorderEnabled, preorderDeposit } = req.body
   if (!name || !name.trim() || price === undefined || price === null || price === '') {
     return res.status(400).json({ error: 'Name and price are required' })
   }
+  const parsedPrice = parseFloat(price)
+  const deposit = preorderDeposit !== undefined && preorderDeposit !== '' ? parseFloat(preorderDeposit) : 500
+  const depositError = validatePreorderDeposit(deposit, parsedPrice)
+  if (depositError) return res.status(400).json({ error: depositError })
   try {
     const result = await pool.query(
-      `INSERT INTO products (name, description, detail, price, badge, stock_quantity, low_stock_threshold)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      `INSERT INTO products (name, description, detail, price, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [
         name.trim(),
         description || '',
         detail || '',
-        parseFloat(price),
+        parsedPrice,
         badge || null,
         parseInt(stockQuantity) || 0,
         parseInt(lowStockThreshold) || 3,
+        !!preorderEnabled,
+        deposit,
       ]
     )
     const p = result.rows[0]
@@ -1650,6 +1769,7 @@ app.post('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), 
       id: p.id, name: p.name, description: p.description, detail: p.detail,
       price: parseFloat(p.price), badge: p.badge, stockQuantity: p.stock_quantity,
       lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
+      preorderEnabled: p.preorder_enabled, preorderDeposit: parseFloat(p.preorder_deposit),
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to create product' })
@@ -1665,7 +1785,7 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
     const existingResult = await pool.query('SELECT * FROM products WHERE id = $1', [id])
     if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
     const existing = existingResult.rows[0]
-    const { name, description, detail, price, badge, lowStockThreshold, isActive } = req.body
+    const { name, description, detail, price, badge, lowStockThreshold, isActive, preorderEnabled, preorderDeposit } = req.body
 
     const merged = {
       name: name !== undefined ? name : existing.name,
@@ -1676,13 +1796,19 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
       low_stock_threshold: lowStockThreshold !== undefined && lowStockThreshold !== ''
         ? parseInt(lowStockThreshold) : existing.low_stock_threshold,
       is_active: isActive !== undefined ? !!isActive : existing.is_active,
+      preorder_enabled: preorderEnabled !== undefined ? !!preorderEnabled : existing.preorder_enabled,
+      preorder_deposit: preorderDeposit !== undefined && preorderDeposit !== ''
+        ? parseFloat(preorderDeposit) : parseFloat(existing.preorder_deposit),
     }
+
+    const depositError = validatePreorderDeposit(merged.preorder_deposit, parseFloat(merged.price))
+    if (depositError) return res.status(400).json({ error: depositError })
 
     const result = await pool.query(
       `UPDATE products SET name=$1, description=$2, detail=$3, price=$4, badge=$5,
-        low_stock_threshold=$6, is_active=$7, updated_at = NOW() WHERE id = $8 RETURNING *`,
+        low_stock_threshold=$6, is_active=$7, preorder_enabled=$8, preorder_deposit=$9, updated_at = NOW() WHERE id = $10 RETURNING *`,
       [merged.name, merged.description, merged.detail, merged.price, merged.badge,
-       merged.low_stock_threshold, merged.is_active, id]
+       merged.low_stock_threshold, merged.is_active, merged.preorder_enabled, merged.preorder_deposit, id]
     )
     const p = result.rows[0]
     if (existing.is_active && !p.is_active) {
@@ -1692,6 +1818,7 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
       id: p.id, name: p.name, description: p.description, detail: p.detail,
       price: parseFloat(p.price), badge: p.badge, stockQuantity: p.stock_quantity,
       lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
+      preorderEnabled: p.preorder_enabled, preorderDeposit: parseFloat(p.preorder_deposit),
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to update product' })
@@ -1765,6 +1892,184 @@ app.post('/api/admin/products/:productId/variants/:variantId/stock', authenticat
   } catch (err) {
     res.status(500).json({ error: 'Failed to adjust stock' })
     await logError('POST /api/admin/products/:productId/variants/:variantId/stock', err, req)
+  }
+})
+
+// ── Pre-orders (admin) ───────────────────────────────────────────────────────
+// Past promised_by_date, not yet sent/collected - whether or not the item
+// has actually arrived at the studio. Clears the moment it's dispatched or
+// collected, whichever comes first.
+const isPreorderRefundable = (p) =>
+  !!p.promised_by_date &&
+  !['dispatched', 'collected', 'cancelled', 'refunded'].includes(p.status) &&
+  new Date(p.promised_by_date) < new Date()
+
+const serializePreorder = (p) => {
+  const quantity = parseInt(p.quantity) || 1
+  const priceAtOrder = parseFloat(p.price_at_order)
+  const deliveryFee = parseFloat(p.delivery_fee)
+  const amountPaid = parseFloat(p.amount_paid)
+  const balance = Math.max(0, (priceAtOrder * quantity + deliveryFee) - amountPaid)
+  const now = new Date()
+  const promisedBy = p.promised_by_date ? new Date(p.promised_by_date) : null
+  const daysDiff = promisedBy ? Math.round((promisedBy - now) / (24 * 60 * 60 * 1000)) : null
+  return {
+    id: p.id,
+    productId: p.product_id,
+    productName: p.product_name,
+    quantity,
+    customerName: maskName(p.customer_name),
+    price: priceAtOrder,
+    deposit: parseFloat(p.deposit_amount),
+    deliveryFee,
+    amountPaid,
+    balance,
+    status: p.status,
+    fulfilmentMethod: p.fulfilment_method,
+    promisedByDate: p.promised_by_date,
+    daysLeft: p.status !== 'dispatched' && p.status !== 'collected' ? daysDiff : null,
+    courierTracking: p.courier_tracking,
+    dispatchedAt: p.dispatched_at,
+    orderId: p.order_id,
+    isTest: p.is_test,
+    createdAt: p.created_at,
+    arrivedAt: p.arrived_at,
+    refundable: isPreorderRefundable(p),
+    link: `${ozow.CUSTOMER_SITE_URL || payflex.CUSTOMER_SITE_URL || ''}/?preorder=${p.public_token}`,
+  }
+}
+
+app.get('/api/admin/preorders', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const conditions = []
+    if (!canIncludeTestData(req)) conditions.push('pre.is_test = FALSE')
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const result = await pool.query(
+      `SELECT pre.*, prod.name AS product_name FROM preorders pre
+       JOIN products prod ON prod.id = pre.product_id
+       ${where} ORDER BY prod.name ASC, pre.created_at DESC`
+    )
+    const preorders = result.rows.map(serializePreorder)
+
+    const byProduct = {}
+    for (const p of preorders) {
+      if (!byProduct[p.productId]) byProduct[p.productId] = { productId: p.productId, productName: p.productName, preorders: [], statusCounts: {} }
+      byProduct[p.productId].preorders.push(p)
+      byProduct[p.productId].statusCounts[p.status] = (byProduct[p.productId].statusCounts[p.status] || 0) + 1
+    }
+
+    res.json({
+      products: Object.values(byProduct),
+      refundableCount: preorders.filter(p => p.refundable).length,
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch pre-orders' })
+    await logError('GET /api/admin/preorders', err, req)
+  }
+})
+
+// Marks arrived, for one pre-order or (with productId) every deposit_paid
+// pre-order for that product at once.
+app.post('/api/admin/preorders/mark-arrived', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { id, productId } = req.body
+  try {
+    let result
+    if (productId) {
+      result = await pool.query(
+        `UPDATE preorders SET status = 'arrived', arrived_at = NOW() WHERE product_id = $1 AND status = 'deposit_paid' RETURNING id`,
+        [productId]
+      )
+    } else if (id) {
+      result = await pool.query(
+        `UPDATE preorders SET status = 'arrived', arrived_at = NOW() WHERE id = $1 AND status = 'deposit_paid' RETURNING id`,
+        [id]
+      )
+    } else {
+      return res.status(400).json({ error: 'id or productId is required' })
+    }
+    await addAuditLog(req.user.id, req.user.username, 'PREORDERS_MARKED_ARRIVED',
+      `Marked ${result.rows.length} pre-order(s) as arrived`, req.ip)
+    res.json({ success: true, count: result.rows.length })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to mark pre-order(s) as arrived' })
+    await logError('POST /api/admin/preorders/mark-arrived', err, req)
+  }
+})
+
+app.patch('/api/admin/preorders/:id/dispatch', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { courierTracking } = req.body
+  try {
+    const existingResult = await pool.query('SELECT * FROM preorders WHERE id = $1', [req.params.id])
+    const preorder = existingResult.rows[0]
+    if (!preorder) return res.status(404).json({ error: 'Pre-order not found' })
+    if (preorder.status !== 'paid_in_full') {
+      return res.status(400).json({ error: 'A pre-order can only be dispatched once it is paid in full.' })
+    }
+    await pool.query(
+      `UPDATE preorders SET status = 'dispatched', dispatched_at = NOW(), courier_tracking = $1 WHERE id = $2`,
+      [(courierTracking || '').trim() || null, preorder.id]
+    )
+    if (preorder.order_id) {
+      await pool.query(`UPDATE orders SET status = 'confirmed' WHERE id = $1 AND status != 'confirmed'`, [preorder.order_id])
+    }
+    await addAuditLog(req.user.id, req.user.username, 'PREORDER_DISPATCHED', `Pre-order #${preorder.id} marked dispatched`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to mark pre-order as dispatched' })
+    await logError('PATCH /api/admin/preorders/:id/dispatch', err, req)
+  }
+})
+
+app.patch('/api/admin/preorders/:id/collect', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const existingResult = await pool.query('SELECT * FROM preorders WHERE id = $1', [req.params.id])
+    const preorder = existingResult.rows[0]
+    if (!preorder) return res.status(404).json({ error: 'Pre-order not found' })
+    if (preorder.status !== 'paid_in_full') {
+      return res.status(400).json({ error: 'A pre-order can only be collected once it is paid in full.' })
+    }
+    await pool.query(`UPDATE preorders SET status = 'collected' WHERE id = $1`, [preorder.id])
+    if (preorder.order_id) {
+      await pool.query(`UPDATE orders SET status = 'confirmed' WHERE id = $1 AND status != 'confirmed'`, [preorder.order_id])
+    }
+    await addAuditLog(req.user.id, req.user.username, 'PREORDER_COLLECTED', `Pre-order #${preorder.id} marked collected`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to mark pre-order as collected' })
+    await logError('PATCH /api/admin/preorders/:id/collect', err, req)
+  }
+})
+
+// Cancel/refund record a status change only - the refund itself is done in
+// the Ozow dashboard. Not allowed once sent or collected, since it can no
+// longer be refunded at that point.
+app.patch('/api/admin/preorders/:id/cancel', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE preorders SET status = 'cancelled' WHERE id = $1 AND status NOT IN ('dispatched', 'collected') RETURNING id`,
+      [req.params.id]
+    )
+    if (result.rows.length === 0) return res.status(400).json({ error: 'This pre-order cannot be cancelled.' })
+    await addAuditLog(req.user.id, req.user.username, 'PREORDER_CANCELLED', `Pre-order #${req.params.id} cancelled`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to cancel pre-order' })
+    await logError('PATCH /api/admin/preorders/:id/cancel', err, req)
+  }
+})
+
+app.patch('/api/admin/preorders/:id/refund', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE preorders SET status = 'refunded' WHERE id = $1 AND status NOT IN ('dispatched', 'collected') RETURNING id`,
+      [req.params.id]
+    )
+    if (result.rows.length === 0) return res.status(400).json({ error: 'This pre-order cannot be marked refunded.' })
+    await addAuditLog(req.user.id, req.user.username, 'PREORDER_REFUNDED', `Pre-order #${req.params.id} marked refunded`, req.ip)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to mark pre-order as refunded' })
+    await logError('PATCH /api/admin/preorders/:id/refund', err, req)
   }
 })
 
@@ -2018,7 +2323,24 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
       needsConfirmation: o.payment_status === 'paid' && o.status !== 'confirmed',
     }))
 
-    res.json({ students, orders })
+    const preordersResult = await pool.query(
+      `SELECT pre.id, pre.status, pre.promised_by_date, pre.customer_name, prod.name AS product_name
+       FROM preorders pre
+       JOIN products prod ON prod.id = pre.product_id
+       WHERE pre.promised_by_date >= $1 AND pre.promised_by_date < $2
+         AND ($3::boolean OR pre.is_test = FALSE)
+       ORDER BY pre.promised_by_date ASC`,
+      [start, end, includeTest]
+    )
+    const preorders = preordersResult.rows.map(p => ({
+      id: p.id,
+      productName: p.product_name,
+      customerName: maskName(p.customer_name),
+      status: p.status,
+      promisedByDate: p.promised_by_date,
+    }))
+
+    res.json({ students, orders, preorders })
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch calendar data' })
     await logError('GET /api/dashboard/calendar', err, req)
@@ -2755,6 +3077,240 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintena
   }
 })
 
+// ── Pre-orders ────────────────────────────────────────────────────────────────
+// Ozow only, always - never offered as a choice and never accepted from the
+// browser as anything else. Refunds through Payflex would affect the
+// business's standing with that provider, so Payflex is never wired up here
+// at all, even when it's enabled for the shop.
+app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+  const {
+    productId, name, phone, email, quantity, fulfilmentMethod, acceptedTerms, provider,
+    deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
+  } = req.body
+  if (!productId || !name || !name.trim() || !phone || !email) {
+    return res.status(400).json({ error: 'Missing required fields' })
+  }
+  if (provider !== undefined && provider !== 'ozow') {
+    return res.status(400).json({ error: 'Pre-orders can only be paid with Ozow.' })
+  }
+  const normalisedPhone = normaliseSaPhone(phone)
+  if (!normalisedPhone) {
+    return res.status(400).json({
+      error: "We're only able to serve customers in South Africa for now, so please use a South African number, for example 082 123 4567."
+    })
+  }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' })
+  }
+  if (!['delivery', 'pickup'].includes(fulfilmentMethod)) {
+    return res.status(400).json({ error: 'Please choose delivery or pickup.' })
+  }
+  if (fulfilmentMethod === 'delivery' &&
+      (!deliveryAddress?.trim() || !deliverySuburb?.trim() || !deliveryCity?.trim() || !deliveryPostalCode?.trim())) {
+    return res.status(400).json({ error: 'Please complete your delivery address.' })
+  }
+  if (acceptedTerms !== true) {
+    return res.status(400).json({ error: 'Please accept the pre-order terms to continue.' })
+  }
+  const preorderSettings = await getSystemSettings(req)
+  if (!isProviderEnabled('ozow', preorderSettings)) {
+    return res.status(503).json({
+      error: "Online payments are taking a short break. Please message us on WhatsApp at 082 685 5399 and we'll gladly help you secure your pre-order."
+    })
+  }
+  try {
+    const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [parseInt(productId)])
+    const product = productResult.rows[0]
+    if (!product || !product.is_active || !product.preorder_enabled) {
+      return res.status(400).json({ error: 'This item is not available for pre-order.' })
+    }
+    const qty = parseInt(quantity) || 1
+    if (qty <= 0) return res.status(400).json({ error: 'Invalid quantity' })
+
+    // Price and deposit always come from the database - never trusted from
+    // the browser.
+    const priceAtOrder = parseFloat(product.price)
+    const depositAmount = parseFloat(product.preorder_deposit)
+    const deliveryFee = fulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
+    const publicToken = crypto.randomBytes(24).toString('hex')
+
+    const preorderResult = await pool.query(
+      `INSERT INTO preorders (
+         product_id, quantity, customer_name, customer_phone, customer_email, fulfilment_method,
+         delivery_address, delivery_suburb, delivery_city, delivery_postal_code, delivery_notes,
+         price_at_order, deposit_amount, delivery_fee, public_token
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [
+        product.id, qty, name.trim(), normalisedPhone, email.trim(), fulfilmentMethod,
+        fulfilmentMethod === 'delivery' ? deliveryAddress.trim() : null,
+        fulfilmentMethod === 'delivery' ? deliverySuburb.trim() : null,
+        fulfilmentMethod === 'delivery' ? deliveryCity.trim() : null,
+        fulfilmentMethod === 'delivery' ? deliveryPostalCode.trim() : null,
+        fulfilmentMethod === 'delivery' ? ((deliveryNotes || '').trim() || null) : null,
+        priceAtOrder, depositAmount, deliveryFee, publicToken,
+      ]
+    )
+    const preorder = preorderResult.rows[0]
+
+    try {
+      const { transactionReference, amountStr, fields } = ozow.buildOzowFields(preorder.id, depositAmount, {
+        bankReferenceLabel: `HBH Preorder ${preorder.id}`,
+      })
+      await pool.query(
+        `INSERT INTO ozow_payments (preorder_id, transaction_reference, amount, status, is_test, purpose)
+         VALUES ($1, $2, $3, 'started', $4, 'preorder_deposit')`,
+        [preorder.id, transactionReference, amountStr, ozow.OZOW_IS_TEST]
+      )
+      await markPreorderTestIfNeeded(preorder.id, ozow.OZOW_IS_TEST)
+      await addNotification('order', 'New pre-order started',
+        `${preorder.customer_name} started a pre-order for "${product.name}".`, { preorderId: preorder.id })
+      return res.status(201).json({ success: true, preorderToken: publicToken, action: 'https://pay.ozow.com/', fields })
+    } catch (startErr) {
+      // Starting the Ozow attempt failed - don't leave an orphaned pre-order
+      // with no way to pay for it.
+      await pool.query('DELETE FROM preorders WHERE id = $1', [preorder.id])
+      throw startErr
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create pre-order' })
+    await logError('POST /api/preorders', err, req)
+  }
+})
+
+app.get('/api/preorders/by-token/:token', async (req, res) => {
+  try {
+    const preorderResult = await pool.query('SELECT * FROM preorders WHERE public_token = $1', [req.params.token])
+    let preorder = preorderResult.rows[0]
+    if (!preorder) return res.status(404).json({ error: 'Pre-order not found' })
+
+    if (ozow.isOzowConfigured) {
+      const latestResult = await pool.query(
+        'SELECT * FROM ozow_payments WHERE preorder_id = $1 ORDER BY created_at DESC LIMIT 1', [preorder.id]
+      )
+      const latest = latestResult.rows[0]
+      const isRecent = latest && (Date.now() - new Date(latest.created_at).getTime()) < 24 * 60 * 60 * 1000
+      const lastCheck = lastOzowCheck.get(`preorder-${preorder.id}`) || 0
+      if (latest && ['started', 'pending'].includes(latest.status) && isRecent && Date.now() - lastCheck > 30000) {
+        lastOzowCheck.set(`preorder-${preorder.id}`, Date.now())
+        await ozow.reconcileOzowPayment(latest.transaction_reference)
+        const refreshed = await pool.query('SELECT * FROM preorders WHERE id = $1', [preorder.id])
+        preorder = refreshed.rows[0]
+      }
+    }
+
+    const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [preorder.product_id])
+    const product = productResult.rows[0] || null
+    const settings = await readSystemSettings()
+
+    const quantity = parseInt(preorder.quantity) || 1
+    const priceAtOrder = parseFloat(preorder.price_at_order)
+    const deliveryFee = parseFloat(preorder.delivery_fee)
+    const amountPaid = parseFloat(preorder.amount_paid)
+    const balance = Math.max(0, (priceAtOrder * quantity + deliveryFee) - amountPaid)
+
+    const latestResult = await pool.query(
+      'SELECT status FROM ozow_payments WHERE preorder_id = $1 ORDER BY created_at DESC LIMIT 1', [preorder.id]
+    )
+
+    res.json({
+      productName: product ? product.name : null,
+      productId: preorder.product_id,
+      quantity,
+      price: priceAtOrder,
+      deposit: parseFloat(preorder.deposit_amount),
+      deliveryFee,
+      amountPaid,
+      balance,
+      status: preorder.status,
+      promisedByDate: preorder.promised_by_date,
+      leadTime: settings.preorders,
+      latestStatus: latestResult.rows[0]?.status || null,
+      ozowAvailableForBalance: ozow.isOzowConfigured && balance > 0 && preorder.status === 'arrived',
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch pre-order' })
+    await logError('GET /api/preorders/by-token/:token', err, req)
+  }
+})
+
+app.post('/api/preorders/:token/pay-balance', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+  const balanceSettings = await getSystemSettings(req)
+  if (!isProviderEnabled('ozow', balanceSettings)) {
+    return res.status(503).json({ error: 'Ozow payments are not available right now.' })
+  }
+  try {
+    const preorderResult = await pool.query('SELECT * FROM preorders WHERE public_token = $1', [req.params.token])
+    const preorder = preorderResult.rows[0]
+    if (!preorder) return res.status(404).json({ error: 'Pre-order not found' })
+    if (preorder.status !== 'arrived') {
+      return res.status(400).json({ error: 'The balance can only be paid once your item has arrived.' })
+    }
+    const quantity = parseInt(preorder.quantity) || 1
+    const balance = (parseFloat(preorder.price_at_order) * quantity + parseFloat(preorder.delivery_fee)) - parseFloat(preorder.amount_paid)
+    if (balance <= 0) {
+      return res.status(400).json({ error: 'There is nothing left to pay on this pre-order.' })
+    }
+
+    const recentResult = await pool.query(
+      `SELECT * FROM ozow_payments WHERE preorder_id = $1 AND purpose = 'preorder_balance'
+       ORDER BY created_at DESC LIMIT 1`, [preorder.id]
+    )
+    const recent = recentResult.rows[0]
+    if (recent && ['started', 'pending'].includes(recent.status) &&
+        (Date.now() - new Date(recent.created_at).getTime()) < 30 * 60 * 1000) {
+      return res.status(409).json({ error: 'A balance payment was already started recently. Please check your bank app, or try again shortly.' })
+    }
+
+    const { transactionReference, amountStr, fields } = ozow.buildOzowFields(preorder.id, balance, {
+      bankReferenceLabel: `HBH Balance ${preorder.id}`,
+    })
+    await pool.query(
+      `INSERT INTO ozow_payments (preorder_id, transaction_reference, amount, status, is_test, purpose)
+       VALUES ($1, $2, $3, 'started', $4, 'preorder_balance')`,
+      [preorder.id, transactionReference, amountStr, ozow.OZOW_IS_TEST]
+    )
+    await markPreorderTestIfNeeded(preorder.id, ozow.OZOW_IS_TEST)
+    res.json({ action: 'https://pay.ozow.com/', fields })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to start balance payment' })
+    await logError('POST /api/preorders/:token/pay-balance', err, req)
+  }
+})
+
+// Retries the most recent Ozow attempt (deposit or balance) exactly as it
+// was - for when it was cancelled or failed, before anything was paid.
+app.post('/api/preorders/:token/retry', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+  if (!isProviderEnabled('ozow', await getSystemSettings(req))) {
+    return res.status(503).json({ error: 'Ozow payments are not available right now.' })
+  }
+  try {
+    const preorderResult = await pool.query('SELECT * FROM preorders WHERE public_token = $1', [req.params.token])
+    const preorder = preorderResult.rows[0]
+    if (!preorder) return res.status(404).json({ error: 'Pre-order not found' })
+
+    const latestResult = await pool.query(
+      'SELECT * FROM ozow_payments WHERE preorder_id = $1 ORDER BY created_at DESC LIMIT 1', [preorder.id]
+    )
+    const latest = latestResult.rows[0]
+    if (!latest) return res.status(400).json({ error: 'There is no previous payment to retry.' })
+    if (latest.status === 'paid') return res.status(400).json({ error: 'This has already been paid.' })
+
+    const { transactionReference, amountStr, fields } = ozow.buildOzowFields(preorder.id, parseFloat(latest.amount), {
+      bankReferenceLabel: latest.purpose === 'preorder_balance' ? `HBH Balance ${preorder.id}` : `HBH Preorder ${preorder.id}`,
+    })
+    await pool.query(
+      `INSERT INTO ozow_payments (preorder_id, transaction_reference, amount, status, is_test, purpose)
+       VALUES ($1, $2, $3, 'started', $4, $5)`,
+      [preorder.id, transactionReference, amountStr, ozow.OZOW_IS_TEST, latest.purpose]
+    )
+    await markPreorderTestIfNeeded(preorder.id, ozow.OZOW_IS_TEST)
+    res.json({ action: 'https://pay.ozow.com/', fields })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retry payment' })
+    await logError('POST /api/preorders/:token/retry', err, req)
+  }
+})
+
 // Confirming an order is when stock actually leaves the shelf. Done inside
 // one transaction: every item's stock is locked and checked before any of
 // it is touched, so a short-on-stock item refuses the whole confirmation
@@ -2776,7 +3332,15 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
       return res.json({ success: true })
     }
 
-    const itemsResult = await client.query('SELECT * FROM order_items WHERE order_id = $1', [id])
+    // An order created from a pre-order (see applyPreorderOutcome) never
+    // deducts stock here - the item was never held in general stock to
+    // begin with, it was made/sourced to order.
+    const fromPreorderResult = await client.query('SELECT 1 FROM preorders WHERE order_id = $1', [id])
+    const isFromPreorder = fromPreorderResult.rows.length > 0
+
+    const itemsResult = isFromPreorder
+      ? { rows: [] }
+      : await client.query('SELECT * FROM order_items WHERE order_id = $1', [id])
     const lowStockCrossed = []
 
     for (const item of itemsResult.rows) {
@@ -3207,6 +3771,7 @@ app.post('/api/categories/product/:productId', authenticate, requireRole('sysadm
 const TEST_NOTIFICATION_EXCLUSION = `
   AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = notifications.order_id AND o.is_test = TRUE)
   AND NOT EXISTS (SELECT 1 FROM students s WHERE s.id = notifications.student_id AND s.is_test = TRUE)
+  AND NOT EXISTS (SELECT 1 FROM preorders pre WHERE pre.id = notifications.preorder_id AND pre.is_test = TRUE)
 `
 
 app.get('/api/notifications/archived', authenticate, async (req, res) => {

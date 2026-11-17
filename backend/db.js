@@ -1,6 +1,13 @@
-const { Pool } = require('pg')
+const { Pool, types } = require('pg')
 const siteSettingsDefaults = require('./src/siteSettings/defaults')
 const systemSettingsDefaults = require('./src/systemSettings/defaults')
+
+// pg's default DATE parser builds a JS Date at local midnight - serialising
+// that with toISOString() (as res.json() does) can silently shift the date
+// by a day depending on the server's local timezone. A plain-date column
+// (preferred_start_date, promised_by_date) has no time component anyway, so
+// keep it as the raw 'YYYY-MM-DD' string instead. OID 1082 = date.
+types.setTypeParser(1082, (value) => value)
 
 // Local Postgres (DATABASE_URL pointing at localhost) has no SSL listener,
 // but managed providers like Render require it.
@@ -374,6 +381,49 @@ const createTables = async () => {
       location VARCHAR(255),
       message TEXT
     );
+  `)
+
+  // Wig pre-orders: a customer pays a deposit with Ozow, then the balance
+  // once the item has arrived at the studio. preorder_deposit is set per
+  // product by the owner; lead time (how many days until ready) is a single
+  // business-wide setting, not stored per product - see
+  // systemSettingsDefaults.preorders. ozow_payments/notifications gain a
+  // third nullable reference, alongside order_id/student_id - exactly one of
+  // the three is ever set per row, enforced in application code.
+  await pool.query(`
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS preorder_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS preorder_deposit NUMERIC(10,2) NOT NULL DEFAULT 500;
+
+    CREATE TABLE IF NOT EXISTS preorders (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      quantity INTEGER NOT NULL DEFAULT 1,
+      customer_name VARCHAR(255) NOT NULL,
+      customer_phone VARCHAR(50) NOT NULL,
+      customer_email VARCHAR(255) NOT NULL,
+      fulfilment_method VARCHAR(20) NOT NULL,
+      delivery_address VARCHAR(255),
+      delivery_suburb VARCHAR(255),
+      delivery_city VARCHAR(255),
+      delivery_postal_code VARCHAR(20),
+      delivery_notes TEXT,
+      price_at_order NUMERIC(10,2) NOT NULL,
+      deposit_amount NUMERIC(10,2) NOT NULL,
+      delivery_fee NUMERIC(10,2) NOT NULL DEFAULT 0,
+      amount_paid NUMERIC(10,2) NOT NULL DEFAULT 0,
+      status VARCHAR(30) NOT NULL DEFAULT 'awaiting_deposit',
+      dispatched_at TIMESTAMPTZ,
+      courier_tracking VARCHAR(100),
+      public_token VARCHAR(64) UNIQUE,
+      is_test BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      arrived_at TIMESTAMPTZ,
+      order_id INTEGER REFERENCES orders(id),
+      promised_by_date DATE
+    );
+
+    ALTER TABLE ozow_payments ADD COLUMN IF NOT EXISTS preorder_id INTEGER REFERENCES preorders(id);
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS preorder_id INTEGER REFERENCES preorders(id);
   `)
 
   // Seed courses if none exist, using the same ids and values as the
