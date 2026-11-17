@@ -130,9 +130,12 @@ async function applyPreorderOutcome(client, payment) {
     )
     const order = orderResult.rows[0]
     await client.query(
-      `INSERT INTO order_items (order_id, product_id, product_name, qty, price)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [order.id, preorder.product_id, product ? product.name : 'Pre-order item', quantity, preorder.price_at_order]
+      `INSERT INTO order_items (order_id, product_id, product_name, qty, price, product_option_id, option_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        order.id, preorder.product_id, product ? product.name : 'Pre-order item', quantity, preorder.price_at_order,
+        preorder.product_option_id, preorder.option_name,
+      ]
     )
     await client.query('UPDATE preorders SET order_id = $1 WHERE id = $2', [order.id, preorder.id])
     orderId = order.id

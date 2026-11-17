@@ -418,6 +418,224 @@ function PaymentChoiceButtons({ options, selected, onSelect }) {
   )
 }
 
+// A custom dropdown for a product's named options (e.g. foundation shades) -
+// built from scratch rather than a native <select> so a swatch dot and a
+// "Sold out" label can sit in each row. Desktop opens a panel below the
+// field; mobile opens a bottom sheet instead, for an easier thumb-scroll
+// through a long list. label is the product's own option_label (e.g.
+// "Shade"); options is every active option, already in display order.
+// respectStock disables and labels an empty option "Sold out" - turned off
+// for pre-orders, which (unlike the shop grid) are never limited by stock.
+function OptionPicker({ label, options, value, onChange, isMobile, respectStock = true }) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [highlightIndex, setHighlightIndex] = useState(-1)
+  const containerRef = useRef(null)
+  const searchRef = useRef(null)
+  const listRef = useRef(null)
+
+  const selected = options.find(o => o.id === value) || null
+  const showSearch = options.length > 8
+  const filtered = showSearch && search.trim()
+    ? options.filter(o => o.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : options
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    setHighlightIndex(options.findIndex(o => o.id === value))
+    if (showSearch && searchRef.current) searchRef.current.focus()
+    else if (listRef.current) listRef.current.focus()
+  }, [open])
+
+  const selectOption = (option) => {
+    if (respectStock && option.stockQuantity <= 0) return
+    onChange(option.id)
+    setOpen(false)
+    setSearch('')
+  }
+
+  const handleListKeyDown = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); setOpen(false) }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setHighlightIndex(prev => Math.min(filtered.length - 1, prev + 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlightIndex(prev => Math.max(0, prev - 1)) }
+    else if (e.key === 'Enter') {
+      e.preventDefault()
+      const option = filtered[highlightIndex]
+      if (option) selectOption(option)
+    }
+  }
+
+  const swatchDot = (hex) => (
+    <span style={{ width: '14px', height: '14px', borderRadius: '50%', background: hex, border: '1px solid rgba(44,44,44,0.15)', flexShrink: 0, display: 'inline-block' }} />
+  )
+
+  const rows = (
+    <div
+      ref={listRef}
+      role="listbox"
+      aria-label={label}
+      tabIndex={-1}
+      onKeyDown={handleListKeyDown}
+      style={{ maxHeight: '280px', overflowY: 'auto', outline: 'none' }}
+    >
+      {filtered.length === 0 && (
+        <div style={{ padding: '14px 16px', fontSize: '13px', color: '#9A7A82', textAlign: 'center' }}>No matches</div>
+      )}
+      {filtered.map((o, idx) => {
+        const soldOut = respectStock && o.stockQuantity <= 0
+        return (
+          <div
+            key={o.id}
+            role="option"
+            aria-selected={value === o.id}
+            aria-disabled={soldOut}
+            onClick={() => selectOption(o)}
+            onMouseEnter={() => setHighlightIndex(idx)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              padding: isMobile ? '14px 18px' : '10px 14px',
+              cursor: soldOut ? 'not-allowed' : 'pointer',
+              background: idx === highlightIndex ? '#FDF0F3' : 'white',
+              opacity: soldOut ? 0.5 : 1,
+              fontSize: '14px',
+              color: '#2C2C2C',
+            }}
+          >
+            {o.swatchHex ? swatchDot(o.swatchHex) : <span style={{ width: '14px', flexShrink: 0 }} />}
+            <span style={{ flex: 1 }}>{o.name}</span>
+            {soldOut && <span style={{ fontSize: '12px', color: '#9A7A82', fontStyle: 'italic' }}>Sold out</span>}
+          </div>
+        )
+      })}
+    </div>
+  )
+
+  const searchInputStyle = {
+    width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #F5DDE2',
+    fontSize: '14px', fontFamily: 'inherit', color: '#2C2C2C', boxSizing: 'border-box', outline: 'none',
+  }
+
+  const triggerLabel = selected ? (
+    <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      {selected.swatchHex && swatchDot(selected.swatchHex)}
+      {selected.name}
+    </span>
+  ) : (
+    <span style={{ color: '#9A7A82' }}>Choose a {label.toLowerCase()}</span>
+  )
+
+  const triggerStyle = {
+    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '12px 14px', borderRadius: '10px', border: `1px solid ${open ? '#C47A8A' : '#F5DDE2'}`,
+    background: 'white', fontSize: '14px', fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
+  }
+
+  if (isMobile) {
+    return (
+      <div ref={containerRef}>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-label={label}
+          style={triggerStyle}
+        >
+          {triggerLabel}
+          <span style={{ color: '#9A7A82', marginLeft: '8px' }}>&#9662;</span>
+        </button>
+        {open && (
+          <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.4)', zIndex: 950 }}
+            onClick={() => setOpen(false)}
+          >
+            <div
+              style={{
+                position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white',
+                borderRadius: '16px 16px 0 0', maxHeight: '72vh', display: 'flex', flexDirection: 'column',
+                boxShadow: '0 -8px 32px rgba(44,44,44,0.2)',
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div style={{ padding: '16px 18px', borderBottom: '1px solid #F5DDE2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, fontSize: '15px', color: '#2C2C2C' }}>Choose a {label.toLowerCase()}</span>
+                <button onClick={() => setOpen(false)} style={{ border: 'none', background: 'none', fontSize: '20px', color: '#7A6670', cursor: 'pointer' }}>x</button>
+              </div>
+              {showSearch && (
+                <div style={{ padding: '12px 16px' }}>
+                  <input
+                    ref={searchRef}
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder={`Search ${label.toLowerCase()}s...`}
+                    style={searchInputStyle}
+                  />
+                </div>
+              )}
+              <div style={{ overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>{rows}</div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={label}
+        onClick={() => setOpen(prev => !prev)}
+        onKeyDown={e => {
+          if (['Enter', ' ', 'ArrowDown'].includes(e.key)) { e.preventDefault(); setOpen(true) }
+          else if (e.key === 'Escape') setOpen(false)
+        }}
+        style={triggerStyle}
+      >
+        {triggerLabel}
+        <span style={{ color: '#9A7A82', marginLeft: '8px' }}>&#9662;</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, background: 'white',
+            border: '1px solid #F5DDE2', borderRadius: '10px', boxShadow: '0 8px 28px rgba(44,44,44,0.18)',
+            zIndex: 60, overflow: 'hidden',
+          }}
+        >
+          {showSearch && (
+            <div style={{ padding: '8px', borderBottom: '1px solid #F5DDE2' }}>
+              <input
+                ref={searchRef}
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onKeyDown={handleListKeyDown}
+                placeholder={`Search ${label.toLowerCase()}s...`}
+                style={searchInputStyle}
+              />
+            </div>
+          )}
+          {rows}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const OZOW_ICON = <img src="/ozow-logo.png" alt="Ozow" style={{ height: '22px', width: 'auto', display: 'block' }} />
 
 // Shown in place of the entire site while maintenance mode is on - see the
@@ -478,6 +696,8 @@ function App() {
   const [policyTab, setPolicyTab] = useState('booking')
   const [products, setProducts] = useState([])
   const [selectedOptions, setSelectedOptions] = useState({})
+  // Chosen custom option (e.g. shade) id, keyed by product id.
+  const [selectedCustomOptionId, setSelectedCustomOptionId] = useState({})
   const [productImages, setProductImages] = useState({})
   const [productPositions, setProductPositions] = useState({})
   const [galleryImages, setGalleryImages] = useState([])
@@ -524,6 +744,7 @@ function App() {
   // ── Pre-orders ────────────────────────────────────────────────────────────
   const [preorderLeadTime, setPreorderLeadTime] = useState({ minDays: 14, maxDays: 21 })
   const [preorderFormOpenFor, setPreorderFormOpenFor] = useState(null) // product id, or null
+  const [preorderCustomOptionId, setPreorderCustomOptionId] = useState(null)
   const [preorderName, setPreorderName] = useState('')
   const [preorderPhone, setPreorderPhone] = useState('')
   const [preorderPhoneTouched, setPreorderPhoneTouched] = useState(false)
@@ -1110,12 +1331,14 @@ function App() {
   const preorderDeliveryAddressComplete = !!(preorderDeliveryAddress.trim() && preorderDeliverySuburb.trim() &&
     preorderDeliveryCity.trim() && preorderDeliveryPostalCode.trim())
   const preorderDeliveryFeeApplicable = preorderFulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
+  const preorderHasCustomOptions = !!preorderProduct?.hasCustomOptions && preorderProduct.customOptions?.length > 0
   const canSubmitPreorder = !!(preorderProduct && paymentOptions.ozow && preorderName.trim() && normalisedPreorderPhone &&
     preorderEmailOk && preorderFulfilmentMethod && (preorderFulfilmentMethod === 'pickup' || preorderDeliveryAddressComplete) &&
-    preorderAcceptedTerms)
+    preorderAcceptedTerms && (!preorderHasCustomOptions || preorderCustomOptionId != null))
 
   const closePreorderForm = () => {
     setPreorderFormOpenFor(null)
+    setPreorderCustomOptionId(null)
     setPreorderName('')
     setPreorderPhone('')
     setPreorderPhoneTouched(false)
@@ -1153,6 +1376,7 @@ function App() {
           deliveryPostalCode: preorderFulfilmentMethod === 'delivery' ? preorderDeliveryPostalCode : undefined,
           deliveryNotes: preorderFulfilmentMethod === 'delivery' ? preorderDeliveryNotes : undefined,
           acceptedTerms: preorderAcceptedTerms,
+          productOptionId: preorderCustomOptionId || undefined,
         }),
       })
       const data = await res.json().catch(() => null)
@@ -1272,7 +1496,7 @@ function App() {
     customerName: orderName,
     customerPhone: orderPhone,
     customerEmail: orderEmail.trim() || undefined,
-    items: cart.map(i => ({ id: i.id, variantId: i.variantId, name: i.name, qty: i.qty, price: i.price })),
+    items: cart.map(i => ({ id: i.id, variantId: i.variantId, productOptionId: i.productOptionId, name: i.name, qty: i.qty, price: i.price })),
     fulfilmentMethod,
     deliveryAddress: fulfilmentMethod === 'delivery' ? deliveryAddress : undefined,
     deliverySuburb: fulfilmentMethod === 'delivery' ? deliverySuburb : undefined,
@@ -1389,6 +1613,10 @@ function App() {
   const renderProductCard = (product) => {
     if (product.preorderEnabled) return renderPreorderCard(product)
     const hasOptions = product.options && product.options.length > 0
+    const hasCustomOptions = !hasOptions && product.hasCustomOptions && product.customOptions && product.customOptions.length > 0
+    const selectedCustomOption = hasCustomOptions
+      ? product.customOptions.find(o => o.id === selectedCustomOptionId[product.id])
+      : null
     const sel = selectedOptions[product.id] || {}
     const lengths = hasOptions ? [...new Set(product.options.map(o => o.lengthMm))].sort((a, b) => a - b) : []
     const curls = hasOptions ? [...new Set(product.options.map(o => o.curl))] : []
@@ -1416,8 +1644,11 @@ function App() {
     const selectedVariant = hasOptions
       ? product.options.find(o => o.lengthMm === sel.lengthMm && (!showCurlPicker || o.curl === sel.curl))
       : null
-    const choiceComplete = !hasOptions || !!selectedVariant
-    const effectiveStock = hasOptions ? (selectedVariant ? selectedVariant.stockQuantity : null) : product.stockQuantity
+    const choiceComplete = hasOptions ? !!selectedVariant : hasCustomOptions ? !!selectedCustomOption : true
+    const effectiveStock = hasOptions
+      ? (selectedVariant ? selectedVariant.stockQuantity : null)
+      : hasCustomOptions ? (selectedCustomOption ? selectedCustomOption.stockQuantity : null)
+      : product.stockQuantity
     const effectiveLowThreshold = hasOptions ? (selectedVariant ? selectedVariant.lowStockThreshold : null) : product.lowStockThreshold
 
     // Clicking an already-selected length or curl unselects it.
@@ -1470,6 +1701,16 @@ function App() {
             price: product.price,
             stockQuantity: selectedVariant.stockQuantity,
             cartKey: `${product.id}-${selectedVariant.id}`,
+          }
+        : hasCustomOptions
+        ? {
+            id: product.id,
+            variantId: null,
+            productOptionId: selectedCustomOption.id,
+            name: `${product.name}, ${product.optionLabel}: ${selectedCustomOption.name}`,
+            price: product.price,
+            stockQuantity: selectedCustomOption.stockQuantity,
+            cartKey: `${product.id}-${selectedCustomOption.id}`,
           }
         : {
             id: product.id,
@@ -1603,10 +1844,27 @@ function App() {
             </div>
           )}
 
+          {hasCustomOptions && (
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                {product.optionLabel}
+              </label>
+              <OptionPicker
+                label={product.optionLabel}
+                options={product.customOptions}
+                value={selectedCustomOptionId[product.id] ?? null}
+                onChange={(id) => setSelectedCustomOptionId(prev => ({ ...prev, [product.id]: id }))}
+                isMobile={isMobile}
+              />
+            </div>
+          )}
+
           <div className="product-availability" style={{ fontSize: '12px', marginBottom: '10px', fontWeight: 600 }}>
             {!choiceComplete ? (
               <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>
-                Choose a length{showCurlPicker ? ' and curl' : ''} to see availability
+                {hasCustomOptions
+                  ? `Choose a ${product.optionLabel.toLowerCase()} to see availability`
+                  : `Choose a length${showCurlPicker ? ' and curl' : ''} to see availability`}
               </span>
             ) : effectiveStock <= 0 ? (
               <span style={{ color: '#9A7A82', fontStyle: 'italic', fontWeight: 400 }}>Sold out for now</span>
@@ -3151,6 +3409,22 @@ function App() {
               />
               {preorderEmailError && renderFieldError(preorderEmailError)}
 
+              {preorderHasCustomOptions && (
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#7A6670', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                    {preorderProduct.optionLabel}
+                  </label>
+                  <OptionPicker
+                    label={preorderProduct.optionLabel}
+                    options={preorderProduct.customOptions}
+                    value={preorderCustomOptionId}
+                    onChange={setPreorderCustomOptionId}
+                    isMobile={isMobile}
+                    respectStock={false}
+                  />
+                </div>
+              )}
+
               <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 700, color: '#2C2C2C', margin: '8px 0 12px' }}>
                 Delivery or Pickup
               </div>
@@ -3300,7 +3574,7 @@ function App() {
                   <div style={heading}>Thank you, your pre-order is secured</div>
                   <p style={body}>
                     {data
-                      ? <>We've received your deposit of R{data.deposit.toFixed(2)} for {data.productName}. Your item will be ready by{' '}
+                      ? <>We've received your deposit of R{data.deposit.toFixed(2)} for {data.productName}{data.optionName ? ` (${data.optionName})` : ''}. Your item will be ready by{' '}
                           {data.promisedByDate ? new Date(data.promisedByDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'long', year: 'numeric' }) : 'the date we promised'}. We're still confirming your payment, this usually only takes a moment.</>
                       : 'We are still confirming your payment.'}
                   </p>
@@ -4336,6 +4610,18 @@ function App() {
                     Your order number is #{order.id}. Retha will be in touch about your delivery or pickup shortly.
                     We appreciate your support!
                   </p>
+                  {order.items?.length > 0 && (
+                    <div style={{ marginBottom: '20px' }}>
+                      {order.items.map((item, idx) => (
+                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#2C2C2C', padding: '6px 0', borderBottom: '1px solid #F5DDE2' }}>
+                          <span>
+                            {item.name}{item.optionName ? `, ${item.optionName}` : ''} x{item.qty}
+                          </span>
+                          <span>R {(item.price * item.qty).toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <button onClick={closePaymentResult} style={btnPrimary}>Continue Shopping</button>
                 </>
               ) : status === 'eft' ? (

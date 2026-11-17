@@ -417,6 +417,29 @@ const fetchVariantsByProduct = async (includeInactive) => {
   return byProduct
 }
 
+// Named custom options (e.g. foundation shades), grouped by product id -
+// the general-purpose counterpart to fetchVariantsByProduct above. A
+// product uses one or the other, never both.
+const fetchCustomOptionsByProduct = async (includeInactive) => {
+  const result = await pool.query(
+    includeInactive
+      ? 'SELECT * FROM product_options ORDER BY product_id ASC, position ASC NULLS LAST, id ASC'
+      : 'SELECT * FROM product_options WHERE is_active = TRUE ORDER BY product_id ASC, position ASC NULLS LAST, id ASC'
+  )
+  const byProduct = {}
+  result.rows.forEach(o => {
+    if (!byProduct[o.product_id]) byProduct[o.product_id] = []
+    byProduct[o.product_id].push({
+      id: o.id,
+      name: o.name,
+      swatchHex: o.swatch_hex,
+      stockQuantity: o.stock_quantity,
+      isActive: o.is_active,
+    })
+  })
+  return byProduct
+}
+
 const addAuditLog = async (userId, username, action, details, ipAddress) => {
   try {
     await pool.query(
@@ -1569,17 +1592,17 @@ const restoreStockForTestOrders = async (client, orderIds, userId) => {
 
   const items = (await client.query('SELECT * FROM order_items WHERE order_id = ANY($1)', [orderIds])).rows
   for (const item of items) {
-    const table = item.variant_id ? 'product_variants' : 'products'
-    const idColumn = item.variant_id ? item.variant_id : item.product_id
+    const table = item.variant_id ? 'product_variants' : item.product_option_id ? 'product_options' : 'products'
+    const idColumn = item.variant_id || item.product_option_id || item.product_id
     const updateResult = await client.query(
       `UPDATE ${table} SET stock_quantity = stock_quantity + $1, updated_at = NOW() WHERE id = $2`,
       [item.qty, idColumn]
     )
     if (updateResult.rowCount === 0) continue // product/option was deleted since - nothing to credit
     await client.query(
-      `INSERT INTO stock_movements (product_id, variant_id, change, reason, user_id, note)
-       VALUES ($1, $2, $3, 'test_cleanup', $4, $5)`,
-      [item.product_id, item.variant_id, item.qty, userId, `Restored from deleted test order #${item.order_id}`]
+      `INSERT INTO stock_movements (product_id, variant_id, product_option_id, change, reason, user_id, note)
+       VALUES ($1, $2, $3, $4, 'test_cleanup', $5, $6)`,
+      [item.product_id, item.variant_id, item.product_option_id, item.qty, userId, `Restored from deleted test order #${item.order_id}`]
     )
     stockRestoredMovements += 1
     stockRestoredUnits += item.qty
@@ -1707,8 +1730,11 @@ app.get('/api/products', async (req, res) => {
        FROM products WHERE is_active = TRUE ORDER BY id ASC`
     )
     const variantsByProduct = await fetchVariantsByProduct(false)
+    const customOptionsByProduct = await fetchCustomOptionsByProduct(false)
     res.json(result.rows.map(p => {
       const options = variantsByProduct[p.id] || []
+      const customOptions = customOptionsByProduct[p.id] || []
+      const hasCustomOptions = !!p.option_label
       return {
         id: p.id,
         name: p.name,
@@ -1716,10 +1742,17 @@ app.get('/api/products', async (req, res) => {
         detail: p.detail,
         price: parseFloat(p.price),
         badge: p.badge,
-        stockQuantity: p.stock_quantity,
+        // A product with custom options has no single stock figure of its
+        // own - its stock is however many of each option are left.
+        stockQuantity: hasCustomOptions
+          ? customOptions.reduce((sum, o) => sum + o.stockQuantity, 0)
+          : p.stock_quantity,
         lowStockThreshold: p.low_stock_threshold,
         hasOptions: options.length > 0,
         options,
+        optionLabel: p.option_label,
+        hasCustomOptions,
+        customOptions,
         preorderEnabled: p.preorder_enabled,
         preorderDeposit: parseFloat(p.preorder_deposit),
       }
@@ -1735,8 +1768,12 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
   try {
     const result = await pool.query('SELECT * FROM products ORDER BY id ASC')
     const variantsByProduct = await fetchVariantsByProduct(true)
+    const customOptionsByProduct = await fetchCustomOptionsByProduct(true)
     res.json(result.rows.map(p => {
       const options = variantsByProduct[p.id] || []
+      const customOptions = customOptionsByProduct[p.id] || []
+      const hasCustomOptions = !!p.option_label
+      const activeCustomOptions = customOptions.filter(o => o.isActive)
       return {
         id: p.id,
         name: p.name,
@@ -1744,11 +1781,16 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
         detail: p.detail,
         price: parseFloat(p.price),
         badge: p.badge,
-        stockQuantity: p.stock_quantity,
+        stockQuantity: hasCustomOptions
+          ? activeCustomOptions.reduce((sum, o) => sum + o.stockQuantity, 0)
+          : p.stock_quantity,
         lowStockThreshold: p.low_stock_threshold,
         isActive: p.is_active,
         hasOptions: options.length > 0,
         options,
+        optionLabel: p.option_label,
+        hasCustomOptions,
+        customOptions,
         preorderEnabled: p.preorder_enabled,
         preorderDeposit: parseFloat(p.preorder_deposit),
       }
@@ -1828,7 +1870,7 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
     const existingResult = await pool.query('SELECT * FROM products WHERE id = $1', [id])
     if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
     const existing = existingResult.rows[0]
-    const { name, description, detail, price, badge, lowStockThreshold, isActive, preorderEnabled, preorderDeposit } = req.body
+    const { name, description, detail, price, badge, lowStockThreshold, isActive, preorderEnabled, preorderDeposit, optionLabel } = req.body
 
     const merged = {
       name: name !== undefined ? name : existing.name,
@@ -1840,6 +1882,17 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
         ? parseInt(lowStockThreshold) : existing.low_stock_threshold,
       is_active: isActive !== undefined ? !!isActive : existing.is_active,
       preorder_enabled: preorderEnabled !== undefined ? !!preorderEnabled : existing.preorder_enabled,
+      option_label: optionLabel !== undefined ? ((optionLabel || '').trim() || null) : existing.option_label,
+    }
+
+    // A product can't have both lash length/curl options and named custom
+    // options - lash variants are seeded, never created here, so this only
+    // ever blocks the rare product that already has some.
+    if (merged.option_label && !existing.option_label) {
+      const variantCount = await pool.query('SELECT COUNT(*) FROM product_variants WHERE product_id = $1', [id])
+      if (parseInt(variantCount.rows[0].count) > 0) {
+        return res.status(400).json({ error: 'This product already has lash length/curl options and cannot also have custom options.' })
+      }
     }
 
     if (preorderDeposit !== undefined && preorderDeposit !== '') {
@@ -1864,19 +1917,22 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
 
     const result = await pool.query(
       `UPDATE products SET name=$1, description=$2, detail=$3, price=$4, badge=$5,
-        low_stock_threshold=$6, is_active=$7, preorder_enabled=$8, preorder_deposit=$9, updated_at = NOW() WHERE id = $10 RETURNING *`,
+        low_stock_threshold=$6, is_active=$7, preorder_enabled=$8, preorder_deposit=$9, option_label=$10, updated_at = NOW() WHERE id = $11 RETURNING *`,
       [merged.name, merged.description, merged.detail, merged.price, merged.badge,
-       merged.low_stock_threshold, merged.is_active, merged.preorder_enabled, merged.preorder_deposit, id]
+       merged.low_stock_threshold, merged.is_active, merged.preorder_enabled, merged.preorder_deposit, merged.option_label, id]
     )
     const p = result.rows[0]
     if (existing.is_active && !p.is_active) {
       await addNotification('section', 'Product deactivated', `"${p.name}" was deactivated and removed from the shop.`)
     }
+    const hasCustomOptions = !!p.option_label
     res.json({
       id: p.id, name: p.name, description: p.description, detail: p.detail,
-      price: parseFloat(p.price), badge: p.badge, stockQuantity: p.stock_quantity,
+      price: parseFloat(p.price), badge: p.badge,
+      stockQuantity: hasCustomOptions ? null : p.stock_quantity,
       lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
       preorderEnabled: p.preorder_enabled, preorderDeposit: parseFloat(p.preorder_deposit),
+      optionLabel: p.option_label, hasCustomOptions,
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to update product' })
@@ -1900,6 +1956,9 @@ app.post('/api/admin/products/:id/stock', authenticate, requireRole('sysadmin', 
     const existingResult = await pool.query('SELECT * FROM products WHERE id = $1', [id])
     if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
     const existing = existingResult.rows[0]
+    if (existing.option_label) {
+      return res.status(400).json({ error: 'This product has custom options - adjust stock on the option itself instead.' })
+    }
     const newStock = Math.max(0, existing.stock_quantity + delta)
     const result = await pool.query(
       'UPDATE products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
@@ -1953,6 +2012,199 @@ app.post('/api/admin/products/:productId/variants/:variantId/stock', authenticat
   }
 })
 
+// ── Custom product options (e.g. foundation shades) ──────────────────────────
+const serializeCustomOption = (o) => ({
+  id: o.id,
+  name: o.name,
+  swatchHex: o.swatch_hex,
+  stockQuantity: o.stock_quantity,
+  position: o.position,
+  isActive: o.is_active,
+})
+
+app.post('/api/admin/products/:id/options', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const productId = parseInt(req.params.id)
+  const { name, swatchHex, stockQuantity } = req.body
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Option name is required' })
+  try {
+    const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [productId])
+    if (productResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
+    if (!productResult.rows[0].option_label) {
+      return res.status(400).json({ error: 'Set an option label for this product before adding options.' })
+    }
+    const result = await pool.query(
+      `INSERT INTO product_options (product_id, name, swatch_hex, stock_quantity, position)
+       VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(position), 0) + 1 FROM product_options WHERE product_id = $1))
+       RETURNING *`,
+      [productId, name.trim(), swatchHex || null, parseInt(stockQuantity) || 0]
+    )
+    res.status(201).json(serializeCustomOption(result.rows[0]))
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: `"${name.trim()}" already exists for this product.` })
+    res.status(500).json({ error: 'Failed to add option' })
+    await logError('POST /api/admin/products/:id/options', err, req)
+  }
+})
+
+// Pastes one name per line, any number - duplicates (against existing
+// options or within the same paste, case-insensitive) are skipped and
+// listed rather than failing the whole batch.
+app.post('/api/admin/products/:id/options/bulk', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const productId = parseInt(req.params.id)
+  const { names, startStock } = req.body
+  if (!Array.isArray(names) || names.length === 0) {
+    return res.status(400).json({ error: 'At least one option name is required' })
+  }
+  try {
+    const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [productId])
+    if (productResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
+    if (!productResult.rows[0].option_label) {
+      return res.status(400).json({ error: 'Set an option label for this product before adding options.' })
+    }
+
+    const existingNames = new Set(
+      (await pool.query('SELECT lower(name) AS name FROM product_options WHERE product_id = $1', [productId])).rows.map(r => r.name)
+    )
+    const stock = Math.max(0, parseInt(startStock) || 0)
+    const created = []
+    const skipped = []
+    const seenInBatch = new Set()
+
+    let nextPosition = (await pool.query(
+      'SELECT COALESCE(MAX(position), 0) AS max FROM product_options WHERE product_id = $1', [productId]
+    )).rows[0].max
+
+    for (const raw of names) {
+      const trimmed = String(raw || '').trim()
+      if (!trimmed) continue
+      const key = trimmed.toLowerCase()
+      if (existingNames.has(key) || seenInBatch.has(key)) {
+        skipped.push(trimmed)
+        continue
+      }
+      seenInBatch.add(key)
+      nextPosition += 1
+      const result = await pool.query(
+        `INSERT INTO product_options (product_id, name, stock_quantity, position) VALUES ($1, $2, $3, $4) RETURNING *`,
+        [productId, trimmed, stock, nextPosition]
+      )
+      created.push(serializeCustomOption(result.rows[0]))
+    }
+
+    res.status(201).json({ created, skipped })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to add options' })
+    await logError('POST /api/admin/products/:id/options/bulk', err, req)
+  }
+})
+
+app.patch('/api/admin/products/:productId/options/:optionId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const productId = parseInt(req.params.productId)
+  const optionId = parseInt(req.params.optionId)
+  const { name, swatchHex, isActive } = req.body
+  try {
+    const existingResult = await pool.query(
+      'SELECT * FROM product_options WHERE id = $1 AND product_id = $2', [optionId, productId]
+    )
+    if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Option not found' })
+    const existing = existingResult.rows[0]
+    if (name !== undefined && !name.trim()) return res.status(400).json({ error: 'Option name is required' })
+    const merged = {
+      name: name !== undefined ? name.trim() : existing.name,
+      swatch_hex: swatchHex !== undefined ? (swatchHex || null) : existing.swatch_hex,
+      is_active: isActive !== undefined ? !!isActive : existing.is_active,
+    }
+    const result = await pool.query(
+      'UPDATE product_options SET name=$1, swatch_hex=$2, is_active=$3, updated_at=NOW() WHERE id=$4 RETURNING *',
+      [merged.name, merged.swatch_hex, merged.is_active, optionId]
+    )
+    res.json(serializeCustomOption(result.rows[0]))
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: `"${name.trim()}" already exists for this product.` })
+    res.status(500).json({ error: 'Failed to update option' })
+    await logError('PATCH /api/admin/products/:productId/options/:optionId', err, req)
+  }
+})
+
+// Swaps this option's position with its neighbour above/below, scoped to
+// its own product - mirrors PATCH /api/categories/:id/move.
+app.patch('/api/admin/products/:productId/options/:optionId/move', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const productId = parseInt(req.params.productId)
+  const optionId = parseInt(req.params.optionId)
+  const { direction } = req.body
+  if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: 'direction must be up or down' })
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const ordered = (await client.query(
+      'SELECT id FROM product_options WHERE product_id = $1 ORDER BY position ASC NULLS LAST, id ASC FOR UPDATE',
+      [productId]
+    )).rows
+    const idx = ordered.findIndex(o => o.id === optionId)
+    if (idx === -1) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Option not found' })
+    }
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= ordered.length) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: `This option is already at the ${direction === 'up' ? 'top' : 'bottom'}` })
+    }
+    for (let i = 0; i < ordered.length; i++) {
+      await client.query('UPDATE product_options SET position = $1 WHERE id = $2', [i + 1, ordered[i].id])
+    }
+    await client.query('UPDATE product_options SET position = $1 WHERE id = $2', [swapIdx + 1, ordered[idx].id])
+    await client.query('UPDATE product_options SET position = $1 WHERE id = $2', [idx + 1, ordered[swapIdx].id])
+    await client.query('COMMIT')
+    const result = await pool.query(
+      'SELECT * FROM product_options WHERE product_id = $1 ORDER BY position ASC NULLS LAST, id ASC', [productId]
+    )
+    res.json(result.rows.map(serializeCustomOption))
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to reorder option' })
+    await logError('PATCH /api/admin/products/:productId/options/:optionId/move', err, req)
+  } finally {
+    client.release()
+  }
+})
+
+// Same pattern as the lash-variant stock route - every change goes through
+// stock_movements for a full history.
+app.post('/api/admin/products/:productId/options/:optionId/stock', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const productId = parseInt(req.params.productId)
+  const optionId = parseInt(req.params.optionId)
+  const { change, reason, note } = req.body
+  const delta = parseInt(change)
+  if (!delta || isNaN(delta)) {
+    return res.status(400).json({ error: 'A non-zero stock change is required' })
+  }
+  if (!['restock', 'adjustment'].includes(reason)) {
+    return res.status(400).json({ error: 'Reason must be "restock" or "adjustment"' })
+  }
+  try {
+    const existingResult = await pool.query(
+      'SELECT * FROM product_options WHERE id = $1 AND product_id = $2', [optionId, productId]
+    )
+    if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Option not found' })
+    const existing = existingResult.rows[0]
+    const newStock = Math.max(0, existing.stock_quantity + delta)
+    const result = await pool.query(
+      'UPDATE product_options SET stock_quantity = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [newStock, optionId]
+    )
+    await pool.query(
+      'INSERT INTO stock_movements (product_id, product_option_id, change, reason, user_id, note) VALUES ($1, $2, $3, $4, $5, $6)',
+      [productId, optionId, newStock - existing.stock_quantity, reason, req.user.id, note || null]
+    )
+    const o = result.rows[0]
+    res.json({ id: o.id, stockQuantity: o.stock_quantity })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to adjust stock' })
+    await logError('POST /api/admin/products/:productId/options/:optionId/stock', err, req)
+  }
+})
+
 // ── Pre-orders (admin) ───────────────────────────────────────────────────────
 // Past promised_by_date, not yet sent/collected - whether or not the item
 // has actually arrived at the studio. Clears the moment it's dispatched or
@@ -1977,6 +2229,7 @@ const serializePreorder = (p) => {
     productName: p.product_name,
     quantity,
     customerName: maskName(p.customer_name),
+    optionName: p.option_name,
     price: priceAtOrder,
     deposit: parseFloat(p.deposit_amount),
     deliveryFee,
@@ -2459,6 +2712,17 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
       variantsByProduct[v.product_id].push(v)
     })
 
+    // Same idea for named custom options (e.g. foundation shades) - a
+    // product has one kind of option or the other, never both.
+    const customOptionResult = productIds.length
+      ? await pool.query('SELECT * FROM product_options WHERE product_id = ANY($1)', [productIds])
+      : { rows: [] }
+    const customOptionsByProduct = {}
+    customOptionResult.rows.forEach(o => {
+      if (!customOptionsByProduct[o.product_id]) customOptionsByProduct[o.product_id] = []
+      customOptionsByProduct[o.product_id].push(o)
+    })
+
     const orderItems = []
     let subtotal = 0
     for (const item of items) {
@@ -2489,6 +2753,22 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
         }
       }
 
+      let customOption = null
+      if (product.option_label) {
+        const productCustomOptions = customOptionsByProduct[product.id] || []
+        customOption = productCustomOptions.find(o => o.id === parseInt(item.productOptionId))
+        if (!customOption || !customOption.is_active) {
+          return res.status(400).json({
+            error: `Please choose a ${product.option_label.toLowerCase()} for "${product.name}" before adding it to your cart.`
+          })
+        }
+        if (qty > customOption.stock_quantity) {
+          return res.status(400).json({
+            error: `Only ${customOption.stock_quantity} left of "${product.name}" in ${customOption.name}. Please lower the quantity.`
+          })
+        }
+      }
+
       const price = parseFloat(product.price)
       subtotal += price * qty
       orderItems.push({
@@ -2499,6 +2779,8 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
         variantId: variant ? variant.id : null,
         lengthMm: variant ? variant.length_mm : null,
         curl: variant ? variant.curl : null,
+        productOptionId: customOption ? customOption.id : null,
+        optionName: customOption ? customOption.name : null,
       })
     }
 
@@ -2525,9 +2807,9 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
     const order = orderResult.rows[0]
     for (const item of orderItems) {
       await pool.query(
-        `INSERT INTO order_items (order_id, product_id, product_name, qty, price, variant_id, length_mm, curl)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [order.id, item.productId, item.name, item.qty, item.price, item.variantId, item.lengthMm, item.curl]
+        `INSERT INTO order_items (order_id, product_id, product_name, qty, price, variant_id, length_mm, curl, product_option_id, option_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [order.id, item.productId, item.name, item.qty, item.price, item.variantId, item.lengthMm, item.curl, item.productOptionId, item.optionName]
       )
     }
     await addNotification('order', 'New order received',
@@ -2553,7 +2835,7 @@ app.get('/api/orders', authenticate, async (req, res) => {
     const orders = ordersResult.rows
     for (const order of orders) {
       const itemsResult = await pool.query(
-        'SELECT * FROM order_items WHERE order_id = $1',
+        `SELECT oi.*, p.option_label FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = $1`,
         [order.id]
       )
       order.items = itemsResult.rows.map(i => ({
@@ -2564,6 +2846,9 @@ app.get('/api/orders', authenticate, async (req, res) => {
         variantId: i.variant_id,
         lengthMm: i.length_mm,
         curl: i.curl,
+        productOptionId: i.product_option_id,
+        optionName: i.option_name,
+        optionLabel: i.option_label,
       }))
       const latestOzowResult = await pool.query(
         'SELECT ozow_transaction_id, status FROM ozow_payments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
@@ -2781,6 +3066,7 @@ app.get('/api/orders/by-token/:token', async (req, res) => {
       [order.id]
     )
     const latestPayflex = latestPayflexResult.rows[0]
+    const itemsResult = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [order.id])
 
     res.json({
       id: order.id,
@@ -2789,6 +3075,9 @@ app.get('/api/orders/by-token/:token', async (req, res) => {
       paymentMethod: order.payment_method,
       paymentStatus: order.payment_status,
       status: order.status,
+      items: itemsResult.rows.map(i => ({
+        name: i.product_name, qty: i.qty, price: parseFloat(i.price), optionName: i.option_name,
+      })),
       ozowTransactionId: latestOzow ? latestOzow.ozow_transaction_id : null,
       ozowStatus: latestOzow ? latestOzow.status : null,
       payflexOrderId: latestPayflex ? latestPayflex.payflex_order_id : null,
@@ -3142,7 +3431,7 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintena
 // at all, even when it's enabled for the shop.
 app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, res) => {
   const {
-    productId, name, phone, email, quantity, fulfilmentMethod, acceptedTerms, provider,
+    productId, name, phone, email, quantity, fulfilmentMethod, acceptedTerms, provider, productOptionId,
     deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
   } = req.body
   if (!productId || !name || !name.trim() || !phone || !email) {
@@ -3185,6 +3474,19 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
     const qty = parseInt(quantity) || 1
     if (qty <= 0) return res.status(400).json({ error: 'Invalid quantity' })
 
+    // Pre-orders are never limited by stock, but a product with custom
+    // options still needs a valid, active one chosen.
+    let customOption = null
+    if (product.option_label) {
+      const optionResult = await pool.query(
+        'SELECT * FROM product_options WHERE id = $1 AND product_id = $2', [parseInt(productOptionId), product.id]
+      )
+      customOption = optionResult.rows[0]
+      if (!customOption || !customOption.is_active) {
+        return res.status(400).json({ error: `Please choose a ${product.option_label.toLowerCase()} before pre-ordering.` })
+      }
+    }
+
     // Price and deposit always come from the database - never trusted from
     // the browser.
     const priceAtOrder = parseFloat(product.price)
@@ -3196,8 +3498,8 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
       `INSERT INTO preorders (
          product_id, quantity, customer_name, customer_phone, customer_email, fulfilment_method,
          delivery_address, delivery_suburb, delivery_city, delivery_postal_code, delivery_notes,
-         price_at_order, deposit_amount, delivery_fee, public_token
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+         price_at_order, deposit_amount, delivery_fee, public_token, product_option_id, option_name
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [
         product.id, qty, name.trim(), normalisedPhone, email.trim(), fulfilmentMethod,
         fulfilmentMethod === 'delivery' ? deliveryAddress.trim() : null,
@@ -3206,6 +3508,7 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
         fulfilmentMethod === 'delivery' ? deliveryPostalCode.trim() : null,
         fulfilmentMethod === 'delivery' ? ((deliveryNotes || '').trim() || null) : null,
         priceAtOrder, depositAmount, deliveryFee, publicToken,
+        customOption ? customOption.id : null, customOption ? customOption.name : null,
       ]
     )
     const preorder = preorderResult.rows[0]
@@ -3284,6 +3587,8 @@ app.get('/api/preorders/by-token/:token', async (req, res) => {
       leadTime: settings.preorders,
       latestStatus: latestResult.rows[0]?.status || null,
       ozowAvailableForBalance: ozow.isOzowConfigured && balance > 0 && preorder.status === 'arrived',
+      optionLabel: product ? product.option_label : null,
+      optionName: preorder.option_name,
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch pre-order' })
@@ -3429,6 +3734,34 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
         )
         if (variant.stock_quantity > variant.low_stock_threshold && newStock <= variant.low_stock_threshold) {
           lowStockCrossed.push({ name: `${product.name} ${variant.length_mm}mm ${variant.curl} curl`, stock: newStock })
+        }
+        continue
+      }
+
+      if (item.product_option_id) {
+        // This item was for a named custom option (e.g. a shade) - stock
+        // lives on the option, not the product. Custom options share the
+        // product's own low-stock threshold - they have no threshold of
+        // their own.
+        const optionResult = await client.query('SELECT * FROM product_options WHERE id = $1 FOR UPDATE', [item.product_option_id])
+        const option = optionResult.rows[0]
+        if (!option) continue // option no longer exists; nothing to deduct
+
+        if (option.stock_quantity < item.qty) {
+          await client.query('ROLLBACK')
+          return res.status(400).json({
+            error: `Not enough stock for "${product.name}" (${option.name}) - only ${option.stock_quantity} left, but this order needs ${item.qty}. Restock before confirming.`
+          })
+        }
+
+        const newStock = option.stock_quantity - item.qty
+        await client.query('UPDATE product_options SET stock_quantity = $1, updated_at = NOW() WHERE id = $2', [newStock, option.id])
+        await client.query(
+          'INSERT INTO stock_movements (product_id, product_option_id, change, reason, order_id, user_id) VALUES ($1, $2, $3, $4, $5, $6)',
+          [product.id, option.id, -item.qty, 'sale', id, req.user.id]
+        )
+        if (option.stock_quantity > product.low_stock_threshold && newStock <= product.low_stock_threshold) {
+          lowStockCrossed.push({ name: `${product.name} (${option.name})`, stock: newStock })
         }
         continue
       }

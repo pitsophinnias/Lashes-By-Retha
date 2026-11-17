@@ -147,6 +147,16 @@ export default function App({ user, onLogout }) {
   const [stockAdjustReason, setStockAdjustReason] = useState('restock')
   const [stockAdjustNote, setStockAdjustNote] = useState('')
 
+  // ── Custom product options (e.g. foundation shades) ─────────────────────
+  const [optionsManagerProductId, setOptionsManagerProductId] = useState(null)
+  const [optionLabelDraft, setOptionLabelDraft] = useState('')
+  const [optionsManagerSearch, setOptionsManagerSearch] = useState('')
+  const [newOptionDraft, setNewOptionDraft] = useState({ name: '', swatchHex: '', stockQuantity: '' })
+  const [bulkOptionsOpen, setBulkOptionsOpen] = useState(false)
+  const [bulkOptionsText, setBulkOptionsText] = useState('')
+  const [bulkOptionsStartStock, setBulkOptionsStartStock] = useState('')
+  const [optionsManagerStatus, setOptionsManagerStatus] = useState(null)
+
   const [orderConfirmError, setOrderConfirmError] = useState('')
   // Order id currently showing the inline "confirm anyway?" prompt for an
   // Ozow order whose payment hasn't come through yet.
@@ -813,6 +823,8 @@ export default function App({ user, onLogout }) {
     }
     const url = stockAdjustTarget.kind === 'variant'
       ? `/api/admin/products/${stockAdjustTarget.productId}/variants/${stockAdjustTarget.variantId}/stock`
+      : stockAdjustTarget.kind === 'customOption'
+      ? `/api/admin/products/${stockAdjustTarget.productId}/options/${stockAdjustTarget.optionId}/stock`
       : `/api/admin/products/${stockAdjustTarget.id}/stock`
     try {
       const res = await apiFetch(url, {
@@ -825,6 +837,12 @@ export default function App({ user, onLogout }) {
           setProducts(prev => prev.map(p => p.id === stockAdjustTarget.productId
             ? { ...p, options: p.options.map(o => o.id === data.id ? { ...o, stockQuantity: data.stockQuantity } : o) }
             : p))
+        } else if (stockAdjustTarget.kind === 'customOption') {
+          setProducts(prev => prev.map(p => {
+            if (p.id !== stockAdjustTarget.productId) return p
+            const customOptions = p.customOptions.map(o => o.id === data.id ? { ...o, stockQuantity: data.stockQuantity } : o)
+            return { ...p, customOptions, stockQuantity: customOptions.filter(o => o.isActive).reduce((s, o) => s + o.stockQuantity, 0) }
+          }))
         } else {
           setProducts(prev => prev.map(p => p.id === data.id ? { ...p, stockQuantity: data.stockQuantity } : p))
         }
@@ -838,6 +856,115 @@ export default function App({ user, onLogout }) {
     } catch {
       setProductFormStatus({ type: 'error', message: 'Failed to adjust stock.' })
     }
+  }
+
+  const openOptionsManager = (product) => {
+    setOptionsManagerProductId(product.id)
+    setOptionLabelDraft(product.optionLabel || '')
+    setOptionsManagerSearch('')
+    setNewOptionDraft({ name: '', swatchHex: '', stockQuantity: '' })
+    setBulkOptionsOpen(false)
+    setBulkOptionsText('')
+    setBulkOptionsStartStock('')
+    setOptionsManagerStatus(null)
+  }
+
+  const saveOptionLabel = async () => {
+    if (!optionLabelDraft.trim()) {
+      setOptionsManagerStatus({ type: 'error', message: 'An option label is required, e.g. Shade.' })
+      return
+    }
+    try {
+      const res = await apiFetch(`/api/admin/products/${optionsManagerProductId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ optionLabel: optionLabelDraft.trim() }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        await fetchProducts()
+        setOptionsManagerStatus(null)
+      } else {
+        setOptionsManagerStatus({ type: 'error', message: data.error || 'Failed to save the option label.' })
+      }
+    } catch {
+      setOptionsManagerStatus({ type: 'error', message: 'Failed to save the option label.' })
+    }
+  }
+
+  const addCustomOption = async () => {
+    if (!newOptionDraft.name.trim()) return
+    try {
+      const res = await apiFetch(`/api/admin/products/${optionsManagerProductId}/options`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newOptionDraft.name, swatchHex: newOptionDraft.swatchHex || null, stockQuantity: newOptionDraft.stockQuantity,
+        }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        await fetchProducts()
+        setNewOptionDraft({ name: '', swatchHex: '', stockQuantity: '' })
+        setOptionsManagerStatus(null)
+      } else {
+        setOptionsManagerStatus({ type: 'error', message: data.error || 'Failed to add option.' })
+      }
+    } catch {
+      setOptionsManagerStatus({ type: 'error', message: 'Failed to add option.' })
+    }
+  }
+
+  const addBulkOptions = async () => {
+    const names = bulkOptionsText.split('\n').map(s => s.trim()).filter(Boolean)
+    if (names.length === 0) return
+    try {
+      const res = await apiFetch(`/api/admin/products/${optionsManagerProductId}/options/bulk`, {
+        method: 'POST',
+        body: JSON.stringify({ names, startStock: bulkOptionsStartStock }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        await fetchProducts()
+        setBulkOptionsText('')
+        setBulkOptionsStartStock('')
+        setBulkOptionsOpen(false)
+        setOptionsManagerStatus({
+          type: 'success',
+          message: `Added ${data.created.length} option${data.created.length !== 1 ? 's' : ''}.` +
+            (data.skipped.length > 0 ? ` Skipped as already there: ${data.skipped.join(', ')}.` : ''),
+        })
+      } else {
+        setOptionsManagerStatus({ type: 'error', message: data.error || 'Failed to add options.' })
+      }
+    } catch {
+      setOptionsManagerStatus({ type: 'error', message: 'Failed to add options.' })
+    }
+  }
+
+  const updateCustomOption = async (optionId, patch) => {
+    try {
+      const res = await apiFetch(`/api/admin/products/${optionsManagerProductId}/options/${optionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        await fetchProducts()
+      } else {
+        setOptionsManagerStatus({ type: 'error', message: data.error || 'Failed to update option.' })
+      }
+    } catch {
+      setOptionsManagerStatus({ type: 'error', message: 'Failed to update option.' })
+    }
+  }
+
+  const moveCustomOption = async (optionId, direction) => {
+    try {
+      const res = await apiFetch(`/api/admin/products/${optionsManagerProductId}/options/${optionId}/move`, {
+        method: 'PATCH',
+        body: JSON.stringify({ direction }),
+      })
+      if (res.ok) await fetchProducts()
+    } catch {}
   }
 
   const openClass = async (cls) => {
@@ -2774,11 +2901,11 @@ export default function App({ user, onLogout }) {
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#C47A8A', marginBottom: 4 }}>
                               R {p.price}
                             </div>
-                            {!p.hasOptions ? (
+                            {!p.hasOptions && !p.hasCustomOptions ? (
                               <div style={{ fontSize: 12, color: p.stockQuantity <= p.lowStockThreshold ? '#C47A8A' : '#9A8A8E' }}>
                                 Stock: {p.stockQuantity}{p.stockQuantity <= p.lowStockThreshold ? ' (low)' : ''}
                               </div>
-                            ) : (
+                            ) : p.hasOptions ? (
                               <div style={{ marginTop: 6 }}>
                                 <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
                                   Lengths &amp; Curls
@@ -2803,6 +2930,45 @@ export default function App({ user, onLogout }) {
                                       {o.lengthMm}mm {o.curl}: {o.stockQuantity}
                                     </div>
                                   ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: 6 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+                                  {p.optionLabel}s{p.customOptions.length > 0 ? ` (${p.customOptions.length})` : ''}
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                  {p.customOptions.slice(0, 12).map(o => (
+                                    <div
+                                      key={o.id}
+                                      onClick={() => { setStockAdjustTarget({ kind: 'customOption', productId: p.id, optionId: o.id, name: `${p.name}, ${p.optionLabel}: ${o.name}`, stockQuantity: o.stockQuantity }); setProductFormStatus(null) }}
+                                      style={{
+                                        cursor: 'pointer',
+                                        fontSize: 12,
+                                        fontWeight: 600,
+                                        padding: '4px 10px',
+                                        borderRadius: 14,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: 5,
+                                        opacity: o.isActive ? 1 : 0.5,
+                                        border: `1px solid ${o.stockQuantity <= p.lowStockThreshold ? '#F5C0CC' : '#EDD5DB'}`,
+                                        background: o.stockQuantity <= p.lowStockThreshold ? '#FDE8EC' : '#F7EEF0',
+                                        color: o.stockQuantity <= p.lowStockThreshold ? '#A23F51' : '#8C5A6A',
+                                      }}
+                                      title="Click to adjust this option's stock"
+                                    >
+                                      {o.swatchHex && (
+                                        <span style={{ width: 10, height: 10, borderRadius: '50%', background: o.swatchHex, border: '1px solid rgba(0,0,0,0.15)', flexShrink: 0 }} />
+                                      )}
+                                      {o.name}: {o.stockQuantity}{!o.isActive ? ' (off)' : ''}
+                                    </div>
+                                  ))}
+                                  {p.customOptions.length > 12 && (
+                                    <button className="secondary-btn" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => openOptionsManager(p)}>
+                                      +{p.customOptions.length - 12} more
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             )}
@@ -2908,9 +3074,14 @@ export default function App({ user, onLogout }) {
                             >
                               Edit
                             </button>
-                            {!p.hasOptions && (
+                            {!p.hasOptions && !p.hasCustomOptions && (
                               <button className="secondary-btn" onClick={() => { setStockAdjustTarget({ kind: 'product', id: p.id, name: p.name, stockQuantity: p.stockQuantity }); setProductFormStatus(null) }}>
                                 Adjust Stock
+                              </button>
+                            )}
+                            {!p.hasOptions && (
+                              <button className="secondary-btn" onClick={() => openOptionsManager(p)}>
+                                Manage Options
                               </button>
                             )}
                             <button className="delete-btn" onClick={() => toggleProductActive(p)}>
@@ -2978,6 +3149,188 @@ export default function App({ user, onLogout }) {
                     </div>
                   </div>
                 )}
+
+                {optionsManagerProductId != null && (() => {
+                  const optProduct = products.find(p => p.id === optionsManagerProductId)
+                  if (!optProduct) return null
+                  const allOptions = optProduct.customOptions || []
+                  const filteredOptions = optionsManagerSearch.trim()
+                    ? allOptions.filter(o => o.name.toLowerCase().includes(optionsManagerSearch.trim().toLowerCase()))
+                    : allOptions
+                  return (
+                    <div
+                      style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(44,26,32,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+                      onClick={() => setOptionsManagerProductId(null)}
+                    >
+                      <div
+                        style={{ background: 'white', borderRadius: 16, padding: 28, maxWidth: 520, width: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(44,26,32,0.2)' }}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#2C1A20', marginBottom: 4 }}>
+                          Options for "{optProduct.name}"
+                        </div>
+                        <div style={{ fontSize: 12, color: '#9A8A8E', marginBottom: 16 }}>
+                          A product has either lash length/curl options or custom options like this, never both.
+                        </div>
+
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 16 }}>
+                          <div style={{ flex: 1 }}>
+                            <div className="field-label" style={{ marginBottom: 4 }}>Option label</div>
+                            <input
+                              className="category-input"
+                              style={{ width: '100%' }}
+                              list="option-label-suggestions"
+                              value={optionLabelDraft}
+                              onChange={e => setOptionLabelDraft(e.target.value)}
+                              placeholder="e.g. Shade"
+                            />
+                            <datalist id="option-label-suggestions">
+                              <option value="Shade" />
+                              <option value="Colour" />
+                              <option value="Size" />
+                            </datalist>
+                          </div>
+                          <button className="secondary-btn" onClick={saveOptionLabel}>Save Label</button>
+                        </div>
+
+                        {optionsManagerStatus && (
+                          <div className={optionsManagerStatus.type === 'error' ? 'error-msg' : 'success-msg'} style={{ marginBottom: 12 }}>
+                            {optionsManagerStatus.message}
+                          </div>
+                        )}
+
+                        {optProduct.optionLabel && (
+                          <>
+                            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                              <input
+                                className="category-input"
+                                style={{ flex: 1 }}
+                                value={newOptionDraft.name}
+                                onChange={e => setNewOptionDraft(prev => ({ ...prev, name: e.target.value }))}
+                                placeholder={`New ${optProduct.optionLabel.toLowerCase()} name`}
+                              />
+                              <input
+                                type="color"
+                                value={newOptionDraft.swatchHex || '#C47A8A'}
+                                onChange={e => setNewOptionDraft(prev => ({ ...prev, swatchHex: e.target.value }))}
+                                title="Colour swatch (optional)"
+                                style={{ width: 36, height: 36, padding: 0, border: '1px solid #EDD5DB', borderRadius: 6, cursor: 'pointer', flexShrink: 0 }}
+                              />
+                              <input
+                                className="category-input"
+                                type="number"
+                                style={{ width: 80 }}
+                                value={newOptionDraft.stockQuantity}
+                                onChange={e => setNewOptionDraft(prev => ({ ...prev, stockQuantity: e.target.value }))}
+                                placeholder="Stock"
+                              />
+                              <button className="upload-btn" onClick={addCustomOption}>Add</button>
+                            </div>
+
+                            <button
+                              className="secondary-btn"
+                              style={{ marginBottom: 12 }}
+                              onClick={() => setBulkOptionsOpen(prev => !prev)}
+                            >
+                              {bulkOptionsOpen ? 'Close' : 'Add several'}
+                            </button>
+
+                            {bulkOptionsOpen && (
+                              <div style={{ background: '#FAF6F4', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                                <div className="field-label" style={{ marginBottom: 4 }}>One name per line</div>
+                                <textarea
+                                  className="category-input"
+                                  style={{ width: '100%', resize: 'vertical', marginBottom: 8 }}
+                                  rows={6}
+                                  value={bulkOptionsText}
+                                  onChange={e => setBulkOptionsText(e.target.value)}
+                                  placeholder={'apple pie\ncashew\nchocolate pie'}
+                                />
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                  <input
+                                    className="category-input"
+                                    type="number"
+                                    style={{ width: 140 }}
+                                    value={bulkOptionsStartStock}
+                                    onChange={e => setBulkOptionsStartStock(e.target.value)}
+                                    placeholder="Starting stock"
+                                  />
+                                  <button className="upload-btn" onClick={addBulkOptions}>Add All</button>
+                                </div>
+                              </div>
+                            )}
+
+                            {allOptions.length > 10 && (
+                              <input
+                                className="category-input"
+                                style={{ width: '100%', marginBottom: 10 }}
+                                value={optionsManagerSearch}
+                                onChange={e => setOptionsManagerSearch(e.target.value)}
+                                placeholder={`Search ${optProduct.optionLabel.toLowerCase()}s...`}
+                              />
+                            )}
+
+                            <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #F0E8E8', borderRadius: 8 }}>
+                              {filteredOptions.length === 0 && (
+                                <div style={{ padding: 16, fontSize: 13, color: '#9A8A8E', textAlign: 'center' }}>
+                                  {allOptions.length === 0 ? 'No options yet - add one above.' : 'No options match your search.'}
+                                </div>
+                              )}
+                              {filteredOptions.map((o, idx) => (
+                                <div
+                                  key={o.id}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                                    borderBottom: idx < filteredOptions.length - 1 ? '1px solid #F7F0F0' : 'none',
+                                    opacity: o.isActive ? 1 : 0.55,
+                                  }}
+                                >
+                                  {o.swatchHex ? (
+                                    <span style={{ width: 16, height: 16, borderRadius: '50%', background: o.swatchHex, border: '1px solid rgba(0,0,0,0.15)', flexShrink: 0 }} />
+                                  ) : (
+                                    <span style={{ width: 16, height: 16, flexShrink: 0 }} />
+                                  )}
+                                  <input
+                                    className="category-input"
+                                    style={{ flex: 1, padding: '4px 8px', fontSize: 13 }}
+                                    defaultValue={o.name}
+                                    onBlur={e => { if (e.target.value.trim() && e.target.value.trim() !== o.name) updateCustomOption(o.id, { name: e.target.value.trim() }) }}
+                                  />
+                                  <input
+                                    type="color"
+                                    value={o.swatchHex || '#FFFFFF'}
+                                    onChange={e => updateCustomOption(o.id, { swatchHex: e.target.value })}
+                                    style={{ width: 28, height: 28, padding: 0, border: '1px solid #EDD5DB', borderRadius: 6, cursor: 'pointer', flexShrink: 0 }}
+                                  />
+                                  <span
+                                    onClick={() => { setStockAdjustTarget({ kind: 'customOption', productId: optProduct.id, optionId: o.id, name: `${optProduct.name}, ${optProduct.optionLabel}: ${o.name}`, stockQuantity: o.stockQuantity }); setProductFormStatus(null) }}
+                                    style={{ fontSize: 12, fontWeight: 600, color: '#8C5A6A', cursor: 'pointer', minWidth: 46, textAlign: 'right' }}
+                                    title="Click to adjust stock"
+                                  >
+                                    {o.stockQuantity}
+                                  </span>
+                                  <button className="secondary-btn" style={{ padding: '3px 7px', fontSize: 11 }} onClick={() => moveCustomOption(o.id, 'up')}>&uarr;</button>
+                                  <button className="secondary-btn" style={{ padding: '3px 7px', fontSize: 11 }} onClick={() => moveCustomOption(o.id, 'down')}>&darr;</button>
+                                  <button
+                                    className={o.isActive ? 'delete-btn' : 'secondary-btn'}
+                                    style={{ padding: '3px 9px', fontSize: 11 }}
+                                    onClick={() => updateCustomOption(o.id, { isActive: !o.isActive })}
+                                  >
+                                    {o.isActive ? 'Off' : 'On'}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+
+                        <button className="secondary-btn" style={{ marginTop: 16, alignSelf: 'flex-start' }} onClick={() => setOptionsManagerProductId(null)}>
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })()}
               </div>
             )}
 
@@ -3696,7 +4049,7 @@ export default function App({ user, onLogout }) {
                           <div key={preorder.id} style={{ padding: '14px 20px', borderBottom: '1px solid #F5F5F5', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
                             <div style={{ minWidth: 220 }}>
                               <div style={{ fontSize: 13, fontWeight: 600, color: '#3E2A30' }}>
-                                {preorder.customerName} <span style={{ color: '#9A8A8E', fontWeight: 400 }}>· {preorder.quantity}x</span>
+                                {preorder.customerName} <span style={{ color: '#9A8A8E', fontWeight: 400 }}>· {preorder.quantity}x{preorder.optionName ? ` · ${preorder.optionName}` : ''}</span>
                                 {preorder.isTest && (
                                   <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#9E9E9E', background: '#F5F5F5', borderRadius: 4, padding: '1px 6px', textTransform: 'uppercase' }}>Test</span>
                                 )}
@@ -4255,6 +4608,11 @@ export default function App({ user, onLogout }) {
                                 {item.lengthMm != null && (
                                   <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
                                     {item.lengthMm}mm, {item.curl} curl
+                                  </div>
+                                )}
+                                {item.optionName && (
+                                  <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>
+                                    {item.optionLabel || 'Option'}: {item.optionName}
                                   </div>
                                 )}
                               </div>

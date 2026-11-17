@@ -645,6 +645,42 @@ const createTables = async () => {
     console.log(`Removed ${dashboardReadyRemoved} old "Dashboard ready" notification(s)`)
   }
 
+  // General named product options (e.g. foundation shades), separate from
+  // the lash length/curl variants - a product uses one or the other, never
+  // both (enforced in application code). option_label names the picker
+  // ("Shade", "Colour", "Size"); NULL means the product has no custom
+  // options. order_items/preorders carry a snapshot of the chosen option's
+  // name (option_name) so it stays correct even if the option is later
+  // renamed or deactivated - the live row is still linked by id for stock.
+  await pool.query(`
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS option_label VARCHAR(30);
+
+    CREATE TABLE IF NOT EXISTS product_options (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      name VARCHAR(60) NOT NULL,
+      swatch_hex VARCHAR(7),
+      stock_quantity INTEGER NOT NULL DEFAULT 0,
+      position INTEGER,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS product_option_id INTEGER REFERENCES product_options(id);
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS option_name VARCHAR(60);
+    ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS product_option_id INTEGER REFERENCES product_options(id);
+    ALTER TABLE preorders ADD COLUMN IF NOT EXISTS product_option_id INTEGER REFERENCES product_options(id);
+    ALTER TABLE preorders ADD COLUMN IF NOT EXISTS option_name VARCHAR(60);
+  `)
+  // A plain UNIQUE(product_id, name) can't express the case-insensitive
+  // match ("Cashew" and "cashew" are the same shade) - a functional unique
+  // index is the only way to enforce that at the database level.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS product_options_product_lower_name_idx
+      ON product_options (product_id, lower(name));
+  `)
+
   console.log('Database tables ready')
 }
 
