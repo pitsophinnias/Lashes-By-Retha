@@ -3163,7 +3163,7 @@ export default function App({ user, onLogout }) {
                       onClick={() => setOptionsManagerProductId(null)}
                     >
                       <div
-                        style={{ background: 'white', borderRadius: 16, padding: 28, maxWidth: 520, width: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(44,26,32,0.2)' }}
+                        style={{ background: 'white', borderRadius: 16, padding: '20px 16px', maxWidth: 520, width: '100%', maxHeight: '88vh', boxSizing: 'border-box', overflowX: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(44,26,32,0.2)' }}
                         onClick={e => e.stopPropagation()}
                       >
                         <div style={{ fontSize: 17, fontWeight: 700, color: '#2C1A20', marginBottom: 4 }}>
@@ -3201,10 +3201,10 @@ export default function App({ user, onLogout }) {
 
                         {optProduct.optionLabel && (
                           <>
-                            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
                               <input
                                 className="category-input"
-                                style={{ flex: 1 }}
+                                style={{ flex: 1, minWidth: 140 }}
                                 value={newOptionDraft.name}
                                 onChange={e => setNewOptionDraft(prev => ({ ...prev, name: e.target.value }))}
                                 placeholder={`New ${optProduct.optionLabel.toLowerCase()} name`}
@@ -3280,7 +3280,7 @@ export default function App({ user, onLogout }) {
                                 <div
                                   key={o.id}
                                   style={{
-                                    display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+                                    display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px',
                                     borderBottom: idx < filteredOptions.length - 1 ? '1px solid #F7F0F0' : 'none',
                                     opacity: o.isActive ? 1 : 0.55,
                                   }}
@@ -3292,7 +3292,7 @@ export default function App({ user, onLogout }) {
                                   )}
                                   <input
                                     className="category-input"
-                                    style={{ flex: 1, padding: '4px 8px', fontSize: 13 }}
+                                    style={{ flex: '1 1 100px', minWidth: 90, padding: '4px 8px', fontSize: 13 }}
                                     defaultValue={o.name}
                                     onBlur={e => { if (e.target.value.trim() && e.target.value.trim() !== o.name) updateCustomOption(o.id, { name: e.target.value.trim() }) }}
                                   />
