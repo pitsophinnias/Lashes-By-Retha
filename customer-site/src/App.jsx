@@ -432,8 +432,8 @@ function PaymentChoiceButtons({ options, selected, onSelect }) {
 // positioned from the field's own getBoundingClientRect() - product cards
 // clip overflow, so a panel positioned relative to the field (or any other
 // fixed-position ancestor inside a clipped/transformed card) would otherwise
-// be cut down to a single visible row.
-const PANEL_MAX_HEIGHT = 220
+// be cut down to a single visible row. Same floating panel on mobile and
+// desktop, just more compact on mobile.
 const PANEL_GAP = 6
 
 function OptionPicker({ label, options, value, onChange, isMobile, respectStock = true }) {
@@ -446,6 +446,7 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
   const searchRef = useRef(null)
   const listRef = useRef(null)
 
+  const panelMaxHeight = isMobile ? 200 : 220
   const selected = options.find(o => o.id === value) || null
   const showSearch = options.length > 8
   const filtered = showSearch && search.trim()
@@ -474,17 +475,15 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
     else if (listRef.current) listRef.current.focus()
   }, [open])
 
-  // Desktop only - the mobile sheet is a full-screen overlay, not anchored
-  // to the field, so it doesn't need position tracking.
   useEffect(() => {
-    if (!open || isMobile) return
+    if (!open) return
 
     const computePosition = () => {
       const el = fieldRef.current
       if (!el) return null
       const rect = el.getBoundingClientRect()
       const spaceBelow = window.innerHeight - rect.bottom
-      if (spaceBelow < PANEL_MAX_HEIGHT + 20) {
+      if (spaceBelow < panelMaxHeight + 20) {
         return { left: rect.left, width: rect.width, bottom: window.innerHeight - rect.top + PANEL_GAP, placement: 'above' }
       }
       return { left: rect.left, width: rect.width, top: rect.bottom + PANEL_GAP, placement: 'below' }
@@ -517,7 +516,7 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
       window.removeEventListener('resize', onScrollOrResize)
       if (rafId != null) cancelAnimationFrame(rafId)
     }
-  }, [open, isMobile])
+  }, [open, panelMaxHeight])
 
   const selectOption = (option) => {
     if (respectStock && option.stockQuantity <= 0) return
@@ -548,9 +547,7 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
       aria-label={label}
       tabIndex={-1}
       onKeyDown={handleListKeyDown}
-      style={isMobile
-        ? { outline: 'none' } // the mobile sheet's own wrapper scrolls instead
-        : { maxHeight: `${PANEL_MAX_HEIGHT}px`, overflowY: 'auto', outline: 'none' }}
+      style={{ maxHeight: `${panelMaxHeight}px`, overflowY: 'auto', outline: 'none' }}
     >
       {filtered.length === 0 && (
         <div style={{ padding: '14px 16px', fontSize: '13px', color: '#9A7A82', textAlign: 'center' }}>No matches</div>
@@ -569,8 +566,8 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
-              padding: isMobile ? '14px 18px' : '9px 14px',
-              minHeight: isMobile ? undefined : '38px',
+              padding: isMobile ? '8px 14px' : '9px 14px',
+              minHeight: isMobile ? '36px' : '38px',
               boxSizing: 'border-box',
               cursor: soldOut ? 'not-allowed' : 'pointer',
               background: idx === highlightIndex ? '#FDF0F3' : 'white',
@@ -589,7 +586,8 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
   )
 
   const searchInputStyle = {
-    width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #F5DDE2',
+    width: '100%', height: isMobile ? '34px' : undefined, padding: isMobile ? '0 10px' : '10px 12px',
+    borderRadius: '8px', border: '1px solid #F5DDE2',
     fontSize: '14px', fontFamily: 'inherit', color: '#2C2C2C', boxSizing: 'border-box', outline: 'none',
   }
 
@@ -606,58 +604,6 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
     width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '12px 14px', borderRadius: '10px', border: `1px solid ${open ? '#C47A8A' : '#F5DDE2'}`,
     background: 'white', fontSize: '14px', fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
-  }
-
-  if (isMobile) {
-    return (
-      <div ref={fieldRef}>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          aria-label={label}
-          style={triggerStyle}
-        >
-          {triggerLabel}
-          <span style={{ color: '#9A7A82', marginLeft: '8px' }}>&#9662;</span>
-        </button>
-        {open && typeof document !== 'undefined' && createPortal(
-          <div
-            style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.4)', zIndex: 950 }}
-            onClick={() => setOpen(false)}
-          >
-            <div
-              ref={panelRef}
-              style={{
-                position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white',
-                borderRadius: '16px 16px 0 0', maxHeight: '72vh', display: 'flex', flexDirection: 'column',
-                boxShadow: '0 -8px 32px rgba(44,44,44,0.2)',
-              }}
-              onClick={e => e.stopPropagation()}
-            >
-              <div style={{ padding: '16px 18px', borderBottom: '1px solid #F5DDE2', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 700, fontSize: '15px', color: '#2C2C2C' }}>Choose a {label.toLowerCase()}</span>
-                <button onClick={() => setOpen(false)} style={{ border: 'none', background: 'none', fontSize: '20px', color: '#7A6670', cursor: 'pointer' }}>x</button>
-              </div>
-              {showSearch && (
-                <div style={{ padding: '12px 16px' }}>
-                  <input
-                    ref={searchRef}
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                    placeholder={`Search ${label.toLowerCase()}s...`}
-                    style={searchInputStyle}
-                  />
-                </div>
-              )}
-              <div style={{ overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>{rows}</div>
-            </div>
-          </div>,
-          document.body
-        )}
-      </div>
-    )
   }
 
   return (
