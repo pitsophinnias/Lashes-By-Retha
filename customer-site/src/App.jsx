@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 
 const CLASSES = [
   {
@@ -426,11 +427,22 @@ function PaymentChoiceButtons({ options, selected, onSelect }) {
 // "Shade"); options is every active option, already in display order.
 // respectStock disables and labels an empty option "Sold out" - turned off
 // for pre-orders, which (unlike the shop grid) are never limited by stock.
+//
+// The open panel is rendered through a portal into document.body, fixed-
+// positioned from the field's own getBoundingClientRect() - product cards
+// clip overflow, so a panel positioned relative to the field (or any other
+// fixed-position ancestor inside a clipped/transformed card) would otherwise
+// be cut down to a single visible row.
+const PANEL_MAX_HEIGHT = 220
+const PANEL_GAP = 6
+
 function OptionPicker({ label, options, value, onChange, isMobile, respectStock = true }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [highlightIndex, setHighlightIndex] = useState(-1)
-  const containerRef = useRef(null)
+  const [panelPos, setPanelPos] = useState(null)
+  const fieldRef = useRef(null)
+  const panelRef = useRef(null)
   const searchRef = useRef(null)
   const listRef = useRef(null)
 
@@ -440,10 +452,16 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
     ? options.filter(o => o.name.toLowerCase().includes(search.trim().toLowerCase()))
     : options
 
+  // Outside-click closing has to check the field AND the portaled panel -
+  // the panel is no longer a DOM descendant of the field once portaled, so
+  // a plain "is this inside the field" check would close it on every click
+  // inside the panel itself.
   useEffect(() => {
     if (!open) return
     const handleClick = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false)
+      if (fieldRef.current?.contains(e.target)) return
+      if (panelRef.current?.contains(e.target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
@@ -455,6 +473,51 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
     if (showSearch && searchRef.current) searchRef.current.focus()
     else if (listRef.current) listRef.current.focus()
   }, [open])
+
+  // Desktop only - the mobile sheet is a full-screen overlay, not anchored
+  // to the field, so it doesn't need position tracking.
+  useEffect(() => {
+    if (!open || isMobile) return
+
+    const computePosition = () => {
+      const el = fieldRef.current
+      if (!el) return null
+      const rect = el.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      if (spaceBelow < PANEL_MAX_HEIGHT + 20) {
+        return { left: rect.left, width: rect.width, bottom: window.innerHeight - rect.top + PANEL_GAP, placement: 'above' }
+      }
+      return { left: rect.left, width: rect.width, top: rect.bottom + PANEL_GAP, placement: 'below' }
+    }
+
+    setPanelPos(computePosition())
+
+    let rafId = null
+    const update = () => {
+      rafId = null
+      const el = fieldRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      // The field has scrolled out of view - close rather than show a
+      // panel anchored to nothing visible.
+      if (rect.bottom < 0 || rect.top > window.innerHeight) {
+        setOpen(false)
+        return
+      }
+      setPanelPos(computePosition())
+    }
+    const onScrollOrResize = () => {
+      if (rafId != null) return
+      rafId = requestAnimationFrame(update)
+    }
+    window.addEventListener('scroll', onScrollOrResize, { passive: true, capture: true })
+    window.addEventListener('resize', onScrollOrResize, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScrollOrResize, { capture: true })
+      window.removeEventListener('resize', onScrollOrResize)
+      if (rafId != null) cancelAnimationFrame(rafId)
+    }
+  }, [open, isMobile])
 
   const selectOption = (option) => {
     if (respectStock && option.stockQuantity <= 0) return
@@ -485,7 +548,9 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
       aria-label={label}
       tabIndex={-1}
       onKeyDown={handleListKeyDown}
-      style={{ maxHeight: '280px', overflowY: 'auto', outline: 'none' }}
+      style={isMobile
+        ? { outline: 'none' } // the mobile sheet's own wrapper scrolls instead
+        : { maxHeight: `${PANEL_MAX_HEIGHT}px`, overflowY: 'auto', outline: 'none' }}
     >
       {filtered.length === 0 && (
         <div style={{ padding: '14px 16px', fontSize: '13px', color: '#9A7A82', textAlign: 'center' }}>No matches</div>
@@ -504,7 +569,9 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
-              padding: isMobile ? '14px 18px' : '10px 14px',
+              padding: isMobile ? '14px 18px' : '9px 14px',
+              minHeight: isMobile ? undefined : '38px',
+              boxSizing: 'border-box',
               cursor: soldOut ? 'not-allowed' : 'pointer',
               background: idx === highlightIndex ? '#FDF0F3' : 'white',
               opacity: soldOut ? 0.5 : 1,
@@ -543,7 +610,7 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
 
   if (isMobile) {
     return (
-      <div ref={containerRef}>
+      <div ref={fieldRef}>
         <button
           type="button"
           onClick={() => setOpen(true)}
@@ -555,12 +622,13 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
           {triggerLabel}
           <span style={{ color: '#9A7A82', marginLeft: '8px' }}>&#9662;</span>
         </button>
-        {open && (
+        {open && typeof document !== 'undefined' && createPortal(
           <div
             style={{ position: 'fixed', inset: 0, background: 'rgba(44,44,44,0.4)', zIndex: 950 }}
             onClick={() => setOpen(false)}
           >
             <div
+              ref={panelRef}
               style={{
                 position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white',
                 borderRadius: '16px 16px 0 0', maxHeight: '72vh', display: 'flex', flexDirection: 'column',
@@ -585,14 +653,15 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
               )}
               <div style={{ overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>{rows}</div>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
       </div>
     )
   }
 
   return (
-    <div ref={containerRef} style={{ position: 'relative' }}>
+    <div ref={fieldRef}>
       <button
         type="button"
         role="combobox"
@@ -609,12 +678,17 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
         {triggerLabel}
         <span style={{ color: '#9A7A82', marginLeft: '8px' }}>&#9662;</span>
       </button>
-      {open && (
+      {open && panelPos && typeof document !== 'undefined' && createPortal(
         <div
+          ref={panelRef}
           style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, background: 'white',
+            position: 'fixed',
+            left: `${panelPos.left}px`,
+            width: `${panelPos.width}px`,
+            ...(panelPos.placement === 'below' ? { top: `${panelPos.top}px` } : { bottom: `${panelPos.bottom}px` }),
+            background: 'white',
             border: '1px solid #F5DDE2', borderRadius: '10px', boxShadow: '0 8px 28px rgba(44,44,44,0.18)',
-            zIndex: 60, overflow: 'hidden',
+            zIndex: 1000, overflow: 'hidden',
           }}
         >
           {showSearch && (
@@ -630,7 +704,8 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
             </div>
           )}
           {rows}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
