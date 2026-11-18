@@ -1726,7 +1726,7 @@ app.post('/api/admin/test-data/delete', authenticate, requireRole('sysadmin'), a
 app.get('/api/products', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, description, detail, price, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit
+      `SELECT id, name, description, detail, price, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit, option_label
        FROM products WHERE is_active = TRUE ORDER BY id ASC`
     )
     const variantsByProduct = await fetchVariantsByProduct(false)

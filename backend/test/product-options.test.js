@@ -220,6 +220,28 @@ test('deactivating an option hides it from the public products endpoint', async 
   assert.ok(!afterRow.customOptions.some(o => o.id === option.id))
 })
 
+test('GET /api/products (public) returns optionLabel, hasCustomOptions and the option names/stock for a product with custom options', async () => {
+  const product = await createProduct()
+  await request('PATCH', `/api/admin/products/${product.id}`, { optionLabel: 'Shade' }, sysadminHeaders())
+  const cashew = await createOption(product, { name: 'Cashew', stockQuantity: 12 })
+  const mocha = await createOption(product, { name: 'Mocha', stockQuantity: 0 })
+
+  const res = await request('GET', '/api/products')
+  assert.strictEqual(res.status, 200)
+  const row = res.data.find(p => p.id === product.id)
+  assert.ok(row, 'product should be in the public list')
+  assert.strictEqual(row.optionLabel, 'Shade')
+  assert.strictEqual(row.hasCustomOptions, true)
+  assert.strictEqual(row.customOptions.length, 2)
+
+  const cashewRow = row.customOptions.find(o => o.id === cashew.id)
+  const mochaRow = row.customOptions.find(o => o.id === mocha.id)
+  assert.strictEqual(cashewRow.name, 'Cashew')
+  assert.strictEqual(cashewRow.stockQuantity, 12)
+  assert.strictEqual(mochaRow.name, 'Mocha')
+  assert.strictEqual(mochaRow.stockQuantity, 0)
+})
+
 // ── Orders ────────────────────────────────────────────────────────────────────
 
 test('POST /api/orders requires a valid, active option for a product with custom options', async () => {
