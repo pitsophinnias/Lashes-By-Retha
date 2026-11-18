@@ -725,9 +725,8 @@ function App() {
   const [categories, setCategories] = useState([])
   const [productCategories, setProductCategories] = useState({})
   // "Shop by category" grid - only one category's products expanded at a
-  // time, directly under the grid row it's in (see shopColumns below).
+  // time, shown in a panel below the whole grid (see the shop section below).
   const [expandedCategoryId, setExpandedCategoryId] = useState(null)
-  const [shopColumns, setShopColumns] = useState(2)
   const expandedPanelRef = useRef(null)
   const hashHandledRef = useRef(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -792,19 +791,6 @@ function App() {
     const handler = (e) => setIsMobile(e.matches)
     mq.addEventListener('change', handler)
     return () => mq.removeEventListener('change', handler)
-  }, [])
-
-  // Mirrors the .category-grid column counts in the stylesheet below - kept
-  // in JS too so the expanded category panel can be inserted right after
-  // the last card of whichever row it belongs to.
-  useEffect(() => {
-    const computeColumns = () => {
-      const w = window.innerWidth
-      setShopColumns(w <= 768 ? 2 : w <= 1100 ? 3 : 4)
-    }
-    computeColumns()
-    window.addEventListener('resize', computeColumns)
-    return () => window.removeEventListener('resize', computeColumns)
   }, [])
 
   // Smooth-scrolls the expanded category's products into view - for a
@@ -2215,12 +2201,27 @@ function App() {
         }
 
         .category-expanded-panel {
-          grid-column: 1 / -1;
           background: #FDF6F4;
           border-radius: 16px;
           padding: 24px;
-          margin: -4px 0 8px 0;
+          max-width: 1200px;
+          margin: 24px auto 0 auto;
           text-align: left;
+        }
+
+        .category-expanded-products {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 24px;
+          align-items: start;
+        }
+
+        @media (max-width: 1100px) {
+          .category-expanded-products { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+
+        @media (max-width: 768px) {
+          .category-expanded-products { grid-template-columns: 1fr !important; gap: 16px !important; }
         }
 
         .category-expanded-header {
@@ -2896,63 +2897,50 @@ function App() {
             )
           }
 
-          const expandedIndex = expandedCategoryId != null
-            ? shopCategories.findIndex(c => c.id === expandedCategoryId)
-            : -1
+          const openCategory = expandedCategoryId != null
+            ? shopCategories.find(c => c.id === expandedCategoryId)
+            : null
           const toggleCategory = (id) => setExpandedCategoryId(prev => (prev === id ? null : id))
 
-          const cards = []
-          shopCategories.forEach((cat, index) => {
-            const isOpen = index === expandedIndex
-            const coverImage = cat.imageUrl || productImages[cat.products[0]?.id] || null
-            cards.push(
-              <button
-                key={cat.id}
-                type="button"
-                className={`category-card${isOpen ? ' category-card-open' : ''}`}
-                onClick={() => toggleCategory(cat.id)}
-              >
-                <div
-                  className="category-card-image"
-                  style={coverImage ? { backgroundImage: `url(${mediaUrl(coverImage)})` } : undefined}
-                >
-                  {!coverImage && <img src="/logo.png" alt="" className="category-card-logo" />}
-                </div>
-                <div className="category-card-name">{cat.name}</div>
-              </button>
-            )
-
-            // Once we reach the last card of the row the open category is
-            // in, insert its products directly after - same row, any
-            // column width.
-            if (expandedIndex !== -1) {
-              const rowStart = Math.floor(expandedIndex / shopColumns) * shopColumns
-              const rowEnd = Math.min(rowStart + shopColumns - 1, shopCategories.length - 1)
-              if (index === rowEnd) {
-                const openCategory = shopCategories[expandedIndex]
-                cards.push(
-                  <div key={`expanded-${openCategory.id}`} className="category-expanded-panel" ref={expandedPanelRef}>
-                    <div className="category-expanded-header">
-                      <h3>{openCategory.name}</h3>
-                      <button type="button" className="show-less-link" onClick={() => setExpandedCategoryId(null)}>
-                        Show less
-                      </button>
-                    </div>
-                    <div className="product-grid" style={{
-                      display: 'grid',
-                      gridTemplateColumns: `repeat(${shopColumns}, 1fr)`,
-                      gap: '24px',
-                      alignItems: 'start',
-                    }}>
-                      {openCategory.products.map(product => renderProductCard(product))}
-                    </div>
+          return (
+            <>
+              <div className="category-grid">
+                {shopCategories.map(cat => {
+                  const isOpen = cat.id === expandedCategoryId
+                  const coverImage = cat.imageUrl || productImages[cat.products[0]?.id] || null
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      className={`category-card${isOpen ? ' category-card-open' : ''}`}
+                      onClick={() => toggleCategory(cat.id)}
+                    >
+                      <div
+                        className="category-card-image"
+                        style={coverImage ? { backgroundImage: `url(${mediaUrl(coverImage)})` } : undefined}
+                      >
+                        {!coverImage && <img src="/logo.png" alt="" className="category-card-logo" />}
+                      </div>
+                      <div className="category-card-name">{cat.name}</div>
+                    </button>
+                  )
+                })}
+              </div>
+              {openCategory && (
+                <div className="category-expanded-panel" ref={expandedPanelRef}>
+                  <div className="category-expanded-header">
+                    <h3>{openCategory.name}</h3>
+                    <button type="button" className="show-less-link" onClick={() => setExpandedCategoryId(null)}>
+                      Show less
+                    </button>
                   </div>
-                )
-              }
-            }
-          })
-
-          return <div className="category-grid">{cards}</div>
+                  <div className="category-expanded-products">
+                    {openCategory.products.map(product => renderProductCard(product))}
+                  </div>
+                </div>
+              )}
+            </>
+          )
         })()}
       </section>
 
