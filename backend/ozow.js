@@ -208,7 +208,7 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
         // payment.status !== 'paid' guards against crediting the same
         // attempt twice if Ozow's notification is ever delivered more than
         // once for an attempt we already marked paid.
-        paidStudent = await applyStudentOutcome(client, payment)
+        paidStudent = await applyStudentOutcome(client, payment, 'ozow')
       } else if (payment.preorder_id && isPaid && payment.status !== 'paid') {
         paidPreorder = await applyPreorderOutcome(client, payment)
       }
@@ -233,6 +233,11 @@ async function reconcileOzowPayment(transactionReference, verifiedNotification =
       await notifyAdmin('section', 'New training payment',
         `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`,
         { studentId: paidStudent.id })
+      if (paidStudent.certificateJustCleared) {
+        await notifyAdmin('certificate_cleared', 'Certificate can now be issued',
+          `${paidStudent.name}'s balance has been paid in full - their certificate can now be issued.`,
+          { studentId: paidStudent.id })
+      }
     }
     if (paidPreorder) {
       const productName = paidPreorder.product ? paidPreorder.product.name : 'their pre-order'

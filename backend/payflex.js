@@ -219,7 +219,7 @@ async function reconcilePayflexPayment(identifier) {
         // payment.status !== 'paid' guards against crediting the same
         // attempt twice if Payflex's callback is ever delivered more than
         // once for an attempt we already marked paid.
-        paidStudent = await applyStudentOutcome(client, payment)
+        paidStudent = await applyStudentOutcome(client, payment, 'payflex')
       }
 
       await client.query('COMMIT')
@@ -242,6 +242,11 @@ async function reconcilePayflexPayment(identifier) {
       await notifyAdmin('section', 'New training payment',
         `New training payment: ${paidStudent.name} paid R${parseFloat(payment.amount).toFixed(2)} (${payment.purpose}) for ${paidStudent.course ? paidStudent.course.name : 'their course'}. Preferred start: ${startDate}.`,
         { studentId: paidStudent.id })
+      if (paidStudent.certificateJustCleared) {
+        await notifyAdmin('certificate_cleared', 'Certificate can now be issued',
+          `${paidStudent.name}'s balance has been paid in full - their certificate can now be issued.`,
+          { studentId: paidStudent.id })
+      }
     }
   } catch (err) {
     console.error('reconcilePayflexPayment failed:', err.message)

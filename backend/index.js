@@ -37,6 +37,10 @@ const { logError, cleanupErrorLog } = require('./src/errorLog/store')
 const { getEffectivePrice, validateSalePrice, getLowestEffectivePrice } = require('./src/pricing/getEffectivePrice')
 const { createSession, revokeSession, revokeAllSessionsForUser, cleanupSessions } = require('./src/sessions/store')
 const sessionConfig = require('./src/sessions/config')
+const { listTemplates, getTemplate, saveTemplateOverride, resetTemplate } = require('./src/messaging/store')
+const { findUnknownPlaceholders } = require('./src/messaging/templates')
+const { selectReminder } = require('./src/messaging/reminders')
+const { recalculateStudentBalance } = require('./src/students/balance')
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -1285,6 +1289,218 @@ app.put('/api/admin/system/preorders', authenticate, requireRole('sysadmin', 'ow
   }
 })
 
+// ── Business details & message templates ────────────────────────────────────
+// Public - previously hardcoded in customer-site's EFT screen. Deliberately
+// returns ONLY the four fields that screen displays, never the reminder
+// timing or anything else from systemSettings.messaging - those are
+// internal and have no reason to be world-readable. Message templates
+// (which also need {business_name}) are built server-side or by an
+// authenticated admin, so they read the fuller GET /api/admin/system/
+// messaging below instead.
+app.get('/api/business-details', async (req, res) => {
+  try {
+    const settings = await readSystemSettings()
+    const { bankName, accountName, accountNumber, proofOfPaymentNumber } = settings.messaging
+    res.json({ bankName, accountName, accountNumber, proofOfPaymentNumber })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch business details' })
+    await logError('GET /api/business-details', err, req)
+  }
+})
+
+// The full settings object, for authenticated admin use only: the Settings
+// page's own edit form (owner), and building {business_name}/{bank_details}/
+// {pop_number} for message templates and reminders (any role, since staff
+// can send messages too - same split as GET /api/message-templates below).
+app.get('/api/admin/system/messaging', authenticate, async (req, res) => {
+  try {
+    const settings = await readSystemSettings()
+    res.json(settings.messaging)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch business details' })
+    await logError('GET /api/admin/system/messaging', err, req)
+  }
+})
+
+// Owner and sysadmin, like pre-order settings above - this is a business
+// detail (banking info, reminder timing), not a system-administration one.
+// Changes to the banking/WhatsApp fields are audit-logged with their old
+// and new values (user and timestamp come from addAuditLog itself), and an
+// account number change also raises a notification - money going to the
+// wrong account is the one mistake here that's actually dangerous.
+app.put('/api/admin/system/messaging', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { businessName, bankName, accountName, accountNumber, proofOfPaymentNumber, paymentReminderDays, certificateWarningDays, reminderSnoozeDays } = req.body
+  const trimOrNull = (value) => String(value || '').trim() || null
+  const businessNameTrimmed = trimOrNull(businessName)
+  const bankNameTrimmed = trimOrNull(bankName)
+  const accountNameTrimmed = trimOrNull(accountName)
+  const accountNumberTrimmed = trimOrNull(accountNumber)
+  const proofOfPaymentTrimmed = trimOrNull(proofOfPaymentNumber)
+  if (!businessNameTrimmed || !bankNameTrimmed || !accountNameTrimmed || !accountNumberTrimmed || !proofOfPaymentTrimmed) {
+    return res.status(400).json({ error: 'Business name, bank name, account name, account number and proof-of-payment number are all required' })
+  }
+  const paymentDays = parseInt(paymentReminderDays)
+  const certDays = parseInt(certificateWarningDays)
+  const snoozeDays = parseInt(reminderSnoozeDays)
+  if (!Number.isInteger(paymentDays) || paymentDays < 0 || paymentDays > 60) {
+    return res.status(400).json({ error: 'Payment reminder days must be between 0 and 60' })
+  }
+  if (!Number.isInteger(certDays) || certDays < 0 || certDays > 60) {
+    return res.status(400).json({ error: 'Certificate warning days must be between 0 and 60' })
+  }
+  if (!Number.isInteger(snoozeDays) || snoozeDays < 1 || snoozeDays > 30) {
+    return res.status(400).json({ error: 'Reminder snooze gap must be between 1 and 30 days' })
+  }
+  try {
+    const previous = (await readSystemSettings()).messaging
+    const value = {
+      businessName: businessNameTrimmed,
+      bankName: bankNameTrimmed,
+      accountName: accountNameTrimmed,
+      accountNumber: accountNumberTrimmed,
+      proofOfPaymentNumber: proofOfPaymentTrimmed,
+      paymentReminderDays: paymentDays,
+      certificateWarningDays: certDays,
+      reminderSnoozeDays: snoozeDays,
+    }
+    await saveSystemSetting('messaging', value, req.user.id)
+
+    const sensitiveChanges = []
+    if (bankNameTrimmed !== previous.bankName) sensitiveChanges.push(`Bank name: "${previous.bankName}" -> "${bankNameTrimmed}"`)
+    if (accountNumberTrimmed !== previous.accountNumber) sensitiveChanges.push(`Account number: "${previous.accountNumber}" -> "${accountNumberTrimmed}"`)
+    if (proofOfPaymentTrimmed !== previous.proofOfPaymentNumber) sensitiveChanges.push(`WhatsApp number: "${previous.proofOfPaymentNumber}" -> "${proofOfPaymentTrimmed}"`)
+    const details = sensitiveChanges.length > 0
+      ? `Business details updated - ${sensitiveChanges.join('; ')}`
+      : 'Business details/reminder settings updated'
+    await addAuditLog(req.user.id, req.user.username, 'MESSAGING_SETTINGS_CHANGED', details, req.ip)
+
+    if (accountNumberTrimmed !== previous.accountNumber) {
+      await addNotification('system', 'Payment account number changed',
+        `The payment account number was changed from ${previous.accountNumber} to ${accountNumberTrimmed} by ${req.user.username}.`)
+    }
+
+    res.json(value)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update business details' })
+    await logError('PUT /api/admin/system/messaging', err, req)
+  }
+})
+
+// Any authenticated role can read templates (needed to use the Message
+// Customer panel) - only owner/sysadmin can edit or reset one.
+app.get('/api/message-templates', authenticate, async (req, res) => {
+  try {
+    res.json(await listTemplates())
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch message templates' })
+    await logError('GET /api/message-templates', err, req)
+  }
+})
+
+app.put('/api/message-templates/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { id } = req.params
+  const { body, emailSubject } = req.body
+  const existing = await getTemplate(id).catch(() => null)
+  if (!existing) return res.status(404).json({ error: 'Unknown template' })
+  if (!body || !String(body).trim()) return res.status(400).json({ error: 'Message text is required' })
+  if (!emailSubject || !String(emailSubject).trim()) return res.status(400).json({ error: 'Email subject is required' })
+  try {
+    await saveTemplateOverride(id, { body: body.trim(), emailSubject: emailSubject.trim() }, req.user.id)
+    const unknownInBody = findUnknownPlaceholders(body)
+    const unknownInSubject = findUnknownPlaceholders(emailSubject)
+    const unknownPlaceholders = [...new Set([...unknownInBody, ...unknownInSubject])]
+    res.json({
+      ...(await getTemplate(id)),
+      warning: unknownPlaceholders.length > 0
+        ? `Unknown placeholder${unknownPlaceholders.length > 1 ? 's' : ''}: ${unknownPlaceholders.map((p) => `{${p}}`).join(', ')} - will show as blank, never as sent text.`
+        : null,
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save template' })
+    await logError('PUT /api/message-templates/:id', err, req)
+  }
+})
+
+app.delete('/api/message-templates/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { id } = req.params
+  const existing = await getTemplate(id).catch(() => null)
+  if (!existing) return res.status(404).json({ error: 'Unknown template' })
+  try {
+    await resetTemplate(id)
+    res.json(await getTemplate(id))
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reset template' })
+    await logError('DELETE /api/message-templates/:id', err, req)
+  }
+})
+
+// ── Dashboard reminders ──────────────────────────────────────────────────────
+// Owner-only in the UI (financial, like the balance figures already
+// hidden from staff elsewhere on the Dashboard) - sysadmin keeps API
+// access for consistency, same as the rest of this section.
+app.get('/api/admin/reminders', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const settings = await readSystemSettings()
+    const result = await pool.query(`
+      SELECT s.*, c.name AS course_name, c.price AS course_price, c.duration_days AS course_duration_days
+      FROM students s
+      LEFT JOIN courses c ON c.id = s.class_id
+      WHERE s.status IN ('awaiting_payment', 'active') AND s.is_test = FALSE
+    `)
+    const reminders = []
+    const missingCourseDates = []
+    const typeOrder = { overdue: 0, certificate: 1, payment: 2 }
+    for (const row of result.rows) {
+      const course = row.course_name ? { price: row.course_price, duration_days: row.course_duration_days } : null
+      if (!row.end_date) {
+        missingCourseDates.push({ studentId: row.id, studentName: row.name, classId: row.class_id, courseName: row.course_name })
+        continue
+      }
+      const reminder = selectReminder(row, course, settings.messaging)
+      if (!reminder) continue
+      reminders.push({
+        studentId: row.id,
+        studentName: row.name,
+        whatsapp: row.whatsapp,
+        email: row.email,
+        courseName: row.course_name,
+        courseDurationDays: row.course_duration_days,
+        coursePrice: course ? parseFloat(course.price) : null,
+        amountPaid: parseFloat(row.amount_paid) || 0,
+        endDate: row.end_date,
+        ...reminder,
+      })
+    }
+    reminders.sort((a, b) => typeOrder[a.type] - typeOrder[b.type])
+    res.json({ reminders, missingCourseDates })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch reminders' })
+    await logError('GET /api/admin/reminders', err, req)
+  }
+})
+
+// Marks a reminder as handled - called when the owner sends one on
+// WhatsApp, or dismisses it with "Done". Stores only this minimal marker
+// (never a message history, out of scope here) so the same reminder
+// doesn't resurface until it's stale again or its type changes.
+app.patch('/api/admin/students/:id/reminder', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { type } = req.body
+  if (!['payment', 'certificate', 'overdue'].includes(type)) {
+    return res.status(400).json({ error: 'type must be "payment", "certificate" or "overdue"' })
+  }
+  try {
+    const result = await pool.query(
+      'UPDATE students SET last_reminded_at = NOW(), last_reminder_type = $1 WHERE id = $2 RETURNING id',
+      [type, req.params.id]
+    )
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update reminder' })
+    await logError('PATCH /api/admin/students/:id/reminder', err, req)
+  }
+})
+
 // ── Payments monitor (sysadmin only) ─────────────────────────────────────────
 // A payment row belongs to either an order (shown as its order number, never
 // sensitive) or a training enrolment (shown as a masked student name - see
@@ -2514,7 +2730,13 @@ const serializePreorder = (p) => {
     productId: p.product_id,
     productName: p.product_name,
     quantity,
-    customerName: maskName(p.customer_name),
+    // Unmasked, unlike the sysadmin Payments monitor's own use of
+    // maskName - the owner genuinely needs the real name and contact
+    // details to message a pre-order customer, the entire point of this
+    // field existing, and orders already work this way (never masked).
+    customerName: p.customer_name,
+    customerPhone: p.customer_phone,
+    customerEmail: p.customer_email,
     optionName: p.option_name,
     price: priceAtOrder,
     originalPrice: p.original_price_at_order !== null ? parseFloat(p.original_price_at_order) : priceAtOrder,
@@ -2687,10 +2909,12 @@ const serializeStudent = (s, course) => {
   return {
     id: s.id, classId: s.class_id, name: s.name, whatsapp: s.whatsapp, email: s.email,
     preferredStartDate: s.preferred_start_date,
+    startDate: s.start_date, endDate: s.end_date,
     paymentStatus: s.payment_status, notes: s.notes, enrolledAt: s.enrolled_at,
     status: s.status, completedAt: s.completed_at,
     amountPaid, balance: price !== null ? Math.max(0, price - amountPaid) : null,
     source: s.source, publicToken: s.public_token, isTest: s.is_test,
+    certificateOnHold: s.certificate_on_hold,
   }
 }
 
@@ -2707,6 +2931,22 @@ app.get('/api/classes/:classId/students', authenticate, requireRole('sysadmin', 
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch students' })
     await logError('GET /api/classes/:classId/students', err, req)
+  }
+})
+
+// Looks up one student by id regardless of which class they're in - used
+// by the Dashboard's "certificate cleared" toast, which only has a
+// studentId from a notification row to go on.
+app.get('/api/admin/students/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM students WHERE id = $1', [req.params.id])
+    const student = result.rows[0]
+    if (!student) return res.status(404).json({ error: 'Student not found' })
+    const course = await getCourse(student.class_id)
+    res.json(serializeStudent(student, course))
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch student' })
+    await logError('GET /api/admin/students/:id', err, req)
   }
 })
 
@@ -2788,38 +3028,189 @@ app.post('/api/classes/:classId/students/:studentId/ensure-token', authenticate,
   }
 })
 
-// Marks a student as having finished the course, so they move from Current
-// students to Past students without losing their history.
-app.patch('/api/classes/:classId/students/:studentId/complete', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+// Records the actual start/end dates Retha confirmed with a student -
+// start defaults to preferred_start_date and end to start + the course's
+// duration_days in the frontend's dialog, but both are freely editable
+// here (holidays, changes), and this is also how an already-confirmed
+// pair gets corrected later. Reminders and message templates use end_date
+// only, never preferred_start_date.
+app.patch('/api/classes/:classId/students/:studentId/dates', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { startDate, endDate } = req.body
+  if (!startDate || !endDate || isNaN(new Date(startDate).getTime()) || isNaN(new Date(endDate).getTime())) {
+    return res.status(400).json({ error: 'A valid start date and end date are required' })
+  }
+  if (new Date(endDate) < new Date(startDate)) {
+    return res.status(400).json({ error: 'End date must be on or after the start date' })
+  }
   try {
     const result = await pool.query(
-      `UPDATE students SET status = 'completed', completed_at = NOW()
-       WHERE id = $1 AND class_id = $2 RETURNING *`,
-      [req.params.studentId, req.params.classId]
+      `UPDATE students SET start_date = $1, end_date = $2 WHERE id = $3 AND class_id = $4 RETURNING *`,
+      [startDate, endDate, req.params.studentId, req.params.classId]
     )
     if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
     const course = await getCourse(req.params.classId)
     res.json(serializeStudent(result.rows[0], course))
   } catch (err) {
-    res.status(500).json({ error: 'Failed to mark student as finished' })
-    await logError('PATCH /api/classes/:classId/students/:studentId/complete', err, req)
+    res.status(500).json({ error: 'Failed to save course dates' })
+    await logError('PATCH /api/classes/:classId/students/:studentId/dates', err, req)
   }
 })
 
-// Undoes a mistaken "Finished course" - moves the student back to Current students.
-app.patch('/api/classes/:classId/students/:studentId/reactivate', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+// Marks a student as having finished the course, so they move from Current
+// students to Past students without losing their history. If tuition
+// isn't fully paid yet, the certificate is held back (certificateOnHold)
+// until the balance is settled - the frontend warns about this before
+// calling here (see completeStudent's ConfirmDialog). certificateOnHold
+// itself is always derived fresh from the real balance via
+// recalculateStudentBalance, the same function every payment path uses,
+// rather than computed separately here.
+app.patch('/api/classes/:classId/students/:studentId/complete', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const client = await pool.connect()
   try {
-    const result = await pool.query(
-      `UPDATE students SET status = 'active', completed_at = NULL
-       WHERE id = $1 AND class_id = $2 RETURNING *`,
-      [req.params.studentId, req.params.classId]
+    await client.query('BEGIN')
+    const studentResult = await client.query(
+      'SELECT id FROM students WHERE id = $1 AND class_id = $2 FOR UPDATE', [req.params.studentId, req.params.classId]
     )
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Student not found' })
-    const course = await getCourse(req.params.classId)
-    res.json(serializeStudent(result.rows[0], course))
+    if (studentResult.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Student not found' })
+    }
+    await client.query(`UPDATE students SET status = 'completed', completed_at = NOW() WHERE id = $1`, [req.params.studentId])
+    const outcome = await recalculateStudentBalance(client, req.params.studentId)
+    await client.query('COMMIT')
+    res.json(serializeStudent(outcome.student, outcome.student.course))
   } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to mark student as finished' })
+    await logError('PATCH /api/classes/:classId/students/:studentId/complete', err, req)
+  } finally {
+    client.release()
+  }
+})
+
+// Undoes a mistaken "Finished course" - moves the student back to Current
+// students. certificate_on_hold only ever applies to a 'completed'
+// student, so recalculateStudentBalance clears it on its own once status
+// is no longer 'completed' - nothing else to do here.
+app.patch('/api/classes/:classId/students/:studentId/reactivate', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const studentResult = await client.query(
+      'SELECT id FROM students WHERE id = $1 AND class_id = $2 FOR UPDATE', [req.params.studentId, req.params.classId]
+    )
+    if (studentResult.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Student not found' })
+    }
+    await client.query(`UPDATE students SET status = 'active', completed_at = NULL WHERE id = $1`, [req.params.studentId])
+    const outcome = await recalculateStudentBalance(client, req.params.studentId)
+    await client.query('COMMIT')
+    res.json(serializeStudent(outcome.student, outcome.student.course))
+  } catch (err) {
+    await client.query('ROLLBACK')
     res.status(500).json({ error: 'Failed to move student back to current students' })
     await logError('PATCH /api/classes/:classId/students/:studentId/reactivate', err, req)
+  } finally {
+    client.release()
+  }
+})
+
+// ── Student payments ledger ──────────────────────────────────────────────
+// One row per payment, manual or gateway (see applyStudentOutcome in
+// paymentOutcomes.js for the gateway side) - amount_paid/payment_status/
+// status/certificate_on_hold are always recomputed from this table's
+// total via recalculateStudentBalance, never hand-incremented, so
+// recording, correcting or deleting a payment here keeps everything else
+// consistent automatically.
+app.get('/api/classes/:classId/students/:studentId/payments', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT p.*, u.username AS created_by_username FROM student_payments p
+       LEFT JOIN users u ON u.id = p.created_by
+       WHERE p.student_id = $1 ORDER BY p.created_at DESC`,
+      [req.params.studentId]
+    )
+    res.json(result.rows.map((p) => ({
+      id: p.id, amount: parseFloat(p.amount), source: p.source, note: p.note,
+      createdAt: p.created_at, createdBy: p.created_by_username,
+    })))
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch payments' })
+    await logError('GET /api/classes/:classId/students/:studentId/payments', err, req)
+  }
+})
+
+app.post('/api/classes/:classId/students/:studentId/payments', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const amount = parseFloat(req.body.amount)
+  const note = String(req.body.note || '').trim() || null
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'amount must be a positive number' })
+  }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const studentResult = await client.query(
+      'SELECT id FROM students WHERE id = $1 AND class_id = $2 FOR UPDATE', [req.params.studentId, req.params.classId]
+    )
+    if (studentResult.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Student not found' })
+    }
+    await client.query(
+      `INSERT INTO student_payments (student_id, amount, source, note, created_by) VALUES ($1, $2, 'manual', $3, $4)`,
+      [req.params.studentId, amount.toFixed(2), note, req.user.id]
+    )
+    const outcome = await recalculateStudentBalance(client, req.params.studentId)
+    await client.query('COMMIT')
+    await addAuditLog(req.user.id, req.user.username, 'STUDENT_PAYMENT_RECORDED',
+      `Recorded a payment of R${amount.toFixed(2)} for student #${req.params.studentId}`, req.ip)
+    res.status(201).json({
+      student: serializeStudent(outcome.student, outcome.student.course),
+      certificateJustCleared: outcome.certificateJustCleared,
+    })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to record payment' })
+    await logError('POST /api/classes/:classId/students/:studentId/payments', err, req)
+  } finally {
+    client.release()
+  }
+})
+
+app.delete('/api/classes/:classId/students/:studentId/payments/:paymentId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const studentResult = await client.query(
+      'SELECT id FROM students WHERE id = $1 AND class_id = $2 FOR UPDATE', [req.params.studentId, req.params.classId]
+    )
+    if (studentResult.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Student not found' })
+    }
+    const deleteResult = await client.query(
+      'DELETE FROM student_payments WHERE id = $1 AND student_id = $2 RETURNING amount',
+      [req.params.paymentId, req.params.studentId]
+    )
+    if (deleteResult.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Payment not found' })
+    }
+    const outcome = await recalculateStudentBalance(client, req.params.studentId)
+    await client.query('COMMIT')
+    await addAuditLog(req.user.id, req.user.username, 'STUDENT_PAYMENT_DELETED',
+      `Deleted a R${parseFloat(deleteResult.rows[0].amount).toFixed(2)} payment for student #${req.params.studentId}`, req.ip)
+    res.json({
+      student: serializeStudent(outcome.student, outcome.student.course),
+      certificateJustReHeld: outcome.certificateJustReHeld,
+    })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to delete payment' })
+    await logError('DELETE /api/classes/:classId/students/:studentId/payments/:paymentId', err, req)
+  } finally {
+    client.release()
   }
 })
 
@@ -4498,7 +4889,11 @@ app.get('/api/notifications', authenticate, async (req, res) => {
     )
     res.json(result.rows.map(r => ({
       id: r.id, type: r.type, title: r.title,
-      message: r.message, read: r.read, createdAt: r.created_at
+      message: r.message, read: r.read, createdAt: r.created_at,
+      // Only certificate_cleared actually needs this today (the Dashboard
+      // toast re-fetches that one student to build its WhatsApp message) -
+      // harmless to include on every row rather than special-casing it.
+      studentId: r.student_id,
     })))
   } catch {
     res.json([])

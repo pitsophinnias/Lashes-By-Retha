@@ -1,0 +1,107 @@
+{
+  "_comment": "Shared between backend/src/messaging/{render,phone}.js (tested, but not what actually sends - see README) and admin-dashboard/src/messaging/{render,phone}.js (the live renderer behind wa.me/mailto/Copy). Run against BOTH by backend/test/messaging-fixtures-parity.test.js so the two copies can never silently drift apart.",
+
+  "templateFixtures": [
+    {
+      "name": "every placeholder - orders group",
+      "body": "Hi {first_name} ({customer_name}) from {business_name}. Ref {reference}. Pay to {bank_details}, POP to {pop_number}. Items:\n{items}\nTotal: R{total}",
+      "data": {
+        "first_name": "Naledi", "customer_name": "Naledi Mokoena", "business_name": "Hair By Her",
+        "reference": "HBH-1042", "bank_details": "FNB 63093932440", "pop_number": "082 685 5399",
+        "items": "• Item x1 — R 100.00", "total": "100.00"
+      },
+      "expectedWhatsapp": "Hi Naledi (Naledi Mokoena) from Hair By Her. Ref HBH-1042. Pay to FNB 63093932440, POP to 082 685 5399. Items:\n• Item x1 — R 100.00\nTotal: R100.00"
+    },
+    {
+      "name": "every placeholder - preorders group",
+      "body": "Hi {first_name}, deposit R{deposit}, balance R{balance}, paid R{amount_paid}. {items}",
+      "data": {
+        "first_name": "Thandi", "deposit": "500.00", "balance": "1300.00", "amount_paid": "500.00",
+        "items": "• Wig x1 — R 1800.00"
+      },
+      "expectedWhatsapp": "Hi Thandi, deposit R500.00, balance R1300.00, paid R500.00. • Wig x1 — R 1800.00"
+    },
+    {
+      "name": "every placeholder - training group",
+      "body": "Hi {first_name}, {course_name} ends {course_end_date}, due {due_date}, balance R{balance}, paid R{amount_paid}, total R{total}",
+      "data": {
+        "first_name": "Lerato", "course_name": "Classic Lash Training", "course_end_date": "17 Jun 2026",
+        "due_date": "17 Jun 2026", "balance": "1500.00", "amount_paid": "1000.00", "total": "2500.00"
+      },
+      "expectedWhatsapp": "Hi Lerato, Classic Lash Training ends 17 Jun 2026, due 17 Jun 2026, balance R1500.00, paid R1000.00, total R2500.00"
+    },
+    {
+      "name": "sale savings line passes through a prebuilt items block unchanged",
+      "body": "{items}",
+      "data": { "items": "• Blossom Moist Essence Primer x1 — R 220.00 (you saved R 60.00 ✨)" },
+      "expectedWhatsapp": "• Blossom Moist Essence Primer x1 — R 220.00 (you saved R 60.00 ✨)"
+    },
+    {
+      "name": "missing data renders as empty text, never the word undefined",
+      "body": "Balance: R{balance}.",
+      "data": {},
+      "expectedWhatsapp": "Balance: R."
+    },
+    {
+      "name": "an explicit null value renders as empty text too",
+      "body": "Due: {due_date}",
+      "data": { "due_date": null },
+      "expectedWhatsapp": "Due: "
+    },
+    {
+      "name": "a completely unknown placeholder renders as empty text, never raw braces",
+      "body": "Total: {totl}",
+      "data": { "total": "100" },
+      "expectedWhatsapp": "Total: "
+    },
+    {
+      "name": "WhatsApp keeps *bold* markers, email strips them",
+      "body": "*Total: R {total}*",
+      "data": { "total": "50.00" },
+      "expectedWhatsapp": "*Total: R 50.00*",
+      "expectedEmail": "Total: R 50.00"
+    },
+    {
+      "name": "Part D: training_payment_reminder renders exactly, WhatsApp and email subject",
+      "body": "Hi {first_name} 🌸\n\nJust a gentle reminder that your remaining balance of *R {balance}* is due before your course ends on {course_end_date}.\n\nKindly send your proof of payment to:\n{bank_details}\nReference: {reference}\n\nWith love,\n{business_name}",
+      "emailSubject": "Payment reminder - {course_name}",
+      "data": {
+        "first_name": "Naledi", "balance": "1500.00", "course_end_date": "17 Jun 2026",
+        "bank_details": "FNB 63093932440", "reference": "HBH-T23", "business_name": "Hair By Her",
+        "course_name": "Classic Lash Training"
+      },
+      "expectedWhatsapp": "Hi Naledi 🌸\n\nJust a gentle reminder that your remaining balance of *R 1500.00* is due before your course ends on 17 Jun 2026.\n\nKindly send your proof of payment to:\nFNB 63093932440\nReference: HBH-T23\n\nWith love,\nHair By Her",
+      "expectedEmail": "Hi Naledi 🌸\n\nJust a gentle reminder that your remaining balance of R 1500.00 is due before your course ends on 17 Jun 2026.\n\nKindly send your proof of payment to:\nFNB 63093932440\nReference: HBH-T23\n\nWith love,\nHair By Her",
+      "expectedEmailSubject": "Payment reminder - Classic Lash Training"
+    },
+    {
+      "name": "Part D: training_certificate_warning renders exactly",
+      "body": "Hi {first_name}\n\nKindly note that your certificate can only be issued once your tuition has been paid in full. Your remaining balance is *R {balance}*, due before {course_end_date}.\n\nWith love,\n{business_name}",
+      "data": { "first_name": "Naledi", "balance": "1500.00", "course_end_date": "17 Jun 2026", "business_name": "Hair By Her" },
+      "expectedWhatsapp": "Hi Naledi\n\nKindly note that your certificate can only be issued once your tuition has been paid in full. Your remaining balance is *R 1500.00*, due before 17 Jun 2026.\n\nWith love,\nHair By Her"
+    },
+    {
+      "name": "Part D: training_overdue (new template) renders exactly",
+      "body": "Hi {first_name}\n\nYour certificate will be issued as soon as your remaining balance of *R {balance}* has been settled.\n\nKindly send your proof of payment to:\n{bank_details}\nReference: {reference}\n\nWith love,\n{business_name}",
+      "data": {
+        "first_name": "Naledi", "balance": "1500.00", "bank_details": "FNB 63093932440",
+        "reference": "HBH-T23", "business_name": "Hair By Her"
+      },
+      "expectedWhatsapp": "Hi Naledi\n\nYour certificate will be issued as soon as your remaining balance of *R 1500.00* has been settled.\n\nKindly send your proof of payment to:\nFNB 63093932440\nReference: HBH-T23\n\nWith love,\nHair By Her"
+    }
+  ],
+
+  "phoneFixtures": [
+    { "name": "spaced SA local format", "input": "082 685 5399", "expected": "27826855399" },
+    { "name": "plain SA local format", "input": "0826855399", "expected": "27826855399" },
+    { "name": "spaced international with +", "input": "+27 82 685 5399", "expected": "27826855399" },
+    { "name": "already-international digits only", "input": "27826855399", "expected": "27826855399" },
+    { "name": "other country code (US) is left as cleaned digits", "input": "+1 415 555 0132", "expected": "14155550132" },
+    { "name": "other country code (UK) is left as cleaned digits", "input": "+44 20 7946 0958", "expected": "442079460958" },
+    { "name": "a 10-digit number starting with 0 is always treated as SA local", "input": "0926855399", "expected": "27926855399" },
+    { "name": "empty input is invalid", "input": "", "expected": null },
+    { "name": "letters are invalid", "input": "not a number", "expected": null },
+    { "name": "too short to be a real number", "input": "12345", "expected": null },
+    { "name": "too long to be a real number", "input": "1234567890123456", "expected": null }
+  ]
+}

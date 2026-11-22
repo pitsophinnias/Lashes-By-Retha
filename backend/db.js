@@ -749,6 +749,111 @@ const createTables = async () => {
     ALTER TABLE sessions ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
   `)
 
+  // WhatsApp/email message templates - only ever holds an OWNER'S OVERRIDE
+  // of a built-in default (see backend/src/messaging/templates.js), never a
+  // copy of the default itself. No row for a given id means "use the
+  // built-in" - that's how improving a default in code reaches every
+  // template an owner hasn't touched. id is the template's own key (e.g.
+  // 'order_received'), not a surrogate - there's exactly one row per
+  // template, ever.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS message_templates (
+      id VARCHAR(50) PRIMARY KEY,
+      body TEXT NOT NULL,
+      email_subject TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by INTEGER REFERENCES users(id)
+    );
+  `)
+
+  // Lets the Dashboard's "Reminders Due" card stop nagging about the same
+  // thing every day without keeping a full message history (out of scope
+  // for this feature) - just enough to know "already reminded, and about
+  // what" so a reminder only resurfaces once it's stale (see
+  // ADMIN_REMINDER_SNOOZE_DAYS-equivalent in systemSettings.messaging) or
+  // the reason for it has changed (e.g. a payment reminder becomes a
+  // certificate warning).
+  await pool.query(`
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS last_reminded_at TIMESTAMPTZ;
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS last_reminder_type VARCHAR(30);
+  `)
+
+  // Confirmed course dates, replacing preferred_start_date as the source of
+  // truth for reminders/messages: Retha must be able to record the real
+  // start date she agreed with the student (not just what they originally
+  // typed in) and the date the course actually ends, since tuition is due
+  // in full before then - see src/messaging/reminders.js. Both start as
+  // NULL and are backfilled below rather than defaulted, so a student still
+  // missing them is visibly missing them (see "Missing course dates" on the
+  // Dashboard), not silently wrong.
+  await pool.query(`
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS start_date DATE;
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS end_date DATE;
+    ALTER TABLE students ADD COLUMN IF NOT EXISTS certificate_on_hold BOOLEAN NOT NULL DEFAULT FALSE;
+  `)
+  // One-off backfill (guarded on the column still being empty, so it never
+  // overwrites a date someone has since confirmed): start_date takes
+  // whatever preferred_start_date already was, end_date is start_date +
+  // the course's duration_days. A student with no preferred_start_date, or
+  // whose class_id doesn't match a real course, can't be backfilled at all
+  // and is reported below so Retha can fix it by hand.
+  await pool.query(`
+    UPDATE students SET start_date = preferred_start_date
+    WHERE start_date IS NULL AND preferred_start_date IS NOT NULL
+  `)
+  await pool.query(`
+    UPDATE students s SET end_date = s.start_date + c.duration_days
+    FROM courses c
+    WHERE c.id = s.class_id AND s.end_date IS NULL AND s.start_date IS NOT NULL
+  `)
+  const { rows: missingDateRows } = await pool.query(`
+    SELECT id, name FROM students
+    WHERE end_date IS NULL AND status IN ('awaiting_payment', 'active') AND is_test = FALSE
+  `)
+  if (missingDateRows.length > 0) {
+    console.log(
+      `Course dates backfill: ${missingDateRows.length} student(s) still missing an end date ` +
+      `(no preferred start date, or no matching course) - ${missingDateRows.map(r => `#${r.id} ${r.name}`).join(', ')}`
+    )
+  }
+
+  // The ledger behind a student's amount_paid - every payment, manual or
+  // via a gateway, is one row here, and amount_paid/payment_status/status/
+  // certificate_on_hold are always recomputed from this table's total (see
+  // src/students/balance.js) rather than hand-incremented, so deleting or
+  // correcting a payment reliably puts the balance (and a held-back
+  // certificate) back to what it should be. payment_id is a loose pointer
+  // into ozow_payments/payflex_payments (never students' own payments
+  // table, there isn't one) - no FK, since it refers to one of two
+  // different tables depending on source.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS student_payments (
+      id SERIAL PRIMARY KEY,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      amount NUMERIC(10,2) NOT NULL,
+      source VARCHAR(20) NOT NULL,
+      payment_id INTEGER,
+      note TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
+  // One-off backfill for students who already had a non-zero amount_paid
+  // before this ledger existed - one 'legacy' row carrying their existing
+  // total, so the ledger's own sum matches reality from here on without
+  // losing anything already paid. Guarded on the student having no ledger
+  // rows yet, so this never double-counts on a later restart.
+  const { rows: legacyBackfillRows } = await pool.query(`
+    INSERT INTO student_payments (student_id, amount, source, note)
+    SELECT id, amount_paid, 'legacy', 'Backfilled from students.amount_paid when the payment ledger was introduced'
+    FROM students
+    WHERE amount_paid > 0 AND id NOT IN (SELECT DISTINCT student_id FROM student_payments)
+    RETURNING student_id
+  `)
+  if (legacyBackfillRows.length > 0) {
+    console.log(`Payment ledger backfill: ${legacyBackfillRows.length} student(s) given a 'legacy' ledger row for their existing amount_paid`)
+  }
+
   // Demo sale pricing, seeded once so both marketplace card styles can be
   // tried out: product 4 (no options) fully on sale, and product 2 (YY
   // Lash Trays) with only one of its lengths on sale, for the "From R X"

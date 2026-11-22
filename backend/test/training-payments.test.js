@@ -187,6 +187,70 @@ test('reconciling a student payment never touches an unrelated order, and reconc
   }
 })
 
+test('a gateway payment that clears a held-back balance lifts certificate_on_hold and raises a notification', async () => {
+  const student = await createStudent()
+  // Simulate PATCH .../complete having been called earlier with a balance
+  // still owing: completed, certificate held, R2000 of the R2500 price paid
+  // (as a ledger row, the way a real prior payment would be recorded).
+  await pool.query(
+    `INSERT INTO student_payments (student_id, amount, source) VALUES ($1, 2000, 'manual')`, [student.id]
+  )
+  await pool.query(
+    `UPDATE students SET status = 'completed', completed_at = NOW(), certificate_on_hold = TRUE, amount_paid = 2000 WHERE id = $1`,
+    [student.id]
+  )
+  const ref = `HBH-${student.id}-cert-clear`
+  await createOzowStudentPayment(student.id, ref, '500.00')
+  mockOzowTransactions.set(ref, {
+    TransactionReference: ref, Status: 'Complete', Amount: '500.00', SiteCode: process.env.OZOW_SITE_CODE, TransactionId: 'tx-cert-clear',
+  })
+
+  const notifications = []
+  ozow.setNotifier(async (type, title, message, meta) => { notifications.push({ type, title, message, meta }) })
+
+  try {
+    await ozow.reconcileOzowPayment(ref)
+    const studentRow = (await pool.query('SELECT * FROM students WHERE id = $1', [student.id])).rows[0]
+    assert.strictEqual(parseFloat(studentRow.amount_paid), 2500)
+    assert.strictEqual(studentRow.certificate_on_hold, false, 'the balance reaching zero must clear the hold')
+    assert.strictEqual(studentRow.status, 'completed', 'clearing the hold must not reactivate a completed student')
+    assert.ok(
+      notifications.some((n) => n.type === 'certificate_cleared'),
+      'a certificate_cleared notification must be raised'
+    )
+  } finally {
+    ozow.setNotifier(async () => {})
+    mockOzowTransactions.delete(ref)
+    await cleanupStudent(student.id)
+  }
+})
+
+test('a gateway payment that leaves a balance still owing does not clear certificate_on_hold', async () => {
+  const student = await createStudent()
+  await pool.query(
+    `INSERT INTO student_payments (student_id, amount, source) VALUES ($1, 1000, 'manual')`, [student.id]
+  )
+  await pool.query(
+    `UPDATE students SET status = 'completed', completed_at = NOW(), certificate_on_hold = TRUE, amount_paid = 1000 WHERE id = $1`,
+    [student.id]
+  )
+  const ref = `HBH-${student.id}-cert-partial`
+  await createOzowStudentPayment(student.id, ref, '500.00')
+  mockOzowTransactions.set(ref, {
+    TransactionReference: ref, Status: 'Complete', Amount: '500.00', SiteCode: process.env.OZOW_SITE_CODE, TransactionId: 'tx-cert-partial',
+  })
+
+  try {
+    await ozow.reconcileOzowPayment(ref)
+    const studentRow = (await pool.query('SELECT * FROM students WHERE id = $1', [student.id])).rows[0]
+    assert.strictEqual(parseFloat(studentRow.amount_paid), 1500)
+    assert.strictEqual(studentRow.certificate_on_hold, true, 'a balance still owing must leave the hold in place')
+  } finally {
+    mockOzowTransactions.delete(ref)
+    await cleanupStudent(student.id)
+  }
+})
+
 after(async () => {
   global.fetch = realFetch
   await pool.end()
