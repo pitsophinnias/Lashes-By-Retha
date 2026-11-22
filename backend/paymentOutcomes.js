@@ -6,6 +6,7 @@
 
 const crypto = require('crypto')
 const { readSystemSettings } = require('./src/systemSettings/store')
+const { recalculateStudentBalance } = require('./src/students/balance')
 
 // Only the latest attempt in the same provider's payments table may move the
 // order's overall payment_status - a stale result from an older attempt
@@ -40,25 +41,25 @@ async function applyOrderOutcome(client, table, payment, isPaid, newStatus) {
 // a balance) - unlike an order, a later payment never supersedes an earlier
 // one, it adds to it. The caller only reaches here for a payment attempt
 // that has just turned paid and was never counted before, so this always
-// credits it exactly once. Returns the updated student (with its course
-// attached) for the caller's notification.
-async function applyStudentOutcome(client, payment) {
-  const studentResult = await client.query('SELECT * FROM students WHERE id = $1 FOR UPDATE', [payment.student_id])
-  const student = studentResult.rows[0]
-  if (!student) return null
-
-  const courseResult = await client.query('SELECT * FROM courses WHERE id = $1', [student.class_id])
-  const course = courseResult.rows[0] || null
-  const price = course ? parseFloat(course.price) : parseFloat(payment.amount)
-  const amountPaid = parseFloat(student.amount_paid) + parseFloat(payment.amount)
-  const paymentStatus = amountPaid >= price ? 'paid' : (amountPaid > 0 ? 'partial' : 'unpaid')
-  const status = student.status === 'awaiting_payment' ? 'active' : student.status
+// credits it exactly once: recorded as a student_payments ledger row (the
+// same ledger a manually-recorded payment uses - see src/students/balance
+// and POST .../students/:id/payments), then amount_paid/payment_status/
+// status/certificate_on_hold are all recomputed from that ledger's total
+// in one place, so gateway and manual payments can never drift apart.
+// Returns the updated student (with its course attached) for the caller's
+// notification, plus whether this specific call is what cleared a held
+// certificate.
+async function applyStudentOutcome(client, payment, source) {
+  const lockResult = await client.query('SELECT id FROM students WHERE id = $1 FOR UPDATE', [payment.student_id])
+  if (lockResult.rows.length === 0) return null
 
   await client.query(
-    `UPDATE students SET amount_paid = $1, payment_status = $2, status = $3 WHERE id = $4`,
-    [amountPaid.toFixed(2), paymentStatus, status, student.id]
+    `INSERT INTO student_payments (student_id, amount, source, payment_id) VALUES ($1, $2, $3, $4)`,
+    [payment.student_id, payment.amount, source, payment.id]
   )
-  return { ...student, amount_paid: amountPaid, course }
+  const outcome = await recalculateStudentBalance(client, payment.student_id)
+  if (!outcome) return null
+  return { ...outcome.student, certificateJustCleared: outcome.certificateJustCleared }
 }
 
 // A pre-order can have two successful payments over time (a deposit, then a

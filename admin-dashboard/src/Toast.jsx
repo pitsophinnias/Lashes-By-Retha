@@ -3,11 +3,18 @@ import { createContext, useCallback, useContext, useRef, useState } from 'react'
 const ToastContext = createContext(null)
 
 let nextToastId = 1
+const DEFAULT_DURATION_MS = 4000
 
-// Bottom-centred on mobile, top-right on desktop; auto-dismisses after ~4s,
-// or sooner on click. Reused by ConfirmDialog for its "on success" toast,
-// and by anything else that wants brief success/error feedback instead of
-// a persistent inline message.
+// Bottom-centred on mobile, top-right on desktop; auto-dismisses after ~4s
+// (or a custom duration - the proactive "message customer?" prompts stay
+// up ~10s, see Step 6), or sooner on click. Reused by ConfirmDialog for
+// its "on success" toast, and by anything else that wants brief feedback
+// instead of a persistent inline message.
+//
+// toast(message, type, { duration, actions }) - actions is an optional
+// array of { label, onClick } buttons (e.g. "Send on WhatsApp" / "Preview")
+// for a prompt-style toast; clicking one dismisses the toast after running
+// onClick.
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([])
   const timers = useRef({})
@@ -18,10 +25,11 @@ export function ToastProvider({ children }) {
     delete timers.current[id]
   }, [])
 
-  const toast = useCallback((message, type = 'success') => {
+  const toast = useCallback((message, type = 'success', { duration = DEFAULT_DURATION_MS, actions = [] } = {}) => {
     const id = nextToastId++
-    setToasts((prev) => [...prev, { id, message, type }])
-    timers.current[id] = setTimeout(() => dismiss(id), 4000)
+    setToasts((prev) => [...prev, { id, message, type, actions }])
+    timers.current[id] = setTimeout(() => dismiss(id), duration)
+    return id
   }, [dismiss])
 
   return (
@@ -29,12 +37,22 @@ export function ToastProvider({ children }) {
       {children}
       <div className="toast-stack" role="status" aria-live="polite" aria-atomic="true">
         {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={`toast toast-${t.type}`}
-            onClick={() => dismiss(t.id)}
-          >
-            {t.message}
+          <div key={t.id} className={`toast toast-${t.type}`}>
+            <div className="toast-message" onClick={() => dismiss(t.id)}>{t.message}</div>
+            {t.actions.length > 0 && (
+              <div className="toast-actions">
+                {t.actions.map((action, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="toast-action-btn"
+                    onClick={() => { action.onClick?.(); dismiss(t.id) }}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -73,7 +91,6 @@ export function ToastProvider({ children }) {
           font-family: 'Lato', sans-serif;
           color: white;
           box-shadow: 0 6px 24px rgba(44,20,28,0.25);
-          cursor: pointer;
           animation: toast-in 0.2s ease-out;
         }
 
@@ -86,8 +103,32 @@ export function ToastProvider({ children }) {
           to { opacity: 1; transform: translateY(0); }
         }
 
+        .toast-message { cursor: pointer; }
+
         .toast-success { background: #4CAF50; }
         .toast-error { background: #C0392B; }
+        .toast-prompt { background: #8C5A6A; }
+
+        .toast-actions {
+          display: flex;
+          gap: 8px;
+          margin-top: 10px;
+        }
+
+        .toast-action-btn {
+          flex: 1;
+          background: rgba(255,255,255,0.18);
+          color: white;
+          border: 1px solid rgba(255,255,255,0.4);
+          border-radius: 6px;
+          padding: 6px 10px;
+          font-size: 12px;
+          font-weight: 700;
+          font-family: inherit;
+          cursor: pointer;
+          transition: background 0.15s;
+        }
+        .toast-action-btn:hover { background: rgba(255,255,255,0.3); }
       `}</style>
     </ToastContext.Provider>
   )

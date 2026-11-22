@@ -741,6 +741,15 @@ function App() {
   // if the status check itself can't be reached.
   const [maintenanceChecked, setMaintenanceChecked] = useState(false)
   const [maintenanceInfo, setMaintenanceInfo] = useState({ enabled: false, message: '' })
+  // Bank/WhatsApp details shown on the EFT screen - null until the real
+  // values load. Deliberately NOT seeded with a hardcoded default: if the
+  // account number ever changes and this fetch then failed, showing a
+  // stale hardcoded number here would send a customer's money to the
+  // wrong account. See businessDetailsFailed below for the one place a
+  // hardcoded number is still shown - as plain text in an error message,
+  // never as data.
+  const [businessDetails, setBusinessDetails] = useState(null)
+  const [businessDetailsFailed, setBusinessDetailsFailed] = useState(false)
   // Live name/price/deposit by course id, merged over CLASSES below - the
   // descriptions and curriculum text stay hard-coded here for now.
   const [courseData, setCourseData] = useState({})
@@ -907,6 +916,23 @@ function App() {
       .then(r => r.json())
       .then(data => { if (data?.content) setSiteContent(data.content) })
       .catch(() => {})
+    // Retries once before giving up - this is what the EFT screen tells a
+    // customer to pay into, so it's worth one extra try rather than
+    // immediately falling back to the soft error message.
+    const loadBusinessDetails = (attempt = 1) => {
+      fetch(`${API}/api/business-details`)
+        .then(r => r.json())
+        .then(data => {
+          if (data?.accountNumber) setBusinessDetails(data)
+          else if (attempt < 2) loadBusinessDetails(attempt + 1)
+          else setBusinessDetailsFailed(true)
+        })
+        .catch(() => {
+          if (attempt < 2) loadBusinessDetails(attempt + 1)
+          else setBusinessDetailsFailed(true)
+        })
+    }
+    loadBusinessDetails()
   }, [backendStatus])
 
   // Looks up an order by its token for the payment result panel below.
@@ -4728,12 +4754,22 @@ function App() {
                     reference.
                   </p>
                   <div style={{ background: '#FDF0F3', borderRadius: '12px', padding: '16px 20px', marginBottom: '20px', border: '1px solid #F5DDE2' }}>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: FNB</div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: Hair By Her</div>
-                    <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: 63093932440</div>
-                    <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', marginBottom: 0, lineHeight: 1.6 }}>
-                      Please send your proof of payment via WhatsApp to 082 685 5399 after making payment.
-                    </p>
+                    {businessDetails ? (
+                      <>
+                        <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Bank: {businessDetails.bankName}</div>
+                        <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account name: {businessDetails.accountName}</div>
+                        <div style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.8 }}>Account number: {businessDetails.accountNumber}</div>
+                        <p style={{ fontSize: '12px', color: '#7A6670', marginTop: '8px', marginBottom: 0, lineHeight: 1.6 }}>
+                          Please send your proof of payment via WhatsApp to {businessDetails.proofOfPaymentNumber} after making payment.
+                        </p>
+                      </>
+                    ) : businessDetailsFailed ? (
+                      <p style={{ fontSize: '13px', color: '#2C2C2C', lineHeight: 1.6, margin: 0 }}>
+                        We couldn't load our payment details. Please WhatsApp us on 082 685 5399.
+                      </p>
+                    ) : (
+                      <p style={{ fontSize: '13px', color: '#9A8A8E', lineHeight: 1.6, margin: 0 }}>Loading payment details…</p>
+                    )}
                   </div>
                   <button onClick={closePaymentResult} style={btnPrimary}>Continue Shopping</button>
                 </>

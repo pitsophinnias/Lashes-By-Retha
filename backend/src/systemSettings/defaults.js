@@ -28,4 +28,27 @@ const showTestData = {
   enabled: false,
 }
 
-module.exports = { maintenance, payments, preorders, showTestData }
+// Banking/business details used to fill in {bank_details}/{pop_number}/
+// {business_name} in message templates, and the reminder timing the
+// Dashboard's "Reminders Due" card uses - previously hardcoded in
+// customer-site's EFT screen (see backend/src/messaging). Editable by
+// owner and sysadmin - see PUT /api/admin/system/messaging - the same
+// access level as the pre-order lead time above, since this is a business
+// detail, not a system-administration one.
+//
+// paymentReminderDays/certificateWarningDays count back from a student's
+// end_date (tuition must be paid in full before the course ends - there's
+// no installment schedule), not from a start date - see
+// src/messaging/reminders.js.
+const messaging = {
+  businessName: 'Hair By Her',
+  bankName: 'FNB',
+  accountName: 'Hair By Her',
+  accountNumber: '63093932440',
+  proofOfPaymentNumber: '082 685 5399',
+  paymentReminderDays: 14,
+  certificateWarningDays: 7,
+  reminderSnoozeDays: 3,
+}
+
+module.exports = { maintenance, payments, preorders, showTestData, messaging }

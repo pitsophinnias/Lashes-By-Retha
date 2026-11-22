@@ -1,10 +1,20 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
 import { ConfirmProvider, useConfirmDialog } from './ConfirmDialog.jsx'
-import { ToastProvider } from './Toast.jsx'
+import { ToastProvider, useToast } from './Toast.jsx'
 import { PAGE_TITLES, PATH_TO_PAGE, pageForPath, pathForPage } from './router.js'
+import MessageCustomerPanel from './MessageCustomerPanel.jsx'
+import StudentDatesDialog from './StudentDatesDialog.jsx'
+import RecordPaymentDialog from './RecordPaymentDialog.jsx'
+import { whatsappLink } from './messaging/channels.js'
+import {
+  buildOrderTemplateData, buildPreorderTemplateData, buildStudentTemplateData,
+  defaultTemplateIdForOrder, defaultTemplateIdForPreorder, defaultTemplateIdForStudent,
+  SAMPLE_DATA,
+} from './messaging/buildData.js'
+import { renderTemplate, findUnknownPlaceholders, PLACEHOLDERS_BY_GROUP } from './messaging/render.js'
 
 const CLASSES = [
   {
@@ -89,8 +99,42 @@ const SITE_THEME = {
 
 function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
   const confirmDialog = useConfirmDialog()
+  const toast = useToast()
   const [activePage, setActivePage] = useState(() => pageForPath(window.location.pathname, user?.role))
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
+  // ── Messaging (WhatsApp/email templates) ─────────────────────────────────
+  const [messageTemplates, setMessageTemplates] = useState([])
+  const [businessDetails, setBusinessDetails] = useState(null)
+  // { entityType: 'order'|'preorder'|'student', entity, course? } or null
+  const [messagePanelTarget, setMessagePanelTarget] = useState(null)
+  const [expandedTemplateId, setExpandedTemplateId] = useState(null)
+  const [templateDrafts, setTemplateDrafts] = useState({}) // { [id]: { body, emailSubject } }
+  const [templateStatus, setTemplateStatus] = useState(null) // { id, type, message }
+  const [templateSaving, setTemplateSaving] = useState(false)
+  const [lastFocusedTemplateField, setLastFocusedTemplateField] = useState('body') // 'body' | 'subject'
+  const templateBodyFieldRef = useRef(null)
+  const templateSubjectFieldRef = useRef(null)
+  const [businessDetailsDraft, setBusinessDetailsDraft] = useState(null)
+  const [businessDetailsStatus, setBusinessDetailsStatus] = useState(null)
+  const [businessDetailsSaving, setBusinessDetailsSaving] = useState(false)
+  const [reminders, setReminders] = useState([])
+  const [missingCourseDates, setMissingCourseDates] = useState([])
+  const [remindersLoading, setRemindersLoading] = useState(false)
+  // The student currently being asked for confirmed start/end dates -
+  // either from a Current Students row or from the Dashboard's "Missing
+  // course dates" list, which only has a {studentId, classId, studentName}
+  // stub to go on.
+  const [datesDialogFor, setDatesDialogFor] = useState(null)
+  // The student currently being asked for a manual payment amount.
+  const [recordPaymentFor, setRecordPaymentFor] = useState(null)
+  // Which student's "Payment history" list is expanded, and its rows
+  // once fetched (keyed by student id) - fetched on demand rather than
+  // alongside the student list itself, since most students' history is
+  // never opened.
+  const [paymentHistoryOpenFor, setPaymentHistoryOpenFor] = useState(null)
+  const [paymentHistories, setPaymentHistories] = useState({})
+  const [remindersBusyId, setRemindersBusyId] = useState(null)
   const [imageTab, setImageTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'products')
   const [productImages, setProductImages] = useState({})
   const [classImages, setClassImages] = useState({})
@@ -334,7 +378,7 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
   })
 
   const markPreorderArrived = async (preorder) => {
-    await confirmDialog({
+    const ok = await confirmDialog({
       variant: 'neutral',
       title: 'Mark as Arrived',
       subject: preorderSubject(preorder),
@@ -351,11 +395,16 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
         await fetchPreorders()
       },
     })
+    if (ok) {
+      promptMessageCustomer('preorder', { ...preorder, status: 'arrived' }, null, `Let ${firstNameOf(preorder.customerName)} know their order has arrived?`)
+    }
   }
 
   const markProductPreordersArrived = async (group) => {
     const count = group.statusCounts.deposit_paid || 0
     if (count === 0) return
+    // No per-customer "message them?" prompt for a bulk action (Step 6) -
+    // just one plain toast pointing her at messaging them individually.
     await confirmDialog({
       variant: 'neutral',
       title: 'Mark All as Arrived',
@@ -367,7 +416,7 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
       summary: 'All deposit-paid pre-orders for this product will be marked as arrived.',
       confirmLabel: `Mark ${count} as arrived`,
       busyLabel: 'Marking as arrived…',
-      successMessage: 'Pre-orders marked as arrived',
+      successMessage: `${count} pre-order${count !== 1 ? 's' : ''} marked as arrived. Message customers from each pre-order.`,
       onConfirm: async () => {
         const res = await apiFetch('/api/admin/preorders/mark-arrived', { method: 'POST', body: JSON.stringify({ productId: group.productId }) })
         if (!res.ok) throw new Error('Failed to mark pre-orders as arrived.')
@@ -378,7 +427,7 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
 
   const dispatchPreorder = async (preorder) => {
     const tracking = courierTrackingDraft[preorder.id] || ''
-    await confirmDialog({
+    const ok = await confirmDialog({
       variant: 'neutral',
       title: 'Dispatch Pre-order',
       subject: preorderSubject(preorder),
@@ -395,10 +444,13 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
         await fetchPreorders()
       },
     })
+    if (ok) {
+      promptMessageCustomer('preorder', { ...preorder, status: 'dispatched' }, null, `Let ${firstNameOf(preorder.customerName)} know their order is on its way?`)
+    }
   }
 
   const collectPreorder = async (preorder) => {
-    await confirmDialog({
+    const ok = await confirmDialog({
       variant: 'neutral',
       title: 'Mark as Collected',
       subject: preorderSubject(preorder),
@@ -415,10 +467,13 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
         await fetchPreorders()
       },
     })
+    if (ok) {
+      promptMessageCustomer('preorder', { ...preorder, status: 'collected' }, null, `Let ${firstNameOf(preorder.customerName)} know their order was collected?`)
+    }
   }
 
   const cancelPreorder = async (preorder) => {
-    await confirmDialog({
+    const ok = await confirmDialog({
       variant: 'danger',
       title: 'Cancel Pre-order',
       subject: preorderSubject(preorder),
@@ -435,10 +490,13 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
         await fetchPreorders()
       },
     })
+    if (ok) {
+      promptMessageCustomer('preorder', { ...preorder, status: 'cancelled' }, null, `Let ${firstNameOf(preorder.customerName)} know their order was cancelled?`)
+    }
   }
 
   const refundPreorder = async (preorder) => {
-    await confirmDialog({
+    const ok = await confirmDialog({
       variant: 'danger',
       title: 'Mark as Refunded',
       subject: preorderSubject(preorder),
@@ -455,6 +513,9 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
         await fetchPreorders()
       },
     })
+    if (ok) {
+      promptMessageCustomer('preorder', { ...preorder, status: 'refunded' }, null, `Let ${firstNameOf(preorder.customerName)} know their refund has been processed?`)
+    }
   }
 
   const copyPreorderBalanceLink = async (preorder) => {
@@ -466,23 +527,319 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     }
   }
 
-  const copyPreorderWhatsAppMessage = async (preorder) => {
-    const firstName = (preorder.customerName || '').split(' ')[0]
-    const message = `Hi ${firstName}, good news! Your ${preorder.productName} has arrived. Your balance is R${preorder.balance.toFixed(2)}. You can pay it securely here: ${preorder.link}. Thank you for your patience.`
-    try {
-      await navigator.clipboard.writeText(message)
-      setPreorderActionStatus({ id: preorder.id, message: 'WhatsApp message copied.' })
-    } catch {
-      // silent fail
-    }
-  }
-
   const preorderDaysLabel = (preorder) => {
     if (preorder.daysLeft === null || preorder.daysLeft === undefined) return null
     if (preorder.daysLeft > 0) return `${preorder.daysLeft} day${preorder.daysLeft !== 1 ? 's' : ''} left`
     if (preorder.daysLeft === 0) return 'Due today'
     return `${Math.abs(preorder.daysLeft)} day${Math.abs(preorder.daysLeft) !== 1 ? 's' : ''} late`
   }
+
+  const fetchMessageTemplates = async () => {
+    try {
+      const res = await apiFetch('/api/message-templates')
+      const data = await res.json()
+      if (res.ok && Array.isArray(data)) {
+        setMessageTemplates(data)
+        return data
+      }
+    } catch {}
+    return null
+  }
+
+  // The full settings object (banking details + reminder-day settings) -
+  // not the public GET /api/business-details, which deliberately only
+  // exposes the four fields the customer-site EFT screen needs. Any
+  // authenticated role can read this (staff need business_name/bank_
+  // details/pop_number too, to send messages), same split as templates.
+  const fetchBusinessDetails = async () => {
+    try {
+      const res = await apiFetch('/api/admin/system/messaging')
+      const data = await res.json()
+      if (res.ok) setBusinessDetails(data)
+    } catch {}
+  }
+
+  const openMessagePanel = (entityType, entity, course) => setMessagePanelTarget({ entityType, entity, course })
+
+  // Shows a toast with "Send on WhatsApp"/"Preview" after a status change
+  // that has a matching template (Step 6) - never for a bulk action, which
+  // gets its own single plain toast instead (see markProductPreordersArrived).
+  const promptMessageCustomer = (entityType, entity, course, promptText) => {
+    if (!businessDetails) return
+    const phone = entityType === 'student' ? entity.whatsapp : entity.customerPhone
+    const defaultTemplateId = entityType === 'order' ? defaultTemplateIdForOrder(entity)
+      : entityType === 'preorder' ? defaultTemplateIdForPreorder(entity)
+      : defaultTemplateIdForStudent(entity)
+    toast(promptText, 'prompt', {
+      duration: 10000,
+      actions: [
+        {
+          label: 'Send on WhatsApp',
+          onClick: () => {
+            const template = messageTemplates.find((t) => t.id === defaultTemplateId)
+            if (!template) return
+            const data = entityType === 'order' ? buildOrderTemplateData(entity, businessDetails)
+              : entityType === 'preorder' ? buildPreorderTemplateData(entity, businessDetails)
+              : buildStudentTemplateData(entity, course, businessDetails)
+            const text = renderTemplate(template.body, data, { whatsapp: true })
+            const link = whatsappLink(phone, text)
+            if (link) window.open(link, '_blank', 'noopener,noreferrer')
+            else toast('No phone number on this ' + entityType, 'error')
+          },
+        },
+        { label: 'Preview', onClick: () => openMessagePanel(entityType, entity, course) },
+      ],
+    })
+  }
+
+  const firstNameOf = (fullName) => (fullName || '').trim().split(/\s+/)[0] || 'the customer'
+
+  // Keeps the Settings page's business-details form in sync whenever the
+  // real settings load or are re-fetched after a save.
+  useEffect(() => {
+    if (businessDetails) setBusinessDetailsDraft(businessDetails)
+  }, [businessDetails])
+
+  const draftFor = (template) => templateDrafts[template.id] || { body: template.body, emailSubject: template.emailSubject }
+
+  const toggleTemplateExpanded = (template) => {
+    setTemplateStatus(null)
+    if (expandedTemplateId === template.id) {
+      setExpandedTemplateId(null)
+      return
+    }
+    setExpandedTemplateId(template.id)
+    setTemplateDrafts(prev => prev[template.id] ? prev : { ...prev, [template.id]: { body: template.body, emailSubject: template.emailSubject } })
+  }
+
+  const updateTemplateDraft = (id, patch) => {
+    setTemplateDrafts(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }))
+  }
+
+  // Inserts {placeholder} at the cursor of whichever field (body or
+  // subject) was last focused, rather than always appending to the end.
+  const insertPlaceholder = (template, placeholder) => {
+    const field = lastFocusedTemplateField
+    const ref = field === 'subject' ? templateSubjectFieldRef : templateBodyFieldRef
+    const el = ref.current
+    const draft = draftFor(template)
+    const current = field === 'subject' ? draft.emailSubject : draft.body
+    const start = el ? el.selectionStart ?? current.length : current.length
+    const end = el ? el.selectionEnd ?? current.length : current.length
+    const next = `${current.slice(0, start)}{${placeholder}}${current.slice(end)}`
+    updateTemplateDraft(template.id, field === 'subject' ? { emailSubject: next } : { body: next })
+    requestAnimationFrame(() => {
+      if (!el) return
+      el.focus()
+      const cursor = start + placeholder.length + 2
+      el.setSelectionRange(cursor, cursor)
+    })
+  }
+
+  const saveTemplateEdit = async (template) => {
+    const draft = draftFor(template)
+    setTemplateSaving(true)
+    setTemplateStatus(null)
+    try {
+      const res = await apiFetch(`/api/message-templates/${template.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ body: draft.body, emailSubject: draft.emailSubject }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        await fetchMessageTemplates()
+        toast('Template saved', 'success')
+        if (data.warning) setTemplateStatus({ id: template.id, type: 'warning', message: data.warning })
+      } else {
+        setTemplateStatus({ id: template.id, type: 'error', message: data.error || 'Failed to save template.' })
+      }
+    } catch {
+      setTemplateStatus({ id: template.id, type: 'error', message: 'Failed to save template.' })
+    } finally {
+      setTemplateSaving(false)
+    }
+  }
+
+  const resetTemplateToDefault = async (template) => {
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Reset to Default',
+      subject: { image: null, name: template.label },
+      summary: 'This replaces your edited version with the built-in default message. This cannot be undone.',
+      confirmLabel: 'Reset to default',
+      busyLabel: 'Resetting…',
+      successMessage: 'Template reset to default',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/message-templates/${template.id}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Failed to reset template.')
+        const refreshed = await fetchMessageTemplates()
+        const updated = refreshed?.find(t => t.id === template.id)
+        if (updated) setTemplateDrafts(prev => ({ ...prev, [template.id]: { body: updated.body, emailSubject: updated.emailSubject } }))
+        setTemplateStatus(null)
+      },
+    })
+  }
+
+  const saveBusinessDetails = async () => {
+    if (!businessDetailsDraft) return
+
+    const doSave = async () => {
+      const res = await apiFetch('/api/admin/system/messaging', {
+        method: 'PUT',
+        body: JSON.stringify(businessDetailsDraft),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to save business details.')
+      setBusinessDetails(data)
+    }
+
+    // Money going to the wrong account is the one mistake here that's
+    // actually dangerous - double-check before saving a changed number,
+    // rather than after a customer has already paid into it.
+    const accountNumberChanged = businessDetails && businessDetailsDraft.accountNumber !== businessDetails.accountNumber
+    if (accountNumberChanged) {
+      await confirmDialog({
+        variant: 'danger',
+        title: 'Change payment account?',
+        summary: `Customers will be asked to pay into this new account. Please double-check the number: ${businessDetailsDraft.accountNumber}`,
+        confirmLabel: 'Save new account',
+        busyLabel: 'Saving…',
+        successMessage: 'Business details saved',
+        onConfirm: doSave,
+      })
+      return
+    }
+
+    setBusinessDetailsSaving(true)
+    setBusinessDetailsStatus(null)
+    try {
+      await doSave()
+      toast('Business details saved', 'success')
+    } catch (err) {
+      setBusinessDetailsStatus({ type: 'error', message: err.message })
+    } finally {
+      setBusinessDetailsSaving(false)
+    }
+  }
+
+  const fetchReminders = async () => {
+    setRemindersLoading(true)
+    try {
+      const res = await apiFetch('/api/admin/reminders')
+      const data = await res.json()
+      if (res.ok && Array.isArray(data?.reminders)) {
+        setReminders(data.reminders)
+        setMissingCourseDates(Array.isArray(data.missingCourseDates) ? data.missingCourseDates : [])
+      }
+    } catch {
+      // silent fail
+    } finally {
+      setRemindersLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activePage === 'dashboard' && user?.role === 'owner') fetchReminders()
+  }, [activePage, user?.role])
+
+  // A reminder row's studentId/courseName etc. come from a flatter summary
+  // (see GET /api/admin/reminders) rather than the full student/course
+  // shapes elsewhere in this file - reassembled into the same shape
+  // buildStudentTemplateData expects, so the Message Customer panel and
+  // the WhatsApp quick-send work identically from here.
+  const studentFromReminder = (reminder) => ({
+    id: reminder.studentId,
+    name: reminder.studentName,
+    whatsapp: reminder.whatsapp,
+    email: reminder.email,
+    amountPaid: reminder.amountPaid,
+    balance: reminder.amountOutstanding,
+    endDate: reminder.endDate,
+  })
+  const courseFromReminder = (reminder) => ({
+    name: reminder.courseName,
+    price: reminder.coursePrice,
+  })
+
+  const markReminderDone = async (reminder) => {
+    setRemindersBusyId(reminder.studentId)
+    try {
+      const res = await apiFetch(`/api/admin/students/${reminder.studentId}/reminder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ type: reminder.type }),
+      })
+      if (res.ok) setReminders(prev => prev.filter(r => r.studentId !== reminder.studentId))
+    } catch {
+      // silent fail
+    } finally {
+      setRemindersBusyId(null)
+    }
+  }
+
+  const sendReminderOnWhatsApp = async (reminder) => {
+    const templateId = reminder.type === 'certificate' ? 'training_certificate_warning'
+      : reminder.type === 'overdue' ? 'training_overdue'
+      : 'training_payment_reminder'
+    const template = messageTemplates.find(t => t.id === templateId)
+    if (!template || !businessDetails) return
+    const data = buildStudentTemplateData(studentFromReminder(reminder), courseFromReminder(reminder), businessDetails)
+    const text = renderTemplate(template.body, data, { whatsapp: true })
+    const link = whatsappLink(reminder.whatsapp, text)
+    if (link) window.open(link, '_blank', 'noopener,noreferrer')
+    else { toast('No phone number on this student', 'error'); return }
+    await markReminderDone(reminder)
+  }
+
+// A manual payment that clears a held certificate (see savePaymentForStudent
+  // below) reports it in the same response, so it shows this immediately;
+  // the next-load effect just below is only for a gateway payment, which has
+  // no such response to react to.
+  const showCertificateClearedToast = (student) => {
+    const course = coursesMerged.find((c) => c.id === student.classId)
+    toast(`Balance paid. ${firstNameOf(student.name)}'s certificate can now be issued.`, 'prompt', {
+      duration: 10000,
+      actions: [{
+        label: 'Send on WhatsApp',
+        onClick: () => {
+          const template = messageTemplates.find((t) => t.id === 'training_course_completed')
+          if (!template || !businessDetails) return
+          const data = buildStudentTemplateData(student, course, businessDetails)
+          const text = renderTemplate(template.body, data, { whatsapp: true })
+          const link = whatsappLink(student.whatsapp, text)
+          if (link) window.open(link, '_blank', 'noopener,noreferrer')
+        },
+      }],
+    })
+  }
+
+  // "Clears automatically ... with a toast" has no live push to react to
+  // the moment a customer pays their own balance link via a gateway - this
+  // app has no such infrastructure - so a gateway clearing instead
+  // surfaces the next time the owner's dashboard loads a fresh, unread
+  // certificate_cleared notification (see ozow.js/payflex.js). Tracked by
+  // id in a ref, not state, purely to stop the same toast firing twice
+  // while the "mark read" round-trip is in flight.
+  const shownCertificateToastIds = useRef(new Set())
+  useEffect(() => {
+    if (user?.role !== 'owner' || !businessDetails) return
+    const pending = notifications.filter(
+      (n) => n.type === 'certificate_cleared' && !n.read && !shownCertificateToastIds.current.has(n.id)
+    )
+    pending.forEach(async (n) => {
+      shownCertificateToastIds.current.add(n.id)
+      try {
+        const res = await apiFetch(`/api/admin/students/${n.studentId}`)
+        if (!res.ok) return
+        const student = await res.json()
+        showCertificateClearedToast(student)
+        markOneRead(n.id)
+      } catch {
+        // leave it unread - it'll be retried on the next load
+        shownCertificateToastIds.current.delete(n.id)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifications, user?.role, businessDetails])
 
   useEffect(() => {
     const token = localStorage.getItem('hbh_token')
@@ -519,6 +876,11 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     })
     // Fetch gallery
     fetchGallery()
+    // Fetch message templates (used by the Message Customer panel and the
+    // Settings page's template editor) and business details (banking info,
+    // reminder-day settings)
+    fetchMessageTemplates()
+    fetchBusinessDetails()
     // Fetch categories
     apiFetch('/api/categories')
       .then(r => r.json())
@@ -865,7 +1227,16 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
       const res = await apiFetch(`/api/orders/${id}/confirm`, { method: 'PATCH' })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        setOrders(prev => prev.map(o => o.id === id ? { ...o, status: 'confirmed' } : o))
+        let confirmedOrder = null
+        setOrders(prev => prev.map(o => {
+          if (o.id !== id) return o
+          confirmedOrder = { ...o, status: 'confirmed' }
+          return confirmedOrder
+        }))
+        if (confirmedOrder) {
+          const action = confirmedOrder.fulfilmentMethod === 'delivery' ? 'know their order is on its way' : 'know their order is ready for collection'
+          promptMessageCustomer('order', confirmedOrder, null, `Let ${firstNameOf(confirmedOrder.customerName)} ${action}?`)
+        }
       } else {
         setOrderConfirmError(data.error || 'Failed to confirm order.')
       }
@@ -1275,7 +1646,19 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
         body: JSON.stringify({ paymentStatus }),
       })
       if (res.ok) {
-        setClassStudents(prev => prev.map(s => s.id === studentId ? { ...s, paymentStatus } : s))
+        let updatedStudent = null
+        setClassStudents(prev => prev.map(s => {
+          if (s.id !== studentId) return s
+          updatedStudent = { ...s, paymentStatus }
+          return updatedStudent
+        }))
+        // Only a genuine step forward (now paid, or newly has something
+        // paid) is worth a "let them know?" prompt - reverting to unpaid
+        // isn't a status a customer needs to hear about.
+        if (updatedStudent && (paymentStatus === 'paid' || paymentStatus === 'partial')) {
+          const course = coursesMerged.find(c => c.id === selectedClass.id)
+          promptMessageCustomer('student', updatedStudent, course, `Let ${firstNameOf(updatedStudent.name)} know their payment was received?`)
+        }
       }
     } catch {
       // silent fail
@@ -1299,22 +1682,31 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     })
   }
 
-  const completeStudent = async (studentId, studentName) => {
-    await confirmDialog({
-      variant: 'neutral',
-      title: 'Mark as Finished',
-      subject: { image: null, name: studentName, details: selectedClass ? [{ text: selectedClass.name }] : [] },
-      summary: 'This student will move to Past students in this class.',
-      confirmLabel: 'Mark as finished',
+  const completeStudent = async (student) => {
+    const hasBalance = student.balance > 0
+    let completedStudent = null
+    const ok = await confirmDialog({
+      variant: hasBalance ? 'danger' : 'neutral',
+      title: hasBalance ? 'Balance still outstanding' : 'Mark as Finished',
+      subject: { image: null, name: student.name, details: selectedClass ? [{ text: selectedClass.name }] : [] },
+      summary: hasBalance
+        ? `${student.name} still owes R ${student.balance.toFixed(2)}. Her certificate should only be issued once this is paid. Mark the course as finished anyway?`
+        : 'This student will move to Past students in this class.',
+      confirmLabel: hasBalance ? 'Mark as finished, certificate on hold' : 'Mark as finished',
       busyLabel: 'Marking as finished…',
       successMessage: 'Student marked as finished',
       onConfirm: async () => {
-        const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}/complete`, { method: 'PATCH' })
+        const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${student.id}/complete`, { method: 'PATCH' })
         if (!res.ok) throw new Error('Failed to mark student as finished.')
         const data = await res.json()
-        setClassStudents(prev => prev.map(s => s.id === studentId ? data : s))
+        completedStudent = data
+        setClassStudents(prev => prev.map(s => s.id === student.id ? data : s))
       },
     })
+    if (ok && completedStudent) {
+      const course = coursesMerged.find(c => c.id === selectedClass.id)
+      promptMessageCustomer('student', completedStudent, course, `Let ${firstNameOf(student.name)} know they've completed the course?`)
+    }
   }
 
   const reactivateStudent = async (studentId) => {
@@ -1329,6 +1721,64 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     }
   }
 
+  // Records a manual payment (EFT, cash, anything outside the Ozow/Payflex
+  // gateways) for a student in any class - classId comes from the student
+  // itself, not selectedClass, so this also works for a student reached
+  // from the Dashboard's reminders card. If this is the payment that
+  // clears a held-back certificate, that's reported in the SAME response
+  // (unlike a gateway payment, which has no response to react to here) -
+  // so the toast shows immediately, not on the next load.
+  const savePaymentForStudent = async (student, amount, note) => {
+    const res = await apiFetch(`/api/classes/${student.classId}/students/${student.id}/payments`, {
+      method: 'POST',
+      body: JSON.stringify({ amount, note }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Failed to record payment.')
+    setClassStudents(prev => prev.map(s => s.id === data.student.id ? data.student : s))
+    setRecordPaymentFor(null)
+    toast('Payment recorded', 'success')
+    if (data.certificateJustCleared) showCertificateClearedToast(data.student)
+  }
+
+  const fetchPaymentHistory = async (student) => {
+    if (paymentHistoryOpenFor === student.id) {
+      setPaymentHistoryOpenFor(null)
+      return
+    }
+    setPaymentHistoryOpenFor(student.id)
+    try {
+      const res = await apiFetch(`/api/classes/${student.classId}/students/${student.id}/payments`)
+      const data = await res.json()
+      if (res.ok && Array.isArray(data)) setPaymentHistories(prev => ({ ...prev, [student.id]: data }))
+    } catch {
+      // silent fail - the list just stays empty
+    }
+  }
+
+  const deletePayment = async (student, payment) => {
+    const ok = await confirmDialog({
+      variant: 'danger',
+      title: 'Remove this payment?',
+      subject: { image: null, name: `R ${payment.amount.toFixed(2)}${payment.note ? ` - ${payment.note}` : ''}` },
+      summary: `${student.name}'s balance will be recalculated without this payment. If they've already finished the course, this may put their certificate back on hold.`,
+      confirmLabel: 'Remove payment',
+      busyLabel: 'Removing…',
+      successMessage: 'Payment removed',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/classes/${student.classId}/students/${student.id}/payments/${payment.id}`, { method: 'DELETE' })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Failed to remove payment.')
+        setClassStudents(prev => prev.map(s => s.id === data.student.id ? data.student : s))
+        setPaymentHistories(prev => ({ ...prev, [student.id]: (prev[student.id] || []).filter(p => p.id !== payment.id) }))
+        if (data.certificateJustReHeld) {
+          toast(`${student.name}'s certificate is on hold again - balance is now R ${data.student.balance.toFixed(2)}.`, 'prompt')
+        }
+      },
+    })
+    return ok
+  }
+
   // Admin-added students never get a public_token until first needed -
   // ensure-token creates one on demand, then both actions below copy from it.
   const copyBalanceLink = async (student) => {
@@ -1338,21 +1788,6 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
       if (!res.ok || !data.link) return
       await navigator.clipboard.writeText(data.link)
       setLinkCopyStatus(prev => ({ ...prev, [student.id]: 'link' }))
-      setTimeout(() => setLinkCopyStatus(prev => ({ ...prev, [student.id]: null })), 2000)
-    } catch {
-      // silent fail
-    }
-  }
-
-  const copyWhatsAppMessage = async (student) => {
-    try {
-      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${student.id}/ensure-token`, { method: 'POST' })
-      const data = await res.json()
-      if (!res.ok || !data.link) return
-      const firstName = student.name.split(' ')[0]
-      const message = `Hi ${firstName}, thank you for enrolling for ${selectedClass.name}. Your balance of R${(student.balance ?? 0).toFixed(2)} is due before your course starts. You can pay it securely here: ${data.link}`
-      await navigator.clipboard.writeText(message)
-      setLinkCopyStatus(prev => ({ ...prev, [student.id]: 'message' }))
       setTimeout(() => setLinkCopyStatus(prev => ({ ...prev, [student.id]: null })), 2000)
     } catch {
       // silent fail
@@ -2928,6 +3363,92 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                     </div>
                   </div>
 
+                  {/* Reminders Due - owner-only, like the balance figures
+                      already hidden from staff elsewhere on this page */}
+                  {user?.role === 'owner' && (
+                    <div className="panel" style={{ marginBottom: 24 }}>
+                      <div className="panel-heading" style={{ background: '#8C5A6A', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
+                        Reminders Due
+                      </div>
+                      <div style={{ padding: '0 20px 20px 20px' }}>
+                        {remindersLoading && reminders.length === 0 && missingCourseDates.length === 0 && (
+                          <div style={{ fontSize: 13, color: '#AAAAAA', padding: '12px 0' }}>Loading…</div>
+                        )}
+                        {!remindersLoading && reminders.length === 0 && missingCourseDates.length === 0 && (
+                          <div style={{ fontSize: 13, color: '#AAAAAA', padding: '12px 0' }}>No reminders today 🌸</div>
+                        )}
+                        {reminders.map(r => (
+                          <div key={r.studentId} style={{ padding: '10px 0', borderBottom: '1px solid #F9F9F9' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                              <div>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>
+                                  {r.studentName}
+                                  <span style={{
+                                    marginLeft: 8, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5,
+                                    color: r.type === 'overdue' ? '#C0392B' : r.type === 'certificate' ? '#A23F51' : '#8C5A6A',
+                                  }}>
+                                    {r.type === 'overdue' ? 'Overdue' : r.type === 'certificate' ? 'Certificate' : 'Payment'}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: 12, color: '#9A8A8E' }}>{r.courseName} - {r.reason}</div>
+                              </div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: '#C47A8A', whiteSpace: 'nowrap' }}>
+                                R {r.amountOutstanding.toFixed(2)}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                              <button
+                                className="secondary-btn"
+                                style={{ fontSize: 11, padding: '5px 10px' }}
+                                disabled={remindersBusyId === r.studentId}
+                                onClick={() => sendReminderOnWhatsApp(r)}
+                              >
+                                Send on WhatsApp
+                              </button>
+                              <button
+                                className="secondary-btn"
+                                style={{ fontSize: 11, padding: '5px 10px' }}
+                                onClick={() => openMessagePanel('student', studentFromReminder(r), courseFromReminder(r))}
+                              >
+                                Preview
+                              </button>
+                              <button
+                                className="secondary-btn"
+                                style={{ fontSize: 11, padding: '5px 10px' }}
+                                disabled={remindersBusyId === r.studentId}
+                                onClick={() => markReminderDone(r)}
+                              >
+                                Done
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        {missingCourseDates.length > 0 && (
+                          <div style={{ marginTop: reminders.length > 0 ? 10 : 0, paddingTop: reminders.length > 0 ? 10 : 0, borderTop: reminders.length > 0 ? '1px solid #F0E8E8' : 'none' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+                              Missing course dates
+                            </div>
+                            {missingCourseDates.map(m => (
+                              <div key={m.studentId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0' }}>
+                                <div>
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>{m.studentName}</div>
+                                  <div style={{ fontSize: 12, color: '#9A8A8E' }}>{m.courseName || 'Training'}</div>
+                                </div>
+                                <button
+                                  className="secondary-btn"
+                                  style={{ fontSize: 11, padding: '5px 10px' }}
+                                  onClick={() => setDatesDialogFor({ id: m.studentId, classId: m.classId, name: m.studentName })}
+                                >
+                                  Set dates
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Low stock - a product with lash length/curl options lists
                       those options individually, not the product as a whole */}
                   {(() => {
@@ -4241,7 +4762,8 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                         </div>
                       )}
                       {!studentsLoading && currentStudents.map(student => (
-                        <div key={student.id} className="student-row">
+                        <div key={student.id}>
+                        <div className="student-row">
                           <div>
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                               {student.name}
@@ -4257,9 +4779,16 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                             <div style={{ fontSize: 12, color: '#9A8A8E' }}>
                               {student.whatsapp}{student.email ? ` · ${student.email}` : ''}
                             </div>
-                            {student.preferredStartDate && (
+                            {student.preferredStartDate && !student.startDate && (
                               <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 2 }}>
                                 Preferred start: {new Date(student.preferredStartDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              </div>
+                            )}
+                            {student.startDate && student.endDate && (
+                              <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 2 }}>
+                                {new Date(student.startDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                {' – '}
+                                {new Date(student.endDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
                               </div>
                             )}
                             {student.balance != null && (
@@ -4286,28 +4815,57 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                             <span className={`payment-badge payment-${student.paymentStatus === 'partial' ? 'partial' : student.paymentStatus === 'paid' ? 'paid' : 'unpaid'}`}>
                               {student.paymentStatus === 'paid' ? 'Paid' : student.paymentStatus === 'partial' ? 'Partial' : 'Unpaid'}
                             </span>
-                            <a
-                              href={`https://wa.me/${student.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(`Hi ${student.name}, this is a message from Hair By Her regarding your enrolment.`)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 6, background: '#25D366', color: 'white', textDecoration: 'none', fontSize: 13, fontWeight: 700 }}
+                            <button
+                              className="secondary-btn"
+                              onClick={() => openMessagePanel('student', student, coursesMerged.find(c => c.id === selectedClass.id))}
                             >
-                              W
-                            </a>
+                              Message Customer
+                            </button>
                             {student.balance > 0 && (
-                              <>
-                                <button className="secondary-btn" onClick={() => copyBalanceLink(student)}>
-                                  {linkCopyStatus[student.id] === 'link' ? 'Copied!' : 'Copy balance link'}
-                                </button>
-                                <button className="secondary-btn" onClick={() => copyWhatsAppMessage(student)}>
-                                  {linkCopyStatus[student.id] === 'message' ? 'Copied!' : 'Copy WhatsApp message'}
-                                </button>
-                              </>
+                              <button className="secondary-btn" onClick={() => copyBalanceLink(student)}>
+                                {linkCopyStatus[student.id] === 'link' ? 'Copied!' : 'Copy balance link'}
+                              </button>
                             )}
-                            <button className="secondary-btn" onClick={() => completeStudent(student.id, student.name)}>
+                            <button className="secondary-btn" onClick={() => setRecordPaymentFor(student)}>
+                              Record Payment
+                            </button>
+                            <button
+                              className="secondary-btn"
+                              onClick={() => setDatesDialogFor({ id: student.id, classId: student.classId, name: student.name, startDate: student.startDate, endDate: student.endDate, preferredStartDate: student.preferredStartDate })}
+                            >
+                              {student.startDate ? 'Edit dates' : 'Set course dates'}
+                            </button>
+                            <button className="secondary-btn" onClick={() => fetchPaymentHistory(student)}>
+                              {paymentHistoryOpenFor === student.id ? 'Hide payments' : 'Payment history'}
+                            </button>
+                            <button className="secondary-btn" onClick={() => completeStudent(student)}>
                               Finished course
                             </button>
                           </div>
+                        </div>
+                        {paymentHistoryOpenFor === student.id && (
+                          <div style={{ padding: '8px 0 14px', borderBottom: '1px solid #F7EEF0' }}>
+                            {(paymentHistories[student.id] || []).length === 0 ? (
+                              <div style={{ fontSize: 12, color: '#9A8A8E' }}>No payments recorded yet.</div>
+                            ) : (
+                              (paymentHistories[student.id] || []).map(p => (
+                                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0' }}>
+                                  <span style={{ color: '#2C1A20' }}>
+                                    R {p.amount.toFixed(2)} · {p.source} · {new Date(p.createdAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                    {p.note ? ` - ${p.note}` : ''}
+                                  </span>
+                                  <button
+                                    className="delete-btn"
+                                    style={{ fontSize: 11, padding: '3px 8px' }}
+                                    onClick={() => deletePayment(student, p)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
                         </div>
                       ))}
                     </div>
@@ -4372,10 +4930,16 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                         </div>
                       )}
                       {!studentsLoading && pastStudents.map(student => (
-                        <div key={student.id} className="student-row">
+                        <div key={student.id}>
+                        <div className="student-row">
                           <div>
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                               {student.name}
+                              {student.certificateOnHold && (
+                                <span style={{ fontSize: 10, fontWeight: 700, color: '#A23F51', background: '#FDF0F3', borderRadius: 4, padding: '2px 6px', textTransform: 'uppercase' }}>
+                                  Certificate on hold
+                                </span>
+                              )}
                               {student.isTest && (
                                 <span style={{ fontSize: 10, fontWeight: 700, color: '#9E9E9E', background: '#F5F5F5', borderRadius: 4, padding: '2px 6px', textTransform: 'uppercase' }}>Test</span>
                               )}
@@ -4386,11 +4950,33 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                             <div style={{ fontSize: 11, color: '#C4A0A8', marginTop: 2 }}>
                               Finished {new Date(student.completedAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
                             </div>
+                            {student.balance != null && student.balance > 0 && (
+                              <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 2 }}>
+                                Paid R{student.amountPaid.toFixed(2)} · Balance R{student.balance.toFixed(2)}
+                              </div>
+                            )}
                           </div>
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                             <span className={`payment-badge payment-${student.paymentStatus === 'partial' ? 'partial' : student.paymentStatus === 'paid' ? 'paid' : 'unpaid'}`}>
                               {student.paymentStatus === 'paid' ? 'Paid' : student.paymentStatus === 'partial' ? 'Partial' : 'Unpaid'}
                             </span>
+                            {student.balance > 0 && (
+                              <button className="secondary-btn" onClick={() => copyBalanceLink(student)}>
+                                {linkCopyStatus[student.id] === 'link' ? 'Copied!' : 'Copy balance link'}
+                              </button>
+                            )}
+                            <button
+                              className="secondary-btn"
+                              onClick={() => openMessagePanel('student', student, coursesMerged.find(c => c.id === student.classId))}
+                            >
+                              Message Customer
+                            </button>
+                            <button className="secondary-btn" onClick={() => setRecordPaymentFor(student)}>
+                              Record Payment
+                            </button>
+                            <button className="secondary-btn" onClick={() => fetchPaymentHistory(student)}>
+                              {paymentHistoryOpenFor === student.id ? 'Hide payments' : 'Payment history'}
+                            </button>
                             <button className="secondary-btn" onClick={() => reactivateStudent(student.id)}>
                               Move back
                             </button>
@@ -4398,6 +4984,30 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                               Delete
                             </button>
                           </div>
+                        </div>
+                        {paymentHistoryOpenFor === student.id && (
+                          <div style={{ padding: '8px 0 14px', borderBottom: '1px solid #F7EEF0' }}>
+                            {(paymentHistories[student.id] || []).length === 0 ? (
+                              <div style={{ fontSize: 12, color: '#9A8A8E' }}>No payments recorded yet.</div>
+                            ) : (
+                              (paymentHistories[student.id] || []).map(p => (
+                                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0' }}>
+                                  <span style={{ color: '#2C1A20' }}>
+                                    R {p.amount.toFixed(2)} · {p.source} · {new Date(p.createdAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                    {p.note ? ` - ${p.note}` : ''}
+                                  </span>
+                                  <button
+                                    className="delete-btn"
+                                    style={{ fontSize: 11, padding: '3px 8px' }}
+                                    onClick={() => deletePayment(student, p)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
                         </div>
                       ))}
                     </div>
@@ -4541,14 +5151,12 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                 {preorder.status.replace(/_/g, ' ')}
                               </span>
                               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                <button className="secondary-btn" onClick={() => openMessagePanel('preorder', preorder, null)}>Message Customer</button>
                                 {preorder.status === 'deposit_paid' && (
                                   <button className="secondary-btn" onClick={() => markPreorderArrived(preorder)}>Mark arrived</button>
                                 )}
                                 {preorder.status === 'arrived' && preorder.balance > 0 && (
-                                  <>
-                                    <button className="secondary-btn" onClick={() => copyPreorderBalanceLink(preorder)}>Copy balance link</button>
-                                    <button className="secondary-btn" onClick={() => copyPreorderWhatsAppMessage(preorder)}>Copy WhatsApp message</button>
-                                  </>
+                                  <button className="secondary-btn" onClick={() => copyPreorderBalanceLink(preorder)}>Copy balance link</button>
                                 )}
                                 {preorder.status === 'paid_in_full' && (
                                   <>
@@ -5223,23 +5831,12 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                               )}
                             </div>
                           )}
-                          <a
-                            href={`https://wa.me/${order.customerPhone.replace(/\D/g,'')}?text=${encodeURIComponent(`Hi ${order.customerName}, thank you for your order with Hair By Her. We have received your payment and will be in touch shortly to arrange delivery.`)}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              display: 'inline-block',
-                              background: '#25D366',
-                              color: 'white',
-                              borderRadius: 6,
-                              padding: '8px 16px',
-                              fontSize: 13,
-                              fontWeight: 600,
-                              textDecoration: 'none',
-                            }}
+                          <button
+                            className="secondary-btn"
+                            onClick={() => openMessagePanel('order', order, null)}
                           >
-                            WhatsApp Customer
-                          </a>
+                            Message Customer
+                          </button>
                           {order.status === 'confirmed' && (
                             <div style={{ fontSize: 13, fontWeight: 600, color: '#4CAF50', display: 'flex', alignItems: 'center', gap: 6 }}>
                               <svg
@@ -5519,12 +6116,224 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                     </button>
                   </div>
                 )}
+
+                {user?.role === 'owner' && (
+                  <div style={{ background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)', maxWidth: 640, marginTop: 20 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Message Templates</div>
+                    <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
+                      The WhatsApp/email messages used by "Message Customer" buttons throughout the app. Editing one here only changes it for you - everyone else still sees the built-in default until you edit it too.
+                    </div>
+
+                    {['orders', 'preorders', 'training'].map(group => (
+                      <div key={group} style={{ marginBottom: 20 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#8C5A6A', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                          {group === 'orders' ? 'Orders' : group === 'preorders' ? 'Pre-orders' : 'Lash Training'}
+                        </div>
+                        {messageTemplates.filter(t => t.group === group).map(template => {
+                          const expanded = expandedTemplateId === template.id
+                          const draft = draftFor(template)
+                          const status = templateStatus?.id === template.id ? templateStatus : null
+                          const previewData = SAMPLE_DATA[group]
+                          return (
+                            <div key={template.id} style={{ border: '1px solid #F0E8E8', borderRadius: 8, marginBottom: 8, overflow: 'hidden' }}>
+                              <button
+                                onClick={() => toggleTemplateExpanded(template)}
+                                style={{
+                                  width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                  padding: '10px 14px', background: expanded ? '#FAF6F4' : 'white', border: 'none', cursor: 'pointer',
+                                  fontFamily: 'inherit', textAlign: 'left',
+                                }}
+                              >
+                                <span style={{ fontSize: 13, fontWeight: 600, color: '#2C1A20' }}>{template.label}</span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  {template.isOverridden && (
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: '#C47A8A', textTransform: 'uppercase', letterSpacing: 0.5 }}>Edited</span>
+                                  )}
+                                  <span style={{ color: '#9A8A8E' }}>{expanded ? '▾' : '▸'}</span>
+                                </span>
+                              </button>
+
+                              {expanded && (
+                                <div style={{ padding: 16, borderTop: '1px solid #F0E8E8' }}>
+                                  <div className="field-label" style={{ marginBottom: 4 }}>Email subject</div>
+                                  <input
+                                    ref={templateSubjectFieldRef}
+                                    className="category-input"
+                                    style={{ width: '100%', marginBottom: 12 }}
+                                    value={draft.emailSubject}
+                                    onFocus={() => setLastFocusedTemplateField('subject')}
+                                    onChange={e => updateTemplateDraft(template.id, { emailSubject: e.target.value })}
+                                  />
+
+                                  <div className="field-label" style={{ marginBottom: 4 }}>WhatsApp/email text</div>
+                                  <textarea
+                                    ref={templateBodyFieldRef}
+                                    className="category-input"
+                                    style={{ width: '100%', resize: 'vertical', marginBottom: 10, fontFamily: 'inherit' }}
+                                    rows={10}
+                                    value={draft.body}
+                                    onFocus={() => setLastFocusedTemplateField('body')}
+                                    onChange={e => updateTemplateDraft(template.id, { body: e.target.value })}
+                                  />
+
+                                  <div className="field-label" style={{ marginBottom: 6 }}>Insert placeholder</div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+                                    {PLACEHOLDERS_BY_GROUP[group].map(p => (
+                                      <button
+                                        key={p}
+                                        type="button"
+                                        className="secondary-btn"
+                                        style={{ fontSize: 11, padding: '4px 9px' }}
+                                        onClick={() => insertPlaceholder(template, p)}
+                                      >
+                                        {`{${p}}`}
+                                      </button>
+                                    ))}
+                                  </div>
+
+                                  {(() => {
+                                    const unknown = [...new Set([...findUnknownPlaceholders(draft.body), ...findUnknownPlaceholders(draft.emailSubject)])]
+                                    if (unknown.length === 0) return null
+                                    return (
+                                      <div className="error-msg" style={{ marginBottom: 12 }}>
+                                        Unknown placeholder{unknown.length > 1 ? 's' : ''}: {unknown.map(p => `{${p}}`).join(', ')} - will show as blank text, never as sent.
+                                      </div>
+                                    )
+                                  })()}
+
+                                  <div className="field-label" style={{ marginBottom: 6 }}>Live preview (sample data, as sent on WhatsApp)</div>
+                                  <div style={{ background: '#FAF6F4', borderRadius: 8, padding: 14, fontSize: 13, color: '#2C1A20', whiteSpace: 'pre-wrap', lineHeight: 1.6, marginBottom: 16 }}>
+                                    {renderTemplate(draft.body, previewData, { whatsapp: true }) || '—'}
+                                  </div>
+
+                                  {status && (
+                                    <div className={status.type === 'error' ? 'error-msg' : 'success-msg'} style={{ marginBottom: 12 }}>
+                                      {status.message}
+                                    </div>
+                                  )}
+
+                                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                    <button className="upload-btn" disabled={templateSaving} onClick={() => saveTemplateEdit(template)}>
+                                      {templateSaving ? 'Saving…' : 'Save'}
+                                    </button>
+                                    {template.isOverridden && (
+                                      <button className="delete-btn" onClick={() => resetTemplateToDefault(template)}>
+                                        Reset to Default
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {user?.role === 'owner' && businessDetailsDraft && (
+                  <div style={{ background: 'white', borderRadius: 12, padding: 28, boxShadow: '0 2px 8px rgba(44,20,28,0.08)', maxWidth: 480, marginTop: 20 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#2C1A20', marginBottom: 6 }}>Business Details & Reminders</div>
+                    <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 20 }}>
+                      Used in message templates (bank details, proof-of-payment number) and to time the Dashboard's Reminders Due card.
+                    </div>
+
+                    {[
+                      { key: 'businessName', label: 'Business Name' },
+                      { key: 'bankName', label: 'Bank' },
+                      { key: 'accountName', label: 'Account Name' },
+                      { key: 'accountNumber', label: 'Account Number' },
+                      { key: 'proofOfPaymentNumber', label: 'Proof-of-Payment WhatsApp Number' },
+                    ].map(field => (
+                      <div key={field.key} style={{ marginBottom: 12 }}>
+                        <label className="field-label" style={{ marginBottom: 4, display: 'block' }}>{field.label}</label>
+                        <input
+                          className="category-input"
+                          style={{ width: '100%' }}
+                          value={businessDetailsDraft[field.key] || ''}
+                          onChange={e => setBusinessDetailsDraft(prev => ({ ...prev, [field.key]: e.target.value }))}
+                        />
+                      </div>
+                    ))}
+
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                      {[
+                        { key: 'paymentReminderDays', label: 'Payment reminder (days before course ends)' },
+                        { key: 'certificateWarningDays', label: 'Certificate warning (days before course ends)' },
+                        { key: 'reminderSnoozeDays', label: 'Remind again after (days)' },
+                      ].map(field => (
+                        <div key={field.key} style={{ flex: 1 }}>
+                          <label className="field-label" style={{ marginBottom: 4, display: 'block', fontSize: 10 }}>{field.label}</label>
+                          <input
+                            className="category-input"
+                            type="number"
+                            style={{ width: '100%' }}
+                            value={businessDetailsDraft[field.key] ?? ''}
+                            onChange={e => setBusinessDetailsDraft(prev => ({ ...prev, [field.key]: e.target.value }))}
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    {businessDetailsStatus && (
+                      <div className="error-msg" style={{ marginBottom: 12 }}>{businessDetailsStatus.message}</div>
+                    )}
+
+                    <button
+                      onClick={saveBusinessDetails}
+                      disabled={businessDetailsSaving}
+                      style={{ background: '#C47A8A', color: 'white', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                    >
+                      {businessDetailsSaving ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
           </div>
         </div>
       </div>
+
+      {messagePanelTarget && (
+        <MessageCustomerPanel
+          entityType={messagePanelTarget.entityType}
+          entity={messagePanelTarget.entity}
+          course={messagePanelTarget.course}
+          templates={messageTemplates}
+          businessDetails={businessDetails || {}}
+          onClose={() => setMessagePanelTarget(null)}
+        />
+      )}
+
+      {datesDialogFor && (
+        <StudentDatesDialog
+          student={datesDialogFor}
+          durationDays={coursesMerged.find(c => c.id === datesDialogFor.classId)?.durationDays}
+          onClose={() => setDatesDialogFor(null)}
+          onSave={async (startDate, endDate) => {
+            const res = await apiFetch(`/api/classes/${datesDialogFor.classId}/students/${datesDialogFor.id}/dates`, {
+              method: 'PATCH',
+              body: JSON.stringify({ startDate, endDate }),
+            })
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok) throw new Error(data.error || 'Failed to save course dates.')
+            setClassStudents(prev => prev.map(s => s.id === data.id ? data : s))
+            setMissingCourseDates(prev => prev.filter(m => m.studentId !== data.id))
+            setDatesDialogFor(null)
+            toast('Course dates saved', 'success')
+          }}
+        />
+      )}
+
+      {recordPaymentFor && (
+        <RecordPaymentDialog
+          student={recordPaymentFor}
+          onClose={() => setRecordPaymentFor(null)}
+          onSave={(amount, note) => savePaymentForStudent(recordPaymentFor, amount, note)}
+        />
+      )}
     </>
   )
 }
