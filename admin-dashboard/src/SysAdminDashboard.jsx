@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react'
+import { SYSADMIN_PAGE_TITLES, SYSADMIN_PATH_TO_PAGE, pageForSysadminPath, pathForSysadminPage } from './router.js'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
+const queryParams = () => new URLSearchParams(window.location.search)
+
 export default function SysAdminDashboard({ user, onLogout }) {
-  const [activePage, setActivePage] = useState('overview')
+  const [activePage, setActivePage] = useState(() => pageForSysadminPath(window.location.pathname))
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [users, setUsers] = useState([])
   const [roles, setRoles] = useState([])
   const [systemNotifications, setSystemNotifications] = useState([])
   const [auditLogs, setAuditLogs] = useState([])
-  const [auditPage, setAuditPage] = useState(1)
+  const [auditPage, setAuditPage] = useState(() => parseInt(queryParams().get('page')) || 1)
   const [auditTotal, setAuditTotal] = useState(0)
   const [auditPages, setAuditPages] = useState(1)
   const [showCreateUser, setShowCreateUser] = useState(false)
@@ -40,7 +43,12 @@ export default function SysAdminDashboard({ user, onLogout }) {
   // Payments monitor
   const [paymentRows, setPaymentRows] = useState([])
   const [paymentsSummary, setPaymentsSummary] = useState({ stuckCount: 0, lastOzowNotifyAt: null, lastPayflexCallbackAt: null })
-  const [paymentFilters, setPaymentFilters] = useState({ provider: '', status: '', mode: '', days: '' })
+  const [paymentFilters, setPaymentFilters] = useState(() => ({
+    provider: queryParams().get('provider') || '',
+    status: queryParams().get('status') || '',
+    mode: queryParams().get('mode') || '',
+    days: queryParams().get('days') || '',
+  }))
   const [paymentsLoading, setPaymentsLoading] = useState(false)
   const [rechecking, setRechecking] = useState({})
   const [paymentEvents, setPaymentEvents] = useState([])
@@ -51,7 +59,10 @@ export default function SysAdminDashboard({ user, onLogout }) {
 
   // Errors
   const [errorGroups, setErrorGroups] = useState([])
-  const [errorFilters, setErrorFilters] = useState({ resolved: 'unresolved', days: '' })
+  const [errorFilters, setErrorFilters] = useState(() => ({
+    resolved: queryParams().get('resolved') || 'unresolved',
+    days: queryParams().get('days') || '',
+  }))
   const [errorsLoading, setErrorsLoading] = useState(false)
   const [selectedErrorIds, setSelectedErrorIds] = useState([])
   const [resolvingErrors, setResolvingErrors] = useState(false)
@@ -81,6 +92,83 @@ export default function SysAdminDashboard({ user, onLogout }) {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
   })
+
+  // Mirrors the owner/staff dashboard's navigateTo - pushes a new history
+  // entry under /sysadmin/* so back/forward and refresh-stays-put work
+  // the same way here.
+  const navigateTo = (value) => {
+    const path = pathForSysadminPage(value)
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, '', path)
+    }
+    setActivePage(value)
+    setMobileNavOpen(false)
+  }
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const page = pageForSysadminPath(window.location.pathname)
+      setActivePage(page)
+      const params = new URLSearchParams(window.location.search)
+      if (page === 'audit') setAuditPage(parseInt(params.get('page')) || 1)
+      if (page === 'payments') {
+        setPaymentFilters({
+          provider: params.get('provider') || '',
+          status: params.get('status') || '',
+          mode: params.get('mode') || '',
+          days: params.get('days') || '',
+        })
+      }
+      if (page === 'errors') {
+        setErrorFilters({ resolved: params.get('resolved') || 'unresolved', days: params.get('days') || '' })
+      }
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  // An unknown /sysadmin/* path (or one some stale link pointed at) already
+  // renders Overview - this just tidies the address bar to match, once.
+  useEffect(() => {
+    if (!Object.prototype.hasOwnProperty.call(SYSADMIN_PATH_TO_PAGE, window.location.pathname)) {
+      window.history.replaceState(null, '', '/sysadmin')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    document.title = `${SYSADMIN_PAGE_TITLES[activePage] || 'Overview'} · Hair By Her System Admin`
+  }, [activePage])
+
+  // Keeps each page's own filters/pagination in the query string
+  // (replacing, not pushing, so switching a filter doesn't clutter the
+  // back button - only navigateTo does that), so a refresh restores them.
+  useEffect(() => {
+    if (activePage !== 'audit') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('page', String(auditPage))
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, auditPage])
+
+  useEffect(() => {
+    if (activePage !== 'payments') return
+    const url = new URL(window.location.href)
+    Object.entries(paymentFilters).forEach(([key, value]) => {
+      if (value) url.searchParams.set(key, value)
+      else url.searchParams.delete(key)
+    })
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, paymentFilters])
+
+  useEffect(() => {
+    if (activePage !== 'errors') return
+    const url = new URL(window.location.href)
+    Object.entries(errorFilters).forEach(([key, value]) => {
+      if (value) url.searchParams.set(key, value)
+      else url.searchParams.delete(key)
+    })
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, errorFilters])
 
   useEffect(() => {
     fetchUsers()
@@ -624,7 +712,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
             {navItems.map(item => (
               <button
                 key={item.value}
-                onClick={() => { setActivePage(item.value); setMobileNavOpen(false) }}
+                onClick={() => navigateTo(item.value)}
                 style={{
                   display: 'flex', alignItems: 'center', width: '100%',
                   padding: '10px 14px', borderRadius: 8, border: 'none',

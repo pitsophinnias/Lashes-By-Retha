@@ -3,6 +3,7 @@ const assert = require('node:assert')
 const path = require('node:path')
 const http = require('node:http')
 const jwt = require('jsonwebtoken')
+const { createTestSessionId } = require('./helpers/session')
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
 process.env.PORT = '4016'
@@ -66,11 +67,12 @@ const createTestUser = async (roleName, { isActive = true } = {}) => {
     [username, roleRow.id, isActive]
   )
   testUserIds.push(result.rows[0].id)
+  result.rows[0].sessionId = await createTestSessionId(pool, result.rows[0].id)
   return result.rows[0]
 }
 
 const tokenForUser = (user, { role, tokenVersion } = {}) => jwt.sign(
-  { id: user.id, username: user.username, role: role ?? undefined, tokenVersion: tokenVersion ?? user.token_version },
+  { id: user.id, username: user.username, role: role ?? undefined, tokenVersion: tokenVersion ?? user.token_version, sessionId: user.sessionId },
   JWT_SECRET,
   { expiresIn: '1h' }
 )
@@ -97,6 +99,7 @@ before(async () => {
     `SELECT u.id, u.username, u.token_version FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
   )).rows[0]
   sysadminUser = existingSysadmin
+  sysadminUser.sessionId = await createTestSessionId(pool, sysadminUser.id)
   ownerUser = await createTestUser('owner')
   staffUser = await createTestUser('staff')
 })
@@ -244,8 +247,11 @@ test('logging out everywhere invalidates every token issued before it', async ()
   const after1 = await request('GET', '/api/auth/me', undefined, { Authorization: `Bearer ${oldToken}` })
   assert.strictEqual(after1.status, 401)
 
-  // A freshly minted token with the new token_version still works.
+  // A freshly minted token with the new token_version still works - with a
+  // new session too, exactly like a real re-login, since logout-everywhere
+  // also revokes the old one (see revokeAllSessionsForUser).
   const refreshed = (await pool.query('SELECT * FROM users WHERE id = $1', [user.id])).rows[0]
+  refreshed.sessionId = await createTestSessionId(pool, refreshed.id)
   const newToken = tokenForUser(refreshed, { role: 'staff' })
   const after2 = await request('GET', '/api/auth/me', undefined, { Authorization: `Bearer ${newToken}` })
   assert.strictEqual(after2.status, 200)

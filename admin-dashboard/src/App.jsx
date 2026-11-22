@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
+import { ConfirmProvider, useConfirmDialog } from './ConfirmDialog.jsx'
+import { ToastProvider } from './Toast.jsx'
+import { PAGE_TITLES, PATH_TO_PAGE, pageForPath, pathForPage } from './router.js'
 
 const CLASSES = [
   {
@@ -84,10 +87,11 @@ const SITE_THEME = {
   bodyFont: 'Lato',
 }
 
-export default function App({ user, onLogout }) {
-  const [activePage, setActivePage] = useState('dashboard')
+function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
+  const confirmDialog = useConfirmDialog()
+  const [activePage, setActivePage] = useState(() => pageForPath(window.location.pathname, user?.role))
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [imageTab, setImageTab] = useState('products')
+  const [imageTab, setImageTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'products')
   const [productImages, setProductImages] = useState({})
   const [classImages, setClassImages] = useState({})
   const [galleryImages, setGalleryImages] = useState([])
@@ -103,10 +107,10 @@ export default function App({ user, onLogout }) {
   const [revenueData, setRevenueData] = useState([])
   const [recentOrders, setRecentOrders] = useState([])
   const [archivedNotifications, setArchivedNotifications] = useState([])
-  const [notifTab, setNotifTab] = useState('all')
+  const [notifTab, setNotifTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'all')
   const [orders, setOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(false)
-  const [ordersView, setOrdersView] = useState('active')
+  const [ordersView, setOrdersView] = useState(() => new URLSearchParams(window.location.search).get('view') || 'active')
   const [orderCounts, setOrderCounts] = useState({ active: 0, archived: 0 })
 
   // ── Pre-orders ────────────────────────────────────────────────────────────
@@ -157,6 +161,13 @@ export default function App({ user, onLogout }) {
   const [bulkOptionsStartStock, setBulkOptionsStartStock] = useState('')
   const [optionsManagerStatus, setOptionsManagerStatus] = useState(null)
 
+  // ── Sale pricing ──────────────────────────────────────────────────────────
+  const [saleManagerProductId, setSaleManagerProductId] = useState(null)
+  // { onSale, salePrice } for the product itself (no options), plus
+  // { [optionId]: { onSale, salePrice } } for each of its options.
+  const [saleDraft, setSaleDraft] = useState({ onSale: false, salePrice: '', options: {} })
+  const [saleManagerStatus, setSaleManagerStatus] = useState(null)
+
   const [orderConfirmError, setOrderConfirmError] = useState('')
   // Order id currently showing the inline "confirm anyway?" prompt for an
   // Ozow order whose payment hasn't come through yet.
@@ -190,6 +201,13 @@ export default function App({ user, onLogout }) {
   const [contentConfirm, setContentConfirm] = useState(null)
   const contentDirty = JSON.stringify(contentDraft) !== JSON.stringify(contentSaved)
 
+  // Lets the idle-timeout warning dialog (mounted at the app root, outside
+  // this component) know to add "You have unsaved changes." - the only
+  // draft-form state in this app that survives a page switch unsaved.
+  useEffect(() => {
+    onUnsavedChanges?.(contentDirty)
+  }, [contentDirty, onUnsavedChanges])
+
   // The amount of an order that is the business's own revenue - excludes
   // the delivery fee, which is passed straight through to the courier.
   // Falls back to the full total for orders placed before delivery/pickup
@@ -212,20 +230,29 @@ export default function App({ user, onLogout }) {
   const onlinePaymentNotPaid = (order) =>
     (order.paymentMethod === 'ozow' || order.paymentMethod === 'payflex') && order.paymentStatus !== 'paid'
 
-  // Attaches the auth token to every request and logs the user out on a 401.
+  // Attaches the auth token to every request and signs out on a 401.
   // Never sets Content-Type for FormData bodies (file uploads) - the browser
-  // must set its own multipart boundary.
+  // must set its own multipart boundary. Pass { background: true } for a
+  // request that isn't genuine user activity (none exist yet in this file,
+  // but SessionManager's own global fetch interceptor is the real
+  // backstop regardless - see SessionManager.jsx).
   const apiFetch = async (path, options = {}) => {
     const token = localStorage.getItem('hbh_token')
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
     const headers = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.background ? { 'X-Background': '1' } : {}),
       ...(options.headers || {}),
     }
     const res = await fetch(`${API}${path}`, { ...options, headers })
     if (res.status === 401) {
-      onLogout()
+      try {
+        const data = await res.clone().json()
+        onSessionExpired?.(data?.code === 'SESSION_EXPIRED' ? data.reason : null)
+      } catch {
+        onSessionExpired?.(null)
+      }
     }
     return res
   }
@@ -298,58 +325,136 @@ export default function App({ user, onLogout }) {
     }
   }
 
+  // The confirm dialog's "item summary" for a pre-order - its product's
+  // thumbnail and name, with the customer underneath.
+  const preorderSubject = (preorder, extraDetails = []) => ({
+    image: productImages[preorder.productId] ? mediaUrl(productImages[preorder.productId]) : null,
+    name: preorder.productName,
+    details: [{ icon: 'person', text: preorder.customerName }, ...extraDetails],
+  })
+
   const markPreorderArrived = async (preorder) => {
-    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as arrived?`)) return
-    const res = await apiFetch('/api/admin/preorders/mark-arrived', { method: 'POST', body: JSON.stringify({ id: preorder.id }) })
-    if (res.ok) { await fetchPreorders() } else {
-      const data = await res.json().catch(() => ({}))
-      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as arrived.' })
-    }
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Mark as Arrived',
+      subject: preorderSubject(preorder),
+      summary: 'This marks the pre-order as arrived, ready for collection or delivery.',
+      confirmLabel: 'Mark as arrived',
+      busyLabel: 'Marking as arrived…',
+      successMessage: 'Pre-order marked as arrived',
+      onConfirm: async () => {
+        const res = await apiFetch('/api/admin/preorders/mark-arrived', { method: 'POST', body: JSON.stringify({ id: preorder.id }) })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Failed to mark as arrived.')
+        }
+        await fetchPreorders()
+      },
+    })
   }
 
   const markProductPreordersArrived = async (group) => {
     const count = group.statusCounts.deposit_paid || 0
     if (count === 0) return
-    if (!window.confirm(`Mark all ${count} deposit-paid pre-order(s) for "${group.productName}" as arrived?`)) return
-    const res = await apiFetch('/api/admin/preorders/mark-arrived', { method: 'POST', body: JSON.stringify({ productId: group.productId }) })
-    if (res.ok) await fetchPreorders()
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Mark All as Arrived',
+      subject: {
+        image: productImages[group.productId] ? mediaUrl(productImages[group.productId]) : null,
+        name: group.productName,
+        details: [{ icon: 'person', text: `${count} deposit-paid pre-order${count !== 1 ? 's' : ''}` }],
+      },
+      summary: 'All deposit-paid pre-orders for this product will be marked as arrived.',
+      confirmLabel: `Mark ${count} as arrived`,
+      busyLabel: 'Marking as arrived…',
+      successMessage: 'Pre-orders marked as arrived',
+      onConfirm: async () => {
+        const res = await apiFetch('/api/admin/preorders/mark-arrived', { method: 'POST', body: JSON.stringify({ productId: group.productId }) })
+        if (!res.ok) throw new Error('Failed to mark pre-orders as arrived.')
+        await fetchPreorders()
+      },
+    })
   }
 
   const dispatchPreorder = async (preorder) => {
     const tracking = courierTrackingDraft[preorder.id] || ''
-    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as dispatched? This also confirms its order.`)) return
-    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/dispatch`, { method: 'PATCH', body: JSON.stringify({ courierTracking: tracking }) })
-    if (res.ok) { await fetchPreorders() } else {
-      const data = await res.json().catch(() => ({}))
-      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as dispatched.' })
-    }
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Dispatch Pre-order',
+      subject: preorderSubject(preorder),
+      summary: 'This marks the pre-order as dispatched and also confirms its order.',
+      confirmLabel: 'Mark as dispatched',
+      busyLabel: 'Marking as dispatched…',
+      successMessage: 'Pre-order dispatched',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/preorders/${preorder.id}/dispatch`, { method: 'PATCH', body: JSON.stringify({ courierTracking: tracking }) })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Failed to mark as dispatched.')
+        }
+        await fetchPreorders()
+      },
+    })
   }
 
   const collectPreorder = async (preorder) => {
-    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as collected? This also confirms its order.`)) return
-    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/collect`, { method: 'PATCH' })
-    if (res.ok) { await fetchPreorders() } else {
-      const data = await res.json().catch(() => ({}))
-      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as collected.' })
-    }
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Mark as Collected',
+      subject: preorderSubject(preorder),
+      summary: 'This marks the pre-order as collected and also confirms its order.',
+      confirmLabel: 'Mark as collected',
+      busyLabel: 'Marking as collected…',
+      successMessage: 'Pre-order collected',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/preorders/${preorder.id}/collect`, { method: 'PATCH' })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Failed to mark as collected.')
+        }
+        await fetchPreorders()
+      },
+    })
   }
 
   const cancelPreorder = async (preorder) => {
-    if (!window.confirm(`Cancel the pre-order for "${preorder.productName}" (${preorder.customerName})? This only records a status change - any refund is done in the Ozow dashboard.`)) return
-    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/cancel`, { method: 'PATCH' })
-    if (res.ok) { await fetchPreorders() } else {
-      const data = await res.json().catch(() => ({}))
-      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to cancel pre-order.' })
-    }
+    await confirmDialog({
+      variant: 'danger',
+      title: 'Cancel Pre-order',
+      subject: preorderSubject(preorder),
+      summary: 'This only records a status change - any refund is done separately in the Ozow dashboard.',
+      confirmLabel: 'Cancel this pre-order',
+      busyLabel: 'Cancelling…',
+      successMessage: 'Pre-order cancelled',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/preorders/${preorder.id}/cancel`, { method: 'PATCH' })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Failed to cancel pre-order.')
+        }
+        await fetchPreorders()
+      },
+    })
   }
 
   const refundPreorder = async (preorder) => {
-    if (!window.confirm(`Mark the pre-order for "${preorder.productName}" (${preorder.customerName}) as refunded? This only records a status change - do the actual refund in the Ozow dashboard first.`)) return
-    const res = await apiFetch(`/api/admin/preorders/${preorder.id}/refund`, { method: 'PATCH' })
-    if (res.ok) { await fetchPreorders() } else {
-      const data = await res.json().catch(() => ({}))
-      setPreorderActionStatus({ id: preorder.id, message: data.error || 'Failed to mark as refunded.' })
-    }
+    await confirmDialog({
+      variant: 'danger',
+      title: 'Mark as Refunded',
+      subject: preorderSubject(preorder),
+      summary: 'This only records a status change - do the actual refund in the Ozow dashboard first.',
+      confirmLabel: 'Mark as refunded',
+      busyLabel: 'Marking as refunded…',
+      successMessage: 'Pre-order marked as refunded',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/preorders/${preorder.id}/refund`, { method: 'PATCH' })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Failed to mark as refunded.')
+        }
+        await fetchPreorders()
+      },
+    })
   }
 
   const copyPreorderBalanceLink = async (preorder) => {
@@ -590,16 +695,29 @@ export default function App({ user, onLogout }) {
   const [deletingGalleryId, setDeletingGalleryId] = useState(null)
 
   const removeGalleryItem = async (img) => {
-    if (!window.confirm('Remove this file from the gallery?')) return
-    setDeletingGalleryId(img.id)
-    try {
-      const res = await apiFetch(`/api/gallery/${img.id}`, { method: 'DELETE' })
-      if (res.ok) setGalleryImages(prev => prev.filter(g => g.id !== img.id))
-    } catch {
-      // silent fail - the item simply stays in the grid
-    } finally {
-      setDeletingGalleryId(null)
-    }
+    await confirmDialog({
+      variant: 'danger',
+      title: 'Remove Gallery File',
+      subject: {
+        image: img.url,
+        name: img.filename || (img.type === 'video' ? 'Video' : 'Image'),
+        details: [{ text: img.type === 'video' ? 'Video' : 'Image' }],
+      },
+      summary: "This file will be permanently removed from the gallery. This can't be undone.",
+      confirmLabel: 'Remove this file',
+      busyLabel: 'Removing…',
+      successMessage: 'Gallery file removed',
+      onConfirm: async () => {
+        setDeletingGalleryId(img.id)
+        try {
+          const res = await apiFetch(`/api/gallery/${img.id}`, { method: 'DELETE' })
+          if (!res.ok) throw new Error('Failed to remove gallery file.')
+          setGalleryImages(prev => prev.filter(g => g.id !== img.id))
+        } finally {
+          setDeletingGalleryId(null)
+        }
+      },
+    })
   }
 
   const adjustPosition = async (type, id, direction) => {
@@ -649,28 +767,32 @@ export default function App({ user, onLogout }) {
     }
   }
 
-  const deleteCategory = async (id, name) => {
-    if (!window.confirm(`Remove the "${name}" section? Products in this section will become uncategorised.`)) return
-    try {
-      const res = await apiFetch(`/api/categories/${id}`, { method: 'DELETE' })
-      if (res.ok) {
-        setCategories(prev => prev.filter(c => c.id !== id))
+  const deleteCategory = async (category, count) => {
+    await confirmDialog({
+      variant: 'danger',
+      title: 'Remove Section',
+      subject: {
+        image: category.imageUrl,
+        name: category.name,
+        details: [{ text: `${count} product${count !== 1 ? 's' : ''}` }],
+      },
+      summary: 'This section will be removed. Products in it will become uncategorised.',
+      confirmLabel: 'Remove this section',
+      busyLabel: 'Removing…',
+      successMessage: `"${category.name}" section removed`,
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/categories/${category.id}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Failed to remove section.')
+        setCategories(prev => prev.filter(c => c.id !== category.id))
         setProductCategories(prev => {
           const updated = { ...prev }
           Object.keys(updated).forEach(pid => {
-            if (updated[pid] === id) delete updated[pid]
+            if (updated[pid] === category.id) delete updated[pid]
           })
           return updated
         })
-        setCategoryStatus({ type: 'success', message: `"${name}" section removed.` })
-        setTimeout(() => setCategoryStatus(null), 3000)
-      } else {
-        setCategoryStatus({ type: 'error', message: 'Failed to remove section.' })
-        setTimeout(() => setCategoryStatus(null), 3000)
-      }
-    } catch {
-      setCategoryStatus({ type: 'error', message: 'Failed to remove section.' })
-    }
+      },
+    })
   }
 
   const moveCategory = async (id, direction) => {
@@ -684,12 +806,21 @@ export default function App({ user, onLogout }) {
     } catch {}
   }
 
-  const removeCategoryImage = async (id) => {
-    if (!window.confirm('Remove this section\'s cover image?')) return
-    try {
-      const res = await apiFetch(`/api/categories/${id}/image`, { method: 'DELETE' })
-      if (res.ok) setCategories(prev => prev.map(c => c.id === id ? { ...c, imageUrl: null } : c))
-    } catch {}
+  const removeCategoryImage = async (category) => {
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Remove Cover Image',
+      subject: { image: category.imageUrl, name: category.name },
+      summary: "This section's cover image will be removed. You can upload a new one any time.",
+      confirmLabel: 'Remove this image',
+      busyLabel: 'Removing…',
+      successMessage: 'Cover image removed',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/categories/${category.id}/image`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Failed to remove cover image.')
+        setCategories(prev => prev.map(c => c.id === category.id ? { ...c, imageUrl: null } : c))
+      },
+    })
   }
 
   const assignCategory = async (productId, categoryId) => {
@@ -747,8 +878,12 @@ export default function App({ user, onLogout }) {
     try {
       const res = await apiFetch('/api/admin/products')
       const data = await res.json()
-      if (res.ok && Array.isArray(data)) setProducts(data)
+      if (res.ok && Array.isArray(data)) {
+        setProducts(data)
+        return data
+      }
     } catch {}
+    return null
   }
 
   const createProduct = async () => {
@@ -796,19 +931,47 @@ export default function App({ user, onLogout }) {
     }
   }
 
+  // The confirm dialog's "product summary" line - price, then whichever of
+  // options/stock/sale actually applies to this product.
+  const productSubject = (p) => {
+    const details = [{ icon: 'price', text: `R ${Number(p.price).toFixed(2)}` }]
+    if (p.hasOptions) {
+      details.push({ icon: 'options', text: `${p.options.length} length${p.options.length !== 1 ? 's' : ''}` })
+    } else if (p.hasCustomOptions) {
+      const label = (p.optionLabel || 'option').toLowerCase()
+      details.push({ icon: 'options', text: `${p.customOptions.length} ${label}${p.customOptions.length !== 1 ? 's' : ''}` })
+    }
+    if (p.stockQuantity != null) details.push({ icon: 'stock', text: `${p.stockQuantity} in stock` })
+    if (p.onSale) details.push({ icon: 'sale', text: 'On sale' })
+    return {
+      image: productImages[p.id] ? mediaUrl(productImages[p.id]) : null,
+      name: p.name,
+      details,
+    }
+  }
+
   const toggleProductActive = async (product) => {
-    const action = product.isActive ? 'deactivate' : 'reactivate'
-    if (!window.confirm(`Are you sure you want to ${action} "${product.name}"?`)) return
-    try {
-      const res = await apiFetch(`/api/admin/products/${product.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ isActive: !product.isActive }),
-      })
-      const data = await res.json()
-      if (res.ok) {
+    const activating = !product.isActive
+    await confirmDialog({
+      variant: 'neutral',
+      title: activating ? 'Reactivate Product' : 'Deactivate Product',
+      subject: productSubject(product),
+      summary: activating
+        ? 'This product will be visible in the shop again and customers can order it.'
+        : "This product will be hidden from the shop, so customers can't see or order it. It stays in your products list and you can reactivate it any time.",
+      confirmLabel: activating ? 'Reactivate this product' : 'Deactivate this product',
+      busyLabel: activating ? 'Reactivating…' : 'Deactivating…',
+      successMessage: activating ? 'Product reactivated' : 'Product deactivated',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/products/${product.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ isActive: activating }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Failed to update product.')
         setProducts(prev => prev.map(p => p.id === data.id ? data : p))
-      }
-    } catch {}
+      },
+    })
   }
 
   // stockAdjustTarget is either { kind: 'product', id, name, stockQuantity }
@@ -967,6 +1130,90 @@ export default function App({ user, onLogout }) {
     } catch {}
   }
 
+  // ── Sale pricing ──────────────────────────────────────────────────────────
+  const openSaleManager = (product) => {
+    setSaleManagerProductId(product.id)
+    const options = {}
+    const optionList = product.options.length > 0 ? product.options : product.customOptions
+    optionList.forEach(o => {
+      options[o.id] = { onSale: !!o.onSale, salePrice: o.salePrice != null ? String(o.salePrice) : '' }
+    })
+    setSaleDraft({
+      onSale: !!product.onSale,
+      salePrice: product.salePrice != null ? String(product.salePrice) : '',
+      options,
+    })
+    setSaleManagerStatus(null)
+  }
+
+  const saveSale = async () => {
+    const product = products.find(p => p.id === saleManagerProductId)
+    if (!product) return
+    const hasAnyOptions = product.options.length > 0 || product.customOptions.length > 0
+    const body = hasAnyOptions
+      ? { options: Object.entries(saleDraft.options).map(([id, v]) => ({ id: parseInt(id), onSale: v.onSale, salePrice: v.salePrice })) }
+      : { onSale: saleDraft.onSale, salePrice: saleDraft.salePrice }
+    try {
+      const res = await apiFetch(`/api/admin/products/${saleManagerProductId}/sale`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        const refreshed = await fetchProducts()
+        setSaleManagerStatus({ type: 'success', message: 'Sale updated.' })
+        const updated = refreshed?.find(p => p.id === saleManagerProductId)
+        if (updated) openSaleManager(updated)
+      } else {
+        setSaleManagerStatus({ type: 'error', message: data.error || 'Failed to update sale.' })
+      }
+    } catch {
+      setSaleManagerStatus({ type: 'error', message: 'Failed to update sale.' })
+    }
+  }
+
+  const endSale = async (product) => {
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'End Sale',
+      subject: productSubject(product),
+      summary: 'All sale prices on this product will be switched off and customers will see the normal price. Your sale prices are saved, so you can turn them on again later.',
+      confirmLabel: 'End this sale',
+      busyLabel: 'Ending sale…',
+      successMessage: 'Sale ended',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/products/${product.id}/sale/end`, { method: 'POST' })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error(data.error || 'Failed to end sale.')
+        }
+        const refreshed = await fetchProducts()
+        if (saleManagerProductId === product.id) {
+          const updated = refreshed?.find(p => p.id === product.id)
+          if (updated) openSaleManager(updated)
+        }
+      },
+    })
+  }
+
+  const deleteProduct = async (product) => {
+    await confirmDialog({
+      variant: 'danger',
+      title: 'Delete Product',
+      subject: productSubject(product),
+      summary: "This product will be removed from your products list and the shop. Past orders and reports will keep their records. This can't be undone.",
+      confirmLabel: 'Delete this product',
+      busyLabel: 'Deleting…',
+      successMessage: 'Product deleted',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/products/${product.id}`, { method: 'DELETE' })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Failed to delete product.')
+        await fetchProducts()
+      },
+    })
+  }
+
   const openClass = async (cls) => {
     setSelectedClass(cls)
     setStudentsLoading(true)
@@ -990,7 +1237,7 @@ export default function App({ user, onLogout }) {
     const cls = coursesMerged.find(c => c.id === classId)
     if (!cls) return
     setSelectedCalendarDay(null)
-    setActivePage('training')
+    navigateTo('training')
     openClass(cls)
   }
 
@@ -1036,26 +1283,38 @@ export default function App({ user, onLogout }) {
   }
 
   const removeStudent = async (studentId, studentName) => {
-    if (!window.confirm(`Remove ${studentName} from this class?`)) return
-    try {
-      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}`, { method: 'DELETE' })
-      if (res.ok) setClassStudents(prev => prev.filter(s => s.id !== studentId))
-    } catch {
-      // silent fail
-    }
+    await confirmDialog({
+      variant: 'danger',
+      title: 'Remove Student',
+      subject: { image: null, name: studentName, details: selectedClass ? [{ text: selectedClass.name }] : [] },
+      summary: "This student will be permanently removed from this class. This can't be undone.",
+      confirmLabel: 'Remove this student',
+      busyLabel: 'Removing…',
+      successMessage: 'Student removed',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Failed to remove student.')
+        setClassStudents(prev => prev.filter(s => s.id !== studentId))
+      },
+    })
   }
 
   const completeStudent = async (studentId, studentName) => {
-    if (!window.confirm(`Mark ${studentName} as finished? They'll move to Past students.`)) return
-    try {
-      const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}/complete`, { method: 'PATCH' })
-      if (res.ok) {
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Mark as Finished',
+      subject: { image: null, name: studentName, details: selectedClass ? [{ text: selectedClass.name }] : [] },
+      summary: 'This student will move to Past students in this class.',
+      confirmLabel: 'Mark as finished',
+      busyLabel: 'Marking as finished…',
+      successMessage: 'Student marked as finished',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/classes/${selectedClass.id}/students/${studentId}/complete`, { method: 'PATCH' })
+        if (!res.ok) throw new Error('Failed to mark student as finished.')
         const data = await res.json()
         setClassStudents(prev => prev.map(s => s.id === studentId ? data : s))
-      }
-    } catch {
-      // silent fail
-    }
+      },
+    })
   }
 
   const reactivateStudent = async (studentId) => {
@@ -1197,15 +1456,76 @@ export default function App({ user, onLogout }) {
 
   // Intercepts sidebar navigation away from an unsaved Website Content page -
   // goes through the in-page confirmation below rather than switching pages
-  // straight away.
+  // straight away. Pushes a new history entry (not replace) so back/forward
+  // steps between pages the same way clicking the sidebar does.
   const navigateTo = (value) => {
     if (activePage === 'content' && contentDirty && value !== 'content') {
       setContentConfirm({ type: 'leave', target: value })
       return
     }
+    const path = pathForPage(value)
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, '', path)
+    }
     setActivePage(value)
     setMobileNavOpen(false)
   }
+
+  // Back/forward moves between pages - re-derive both the page and its
+  // sub-state from whatever URL the browser just navigated to.
+  useEffect(() => {
+    const handlePopState = () => {
+      const page = pageForPath(window.location.pathname, user?.role)
+      setActivePage(page)
+      const params = new URLSearchParams(window.location.search)
+      if (page === 'images') setImageTab(params.get('tab') || 'products')
+      if (page === 'notifications') setNotifTab(params.get('tab') || 'all')
+      if (page === 'orders') setOrdersView(params.get('view') || 'active')
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [user?.role])
+
+  // An unknown path (typo'd, or a bookmark to a page this role can no
+  // longer see) already renders Dashboard - this just tidies the address
+  // bar to match, once, rather than leaving it pointed at a path that
+  // isn't really what's showing.
+  useEffect(() => {
+    if (!Object.prototype.hasOwnProperty.call(PATH_TO_PAGE, window.location.pathname)) {
+      window.history.replaceState(null, '', '/')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Tab title per section, e.g. "Products · Hair By Her Admin".
+  useEffect(() => {
+    document.title = `${PAGE_TITLES[activePage] || 'Dashboard'} · Hair By Her Admin`
+  }, [activePage])
+
+  // Keeps each page's own cheap sub-state (filter/tab) in the query string,
+  // replacing rather than pushing a new history entry, so switching tabs
+  // within a page doesn't clutter the back button - only navigating to a
+  // different page does that (see navigateTo above).
+  useEffect(() => {
+    if (activePage !== 'images') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('tab', imageTab)
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, imageTab])
+
+  useEffect(() => {
+    if (activePage !== 'notifications') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('tab', notifTab)
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, notifTab])
+
+  useEffect(() => {
+    if (activePage !== 'orders') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('view', ordersView)
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, ordersView])
 
   const changeBusinessPassword = async () => {
     setBPwMsg('')
@@ -2425,7 +2745,7 @@ export default function App({ user, onLogout }) {
                               {recentOrders.map(order => (
                                 <tr
                                   key={order.id}
-                                  onClick={() => setActivePage('orders')}
+                                  onClick={() => navigateTo('orders')}
                                   style={{ cursor: 'pointer' }}
                                 >
                                   <td style={{ fontWeight: 600 }}>{order.customerName}</td>
@@ -2523,7 +2843,7 @@ export default function App({ user, onLogout }) {
                               {items.map((item, idx) => item.kind === 'preorder' ? (
                                 <div
                                   key={`p-${idx}`}
-                                  onClick={() => { setSelectedCalendarDay(null); setActivePage('preorders') }}
+                                  onClick={() => { setSelectedCalendarDay(null); navigateTo('preorders') }}
                                   style={{ padding: '8px 0', borderBottom: '1px solid #F7EEF0', cursor: 'pointer' }}
                                 >
                                   <div style={{ fontSize: 13, fontWeight: 600, color: '#2C1A20' }}>{item.data.productName}</div>
@@ -2549,7 +2869,7 @@ export default function App({ user, onLogout }) {
                               ) : (
                                 <div
                                   key={`o-${idx}`}
-                                  onClick={() => { setSelectedCalendarDay(null); setActivePage('orders') }}
+                                  onClick={() => { setSelectedCalendarDay(null); navigateTo('orders') }}
                                   style={{ padding: '8px 0', borderBottom: '1px solid #F7EEF0', cursor: 'pointer' }}
                                 >
                                   <div style={{ fontSize: 13, fontWeight: 600, color: '#2C1A20' }}>{item.data.customerName}</div>
@@ -2595,7 +2915,7 @@ export default function App({ user, onLogout }) {
                       {unconfirmedPaidOrders.map(o => (
                         <div
                           key={`up-o-${o.id}`}
-                          onClick={() => setActivePage('orders')}
+                          onClick={() => navigateTo('orders')}
                           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #F9F9F9', cursor: 'pointer' }}
                         >
                           <div>
@@ -2645,7 +2965,7 @@ export default function App({ user, onLogout }) {
                     <div className="panel-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#C4A882', color: '#FFFFFF', borderRadius: '12px 12px 0 0' }}>
                       <span>Recent Activity</span>
                       <button
-                        onClick={() => setActivePage('notifications')}
+                        onClick={() => navigateTo('notifications')}
                         style={{ background: 'none', border: 'none', fontSize: 12, color: '#FFFFFF', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
                       >
                         View all
@@ -2746,9 +3066,9 @@ export default function App({ user, onLogout }) {
                               onChange={(e) => handleUpload('categories', c.id, e.target.files[0])}
                             />
                             {c.imageUrl && (
-                              <button className="delete-btn" onClick={() => removeCategoryImage(c.id)}>Remove Image</button>
+                              <button className="delete-btn" onClick={() => removeCategoryImage(c)}>Remove Image</button>
                             )}
-                            <button className="delete-btn" onClick={() => deleteCategory(c.id, c.name)}>
+                            <button className="delete-btn" onClick={() => deleteCategory(c, count)}>
                               Remove
                             </button>
                           </div>
@@ -2894,12 +3214,22 @@ export default function App({ user, onLogout }) {
                                   Pre-order
                                 </span>
                               )}
+                              {p.onSale && (
+                                <span style={{ fontSize: 11, fontWeight: 700, color: '#C4365B', textTransform: 'uppercase', marginLeft: 8 }}>
+                                  On Sale
+                                </span>
+                              )}
                             </div>
                             <div style={{ fontSize: 12, color: '#7A6670', lineHeight: 1.5, marginBottom: 6 }}>
                               {p.description}
                             </div>
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#C47A8A', marginBottom: 4 }}>
                               R {p.price}
+                              {p.onSale && !p.hasOptions && !p.hasCustomOptions && p.effectivePrice && (
+                                <span style={{ fontSize: 12, fontWeight: 600, color: '#9A8A8E', marginLeft: 6 }}>
+                                  &rarr; sale price R {p.effectivePrice.price.toFixed(2)}
+                                </span>
+                              )}
                             </div>
                             {!p.hasOptions && !p.hasCustomOptions ? (
                               <div style={{ fontSize: 12, color: p.stockQuantity <= p.lowStockThreshold ? '#C47A8A' : '#9A8A8E' }}>
@@ -3084,8 +3414,21 @@ export default function App({ user, onLogout }) {
                                 Manage Options
                               </button>
                             )}
+                            <button className="secondary-btn" onClick={() => openSaleManager(p)}>
+                              {p.onSale ? 'Manage Sale' : 'Put on Sale'}
+                            </button>
                             <button className="delete-btn" onClick={() => toggleProductActive(p)}>
                               {p.isActive ? 'Deactivate' : 'Reactivate'}
+                            </button>
+                            {/* Separated from the buttons above (extra margin, own divider) so a
+                                thumb reaching for Deactivate/Manage Options on mobile can't miss-tap
+                                a permanent delete instead. */}
+                            <button
+                              className="delete-btn"
+                              style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed #E8C9CE', background: '#A23F51' }}
+                              onClick={() => deleteProduct(p)}
+                            >
+                              Delete
                             </button>
                           </>
                         ) : (
@@ -3327,6 +3670,127 @@ export default function App({ user, onLogout }) {
                         <button className="secondary-btn" style={{ marginTop: 16, alignSelf: 'flex-start' }} onClick={() => setOptionsManagerProductId(null)}>
                           Close
                         </button>
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {saleManagerProductId != null && (() => {
+                  const saleProduct = products.find(p => p.id === saleManagerProductId)
+                  if (!saleProduct) return null
+                  const optionList = saleProduct.options.length > 0 ? saleProduct.options : saleProduct.customOptions
+                  const optionLabel = saleProduct.options.length > 0 ? null : saleProduct.optionLabel
+                  const normalPrice = parseFloat(saleProduct.price)
+
+                  const setOptionDraft = (id, patch) => setSaleDraft(prev => ({
+                    ...prev,
+                    options: { ...prev.options, [id]: { ...prev.options[id], ...patch } },
+                  }))
+                  const previewSave = (salePriceStr) => {
+                    const salePrice = parseFloat(salePriceStr)
+                    if (isNaN(salePrice) || salePrice <= 0 || salePrice >= normalPrice) return null
+                    return normalPrice - salePrice
+                  }
+
+                  return (
+                    <div
+                      style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(44,26,32,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+                      onClick={() => setSaleManagerProductId(null)}
+                    >
+                      <div
+                        style={{ background: 'white', borderRadius: 16, padding: '20px 16px', maxWidth: 520, width: '100%', maxHeight: '88vh', boxSizing: 'border-box', overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(44,26,32,0.2)' }}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#2C1A20', marginBottom: 4 }}>
+                          Sale for "{saleProduct.name}"
+                        </div>
+                        <div style={{ fontSize: 12, color: '#9A8A8E', marginBottom: 16 }}>
+                          No start or end date - you switch it on and off yourself. Normal price: R {normalPrice.toFixed(2)}.
+                        </div>
+
+                        {saleManagerStatus && (
+                          <div className={saleManagerStatus.type === 'error' ? 'error-msg' : 'success-msg'} style={{ marginBottom: 12 }}>
+                            {saleManagerStatus.message}
+                          </div>
+                        )}
+
+                        {optionList.length > 0 ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+                            {optionList.map(o => {
+                              const draft = saleDraft.options[o.id] || { onSale: false, salePrice: '' }
+                              const save = previewSave(draft.salePrice)
+                              const name = optionLabel ? o.name : `${o.lengthMm}mm, ${o.curl} curl`
+                              return (
+                                <div key={o.id} style={{ border: '1px solid #F0E8E8', borderRadius: 8, padding: 10 }}>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#3E2A30', cursor: 'pointer', flex: '1 1 140px' }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={!!draft.onSale}
+                                        onChange={e => setOptionDraft(o.id, { onSale: e.target.checked })}
+                                      />
+                                      {name}
+                                    </label>
+                                    <input
+                                      className="category-input"
+                                      type="number"
+                                      style={{ width: 110 }}
+                                      value={draft.salePrice}
+                                      onChange={e => setOptionDraft(o.id, { salePrice: e.target.value })}
+                                      placeholder="Sale price"
+                                    />
+                                  </div>
+                                  {draft.onSale && (
+                                    <div style={{ fontSize: 11, color: save != null ? '#8C5A6A' : '#A23F51', marginTop: 6 }}>
+                                      {save != null
+                                        ? `Customers save R ${save.toFixed(2)}`
+                                        : 'Enter a sale price greater than R0 and less than the normal price.'}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <div style={{ border: '1px solid #F0E8E8', borderRadius: 8, padding: 10, marginBottom: 16 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#3E2A30', cursor: 'pointer', marginBottom: 8 }}>
+                              <input
+                                type="checkbox"
+                                checked={!!saleDraft.onSale}
+                                onChange={e => setSaleDraft(prev => ({ ...prev, onSale: e.target.checked }))}
+                              />
+                              On sale
+                            </label>
+                            <input
+                              className="category-input"
+                              type="number"
+                              style={{ width: 140 }}
+                              value={saleDraft.salePrice}
+                              onChange={e => setSaleDraft(prev => ({ ...prev, salePrice: e.target.value }))}
+                              placeholder="Sale price (R)"
+                            />
+                            {saleDraft.onSale && (() => {
+                              const save = previewSave(saleDraft.salePrice)
+                              return (
+                                <div style={{ fontSize: 11, color: save != null ? '#8C5A6A' : '#A23F51', marginTop: 6 }}>
+                                  {save != null
+                                    ? `Customers save R ${save.toFixed(2)}`
+                                    : 'Enter a sale price greater than R0 and less than the normal price.'}
+                                </div>
+                              )
+                            })()}
+                          </div>
+                        )}
+
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between', marginTop: 4 }}>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button className="upload-btn" onClick={saveSale}>Save</button>
+                            <button className="secondary-btn" onClick={() => setSaleManagerProductId(null)}>Close</button>
+                          </div>
+                          {saleProduct.onSale && (
+                            <button className="delete-btn" onClick={() => endSale(saleProduct)}>End Sale</button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )
@@ -4337,6 +4801,10 @@ export default function App({ user, onLogout }) {
                                   setContentDraft(contentSaved)
                                   setContentFieldErrors({})
                                   setContentConfirm(null)
+                                  // Not navigateTo() - contentDirty is still true in this
+                                  // closure, which would just reopen this same confirm.
+                                  const path = pathForPage(target)
+                                  if (window.location.pathname !== path) window.history.pushState(null, '', path)
                                   setActivePage(target)
                                   setMobileNavOpen(false)
                                 }}
@@ -5058,5 +5526,15 @@ export default function App({ user, onLogout }) {
         </div>
       </div>
     </>
+  )
+}
+
+export default function App(props) {
+  return (
+    <ToastProvider>
+      <ConfirmProvider>
+        <AppInner {...props} />
+      </ConfirmProvider>
+    </ToastProvider>
   )
 }

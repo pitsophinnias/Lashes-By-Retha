@@ -4,6 +4,7 @@ const path = require('node:path')
 const http = require('node:http')
 const crypto = require('node:crypto')
 const jwt = require('jsonwebtoken')
+const { createTestSessionId } = require('./helpers/session')
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
 process.env.PORT = '4015'
@@ -99,7 +100,7 @@ const testUserIds = []
 // resolve to the sysadmin's real role and defeat the point of these tests).
 const roleTokenInfo = {}
 const tokenFor = (role) => jwt.sign(
-  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion },
+  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion, sessionId: roleTokenInfo[role].sessionId },
   JWT_SECRET,
   { expiresIn: '1h' }
 )
@@ -116,6 +117,7 @@ const createTestUser = async (roleName) => {
   )
   testUserIds.push(result.rows[0].id)
   roleTokenInfo[roleName] = { id: result.rows[0].id, username: result.rows[0].username, tokenVersion: result.rows[0].token_version }
+  roleTokenInfo[roleName].sessionId = await createTestSessionId(pool, result.rows[0].id)
 }
 
 const createdOrderIds = []
@@ -163,6 +165,7 @@ before(async () => {
   )
   sysadminUserId = userRow.rows[0].id
   roleTokenInfo.sysadmin = { id: userRow.rows[0].id, username: userRow.rows[0].username, tokenVersion: userRow.rows[0].token_version }
+  roleTokenInfo.sysadmin.sessionId = await createTestSessionId(pool, userRow.rows[0].id)
   await createTestUser('owner')
 })
 
