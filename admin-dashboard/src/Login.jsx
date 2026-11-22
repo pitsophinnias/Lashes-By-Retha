@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { setSession } from './session.js'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
@@ -12,7 +13,7 @@ const fetchWithTimeout = (url, options = {}, timeoutMs = BACKEND_WAKE_TIMEOUT_MS
   return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer))
 }
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, message }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -46,8 +47,7 @@ export default function Login({ onLogin }) {
         setError(data.error || 'Login failed. Please try again.')
         return
       }
-      localStorage.setItem('hbh_token', data.token)
-      localStorage.setItem('hbh_user', JSON.stringify(data.user))
+      setSession({ token: data.token, user: data.user, issuedAt: data.issuedAt })
       onLogin(data.user)
     } catch (err) {
       if (err.name === 'AbortError') {
@@ -111,6 +111,17 @@ export default function Login({ onLogin }) {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
         }
+        .signout-message-banner {
+          background: #FDF0F3;
+          color: #8C5A6A;
+          border: 1px solid #F5DDE2;
+          border-radius: 8px;
+          padding: 10px 14px;
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 1.5;
+          margin-bottom: 14px;
+        }
       `}</style>
 
       <div style={{
@@ -161,6 +172,12 @@ export default function Login({ onLogin }) {
             <p style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 28 }}>
               Sign in to the Hair By Her admin dashboard.
             </p>
+
+            {message && (
+              <div className="signout-message-banner">
+                {message}
+              </div>
+            )}
 
             {waking && (
               <div className="waking-banner">

@@ -3,6 +3,7 @@ const assert = require('node:assert')
 const path = require('node:path')
 const http = require('node:http')
 const jwt = require('jsonwebtoken')
+const { createTestSessionId } = require('./helpers/session')
 
 // node --test runs each test file in its own process, so running the real
 // app here never collides with a manually-run dev server on port 3002, and
@@ -55,7 +56,7 @@ let testUserIds = []
 // not just an id of 999, and must carry that row's current token_version.
 const roleTokenInfo = {}
 const tokenFor = (role) => jwt.sign(
-  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion },
+  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion, sessionId: roleTokenInfo[role].sessionId },
   JWT_SECRET,
   { expiresIn: '1h' }
 )
@@ -70,6 +71,7 @@ const createTestUser = async (roleName) => {
   )
   testUserIds.push(result.rows[0].id)
   roleTokenInfo[roleName] = { id: result.rows[0].id, username: result.rows[0].username, tokenVersion: result.rows[0].token_version }
+  roleTokenInfo[roleName].sessionId = await createTestSessionId(pool, result.rows[0].id)
 }
 
 before(async () => {

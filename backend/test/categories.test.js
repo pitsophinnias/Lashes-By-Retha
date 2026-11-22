@@ -3,6 +3,7 @@ const assert = require('node:assert')
 const path = require('node:path')
 const http = require('node:http')
 const jwt = require('jsonwebtoken')
+const { createTestSessionId } = require('./helpers/session')
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') })
 process.env.PORT = '4018'
@@ -60,7 +61,7 @@ const createdCategoryIds = []
 // a test token needs a real user row behind it - see auth.js.
 const roleTokenInfo = {}
 const tokenFor = (role) => jwt.sign(
-  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion },
+  { id: roleTokenInfo[role].id, username: roleTokenInfo[role].username, role, tokenVersion: roleTokenInfo[role].tokenVersion, sessionId: roleTokenInfo[role].sessionId },
   JWT_SECRET,
   { expiresIn: '1h' }
 )
@@ -77,6 +78,7 @@ const createTestUser = async (roleName) => {
   )
   testUserIds.push(result.rows[0].id)
   roleTokenInfo[roleName] = { id: result.rows[0].id, username: result.rows[0].username, tokenVersion: result.rows[0].token_version }
+  roleTokenInfo[roleName].sessionId = await createTestSessionId(pool, result.rows[0].id)
 }
 
 const randRef = () => Math.random().toString(16).slice(2, 8)
@@ -98,6 +100,7 @@ before(async () => {
     `SELECT u.id, u.username, u.token_version FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'sysadmin' LIMIT 1`
   )).rows[0]
   roleTokenInfo.sysadmin = { id: sysadminRow.id, username: sysadminRow.username, tokenVersion: sysadminRow.token_version }
+  roleTokenInfo.sysadmin.sessionId = await createTestSessionId(pool, sysadminRow.id)
   await createTestUser('owner')
 })
 

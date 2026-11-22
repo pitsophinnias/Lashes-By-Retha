@@ -681,6 +681,94 @@ const createTables = async () => {
       ON product_options (product_id, lower(name));
   `)
 
+  // Soft delete + manual sale pricing for products and their options. A
+  // product with no history (no orders/stock movements/preorders) is hard
+  // deleted instead - deleted_at only applies to the soft-delete path, kept
+  // so old orders/analytics can still show the product's name and price.
+  // sale_price/on_sale mirror each other on products, product_variants and
+  // product_options: the owner switches a sale on/off herself (no dates),
+  // per option, and ending a sale clears on_sale but keeps sale_price so the
+  // same discount can be turned back on later without retyping it.
+  await pool.query(`
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10,2);
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS on_sale BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10,2);
+    ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS on_sale BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE product_options ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10,2);
+    ALTER TABLE product_options ADD COLUMN IF NOT EXISTS on_sale BOOLEAN NOT NULL DEFAULT FALSE;
+  `)
+
+  // Order-item and pre-order price snapshots: what the customer actually
+  // paid (already captured in price/price_at_order) alongside the normal
+  // price it was discounted from, so analytics never has to look at
+  // today's product price to know what a past sale was worth. Backfilled
+  // from the existing price for every row that predates this column, which
+  // is equivalent to "no discount" for orders placed before sales existed.
+  // Nullable rather than NOT NULL - a handful of tests insert order_items/
+  // preorders rows directly without going through the app's own routes
+  // (which always set these), and defaulting a column to another column's
+  // value isn't possible in a plain DEFAULT. Every row written through the
+  // app has both set; only ad-hoc/direct-SQL rows (test fixtures, and old
+  // rows before this migration) can be NULL.
+  await pool.query(`
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS original_price NUMERIC(10,2);
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(10,2) NOT NULL DEFAULT 0;
+    ALTER TABLE order_items ALTER COLUMN original_price DROP NOT NULL;
+    UPDATE order_items SET original_price = price WHERE original_price IS NULL;
+
+    ALTER TABLE preorders ADD COLUMN IF NOT EXISTS original_price_at_order NUMERIC(10,2);
+    ALTER TABLE preorders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(10,2) NOT NULL DEFAULT 0;
+    ALTER TABLE preorders ALTER COLUMN original_price_at_order DROP NOT NULL;
+    UPDATE preorders SET original_price_at_order = price_at_order WHERE original_price_at_order IS NULL;
+  `)
+
+  // One row per admin login, so idle/max-session timeouts can be enforced
+  // server-side (see backend/src/sessions) - the JWT itself stays stateless
+  // for identity, but carries this row's id so authenticate() can look up
+  // and update issued_at/last_activity_at per session, and logout/"log out
+  // everywhere" can revoke one specific session without touching others.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      revoked_at TIMESTAMPTZ,
+      user_agent TEXT,
+      ip_address VARCHAR(50)
+    );
+    CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions (user_id);
+  `)
+  // CREATE TABLE IF NOT EXISTS above won't add ON DELETE CASCADE to a
+  // sessions table that already exists without it - drop and re-add the
+  // constraint either way, so this is safe (and a no-op) whether the table
+  // is brand new or already has the right constraint.
+  await pool.query(`
+    ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_user_id_fkey;
+    ALTER TABLE sessions ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+  `)
+
+  // Demo sale pricing, seeded once so both marketplace card styles can be
+  // tried out: product 4 (no options) fully on sale, and product 2 (YY
+  // Lash Trays) with only one of its lengths on sale, for the "From R X"
+  // card. Guarded on nothing being on sale yet anywhere, so a real sale the
+  // owner later switches on (or off) is never touched by this again.
+  const { rows: saleRows } = await pool.query(`
+    SELECT
+      (SELECT COUNT(*) FROM products WHERE on_sale = TRUE) +
+      (SELECT COUNT(*) FROM product_variants WHERE on_sale = TRUE) +
+      (SELECT COUNT(*) FROM product_options WHERE on_sale = TRUE) AS count
+  `)
+  if (parseInt(saleRows[0].count) === 0) {
+    await pool.query(`UPDATE products SET on_sale = TRUE, sale_price = 85 WHERE id = 4`)
+    await pool.query(`
+      UPDATE product_variants SET on_sale = TRUE, sale_price = 120
+      WHERE product_id = 2 AND length_mm = 10 AND curl = 'D'
+    `)
+    console.log('Demo sale pricing seeded')
+  }
+
   console.log('Database tables ready')
 }
 

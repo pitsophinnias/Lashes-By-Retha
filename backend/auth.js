@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken')
 const { pool } = require('./db')
+const { checkAndTouchSession } = require('./src/sessions/store')
 
 const isProd = process.env.NODE_ENV === 'production'
 let JWT_SECRET = process.env.JWT_SECRET
@@ -42,7 +43,19 @@ const authenticate = async (req, res, next) => {
     if (!user || !user.is_active || user.token_version !== decoded.tokenVersion) {
       return res.status(401).json({ error: 'Invalid or expired token' })
     }
+
+    // Idle-timeout / max-session-age, enforced on top of the JWT's own
+    // (much longer) expiry - see src/sessions/store.js. A request marked
+    // X-Background: 1 (polling, background checks) is still checked, but
+    // never counts as the activity that keeps a session alive.
+    const background = req.headers['x-background'] === '1'
+    const sessionResult = await checkAndTouchSession(decoded.sessionId, { background })
+    if (!sessionResult.ok) {
+      return res.status(401).json({ code: 'SESSION_EXPIRED', reason: sessionResult.reason })
+    }
+
     req.user = { id: user.id, username: user.username, role: user.role }
+    req.sessionId = decoded.sessionId
     next()
   } catch (err) {
     console.error('Authentication lookup failed:', err.message)

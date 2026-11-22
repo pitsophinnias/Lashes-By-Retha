@@ -34,6 +34,9 @@ const {
 const systemSettingsDefaults = require('./src/systemSettings/defaults')
 const { readSystemSettings, saveSystemSetting } = require('./src/systemSettings/store')
 const { logError, cleanupErrorLog } = require('./src/errorLog/store')
+const { getEffectivePrice, validateSalePrice, getLowestEffectivePrice } = require('./src/pricing/getEffectivePrice')
+const { createSession, revokeSession, revokeAllSessionsForUser, cleanupSessions } = require('./src/sessions/store')
+const sessionConfig = require('./src/sessions/config')
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -412,6 +415,8 @@ const fetchVariantsByProduct = async (includeInactive) => {
       stockQuantity: v.stock_quantity,
       lowStockThreshold: v.low_stock_threshold,
       isActive: v.is_active,
+      onSale: v.on_sale,
+      salePrice: v.sale_price !== null ? parseFloat(v.sale_price) : null,
     })
   })
   return byProduct
@@ -435,9 +440,29 @@ const fetchCustomOptionsByProduct = async (includeInactive) => {
       swatchHex: o.swatch_hex,
       stockQuantity: o.stock_quantity,
       isActive: o.is_active,
+      onSale: o.on_sale,
+      salePrice: o.sale_price !== null ? parseFloat(o.sale_price) : null,
     })
   })
   return byProduct
+}
+
+// Attaches { price, originalPrice, onSale, saveAmount } (via
+// getEffectivePrice) to a product and each of its options, so every
+// listing response carries pre-computed, ready-to-display prices instead
+// of making the frontend recompute sale math itself. productRow is the raw
+// DB row (needed for its snake_case price/sale_price/on_sale); options is
+// the already-serialized camelCase array from fetchVariantsByProduct/
+// fetchCustomOptionsByProduct, if any.
+const attachEffectivePricing = (productRow, options) => {
+  const optionsWithPricing = (options || []).map(o => ({
+    ...o,
+    ...getEffectivePrice(productRow, { on_sale: o.onSale, sale_price: o.salePrice }),
+  }))
+  const productPricing = options && options.length > 0
+    ? getLowestEffectivePrice(productRow, options.map(o => ({ on_sale: o.onSale, sale_price: o.salePrice })))
+    : getEffectivePrice(productRow)
+  return { optionsWithPricing, productPricing }
 }
 
 const addAuditLog = async (userId, username, action, details, ipAddress) => {
@@ -637,6 +662,9 @@ setInterval(archiveOldOrders, 60 * 60 * 1000)
 // ── Error log cleanup ────────────────────────────────────────────────────────
 setInterval(cleanupErrorLog, 24 * 60 * 60 * 1000)
 
+// ── Session cleanup ──────────────────────────────────────────────────────────
+setInterval(cleanupSessions, 24 * 60 * 60 * 1000)
+
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', project: 'Lashes By Retha' })
@@ -665,14 +693,21 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       await addAuditLog(user.id, user.username, 'LOGIN_FAILED', 'Invalid password', req.ip)
       return res.status(401).json({ error: 'Invalid username or password' })
     }
+    const session = await createSession(user.id, req)
+    // The JWT's own expiry is just an outer safety net, set well past the
+    // max session age - the real enforcement is checkAndTouchSession()
+    // against the sessions row on every request (see authenticate), which
+    // can time out a session (idle or max-age) long before the JWT itself
+    // would and returns the typed SESSION_EXPIRED code the frontend needs.
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role_name, tokenVersion: user.token_version },
+      { id: user.id, username: user.username, role: user.role_name, tokenVersion: user.token_version, sessionId: session.id },
       JWT_SECRET,
-      { expiresIn: '8h' }
+      { expiresIn: Math.ceil(sessionConfig.maxSessionMs / 1000) + 300 }
     )
     await addAuditLog(user.id, user.username, 'LOGIN', 'Successful login', req.ip)
     res.json({
       token,
+      issuedAt: session.issued_at,
       user: {
         id: user.id,
         username: user.username,
@@ -684,6 +719,38 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     res.status(500).json({ error: 'Login failed' })
     await logError('POST /api/auth/login', err, req)
   }
+})
+
+// Invalidates this one session server-side - does not touch the user's
+// other sessions (e.g. another device), unlike logout-everywhere below.
+app.post('/api/auth/logout', authenticate, async (req, res) => {
+  try {
+    await revokeSession(req.sessionId)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to logout' })
+    await logError('POST /api/auth/logout', err, req)
+  }
+})
+
+// A lightweight, authenticated no-op the frontend calls on genuine user
+// activity (throttled client-side) - authenticate() itself is what
+// actually refreshes last_activity_at; this route just gives it
+// something cheap to attach to that isn't tied to any particular feature.
+app.post('/api/auth/activity', authenticate, (req, res) => {
+  res.json({ success: true })
+})
+
+// Public - the frontend's idle-timeout/max-session-age timers read their
+// configured values from here rather than hardcoding them, so changing
+// the env vars alone (see README) is enough to retune both ends at once.
+app.get('/api/auth/session-config', (req, res) => {
+  res.json({
+    idleTimeoutMinutes: sessionConfig.idleTimeoutMinutes,
+    idleWarningSeconds: sessionConfig.idleWarningSeconds,
+    maxSessionHours: sessionConfig.maxSessionHours,
+    graceSeconds: sessionConfig.graceSeconds,
+  })
 })
 
 // Get current user
@@ -830,6 +897,7 @@ app.post('/api/admin/users/:id/logout-everywhere', authenticate, requireRole('sy
       [req.params.id]
     )
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' })
+    await revokeAllSessionsForUser(req.params.id)
     await addAuditLog(req.user.id, req.user.username, 'USER_LOGGED_OUT_EVERYWHERE',
       `Logged out all sessions for "${result.rows[0].username}"`, req.ip)
     res.json({ success: true })
@@ -1726,8 +1794,8 @@ app.post('/api/admin/test-data/delete', authenticate, requireRole('sysadmin'), a
 app.get('/api/products', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, description, detail, price, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit, option_label
-       FROM products WHERE is_active = TRUE ORDER BY id ASC`
+      `SELECT id, name, description, detail, price, sale_price, on_sale, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit, option_label
+       FROM products WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY id ASC`
     )
     const variantsByProduct = await fetchVariantsByProduct(false)
     const customOptionsByProduct = await fetchCustomOptionsByProduct(false)
@@ -1735,12 +1803,15 @@ app.get('/api/products', async (req, res) => {
       const options = variantsByProduct[p.id] || []
       const customOptions = customOptionsByProduct[p.id] || []
       const hasCustomOptions = !!p.option_label
+      const activeOptions = options.length > 0 ? options : customOptions
+      const { optionsWithPricing, productPricing } = attachEffectivePricing(p, activeOptions)
+      const pricedOptions = options.length > 0 ? optionsWithPricing : options
+      const pricedCustomOptions = hasCustomOptions ? optionsWithPricing : customOptions
       return {
         id: p.id,
         name: p.name,
         description: p.description,
         detail: p.detail,
-        price: parseFloat(p.price),
         badge: p.badge,
         // A product with custom options has no single stock figure of its
         // own - its stock is however many of each option are left.
@@ -1749,12 +1820,15 @@ app.get('/api/products', async (req, res) => {
           : p.stock_quantity,
         lowStockThreshold: p.low_stock_threshold,
         hasOptions: options.length > 0,
-        options,
+        options: pricedOptions,
         optionLabel: p.option_label,
         hasCustomOptions,
-        customOptions,
+        customOptions: pricedCustomOptions,
         preorderEnabled: p.preorder_enabled,
         preorderDeposit: parseFloat(p.preorder_deposit),
+        // price/originalPrice/onSale/saveAmount - the effective price for
+        // this product (lowest across its options, if it has any).
+        ...productPricing,
       }
     }))
   } catch (err) {
@@ -1766,7 +1840,7 @@ app.get('/api/products', async (req, res) => {
 // Admin: every product, active or not, for the management screen.
 app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM products ORDER BY id ASC')
+    const result = await pool.query('SELECT * FROM products WHERE deleted_at IS NULL ORDER BY id ASC')
     const variantsByProduct = await fetchVariantsByProduct(true)
     const customOptionsByProduct = await fetchCustomOptionsByProduct(true)
     res.json(result.rows.map(p => {
@@ -1774,6 +1848,10 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
       const customOptions = customOptionsByProduct[p.id] || []
       const hasCustomOptions = !!p.option_label
       const activeCustomOptions = customOptions.filter(o => o.isActive)
+      const activeOptions = options.length > 0 ? options : customOptions
+      const { optionsWithPricing, productPricing } = attachEffectivePricing(p, activeOptions)
+      const pricedOptions = options.length > 0 ? optionsWithPricing : options
+      const pricedCustomOptions = hasCustomOptions ? optionsWithPricing : customOptions
       return {
         id: p.id,
         name: p.name,
@@ -1787,12 +1865,19 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
         lowStockThreshold: p.low_stock_threshold,
         isActive: p.is_active,
         hasOptions: options.length > 0,
-        options,
+        options: pricedOptions,
         optionLabel: p.option_label,
         hasCustomOptions,
-        customOptions,
+        customOptions: pricedCustomOptions,
         preorderEnabled: p.preorder_enabled,
         preorderDeposit: parseFloat(p.preorder_deposit),
+        // The admin screen needs the product's own normal price (price,
+        // above) to edit it, plus whether anything on this product is
+        // currently on sale, for the "ON SALE" tag and Manage Sale button.
+        onSale: p.on_sale || pricedOptions.some(o => o.onSale) || pricedCustomOptions.some(o => o.onSale),
+        salePrice: p.sale_price !== null ? parseFloat(p.sale_price) : null,
+        anyOptionOnSale: pricedOptions.some(o => o.onSale) || pricedCustomOptions.some(o => o.onSale),
+        effectivePrice: productPricing,
       }
     }))
   } catch (err) {
@@ -1940,6 +2025,205 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
   }
 })
 
+// A product "has history" if it (or one of its options) was ever actually
+// used - an order line, a stock movement (sale, restock or correction), or
+// a pre-order. All three tables always carry product_id, even for a line
+// tied to one specific variant/custom option, so checking product_id alone
+// here covers the options too.
+const productHasHistory = async (client, productId) => {
+  const [orderItems, stockMovements, preorders] = await Promise.all([
+    client.query('SELECT 1 FROM order_items WHERE product_id = $1 LIMIT 1', [productId]),
+    client.query('SELECT 1 FROM stock_movements WHERE product_id = $1 LIMIT 1', [productId]),
+    client.query('SELECT 1 FROM preorders WHERE product_id = $1 LIMIT 1', [productId]),
+  ])
+  return orderItems.rows.length > 0 || stockMovements.rows.length > 0 || preorders.rows.length > 0
+}
+
+// Permanently removes a product's uploaded image - Cloudinary asset or
+// local file, whichever this install uses. Best-effort: a storage hiccup
+// here never blocks the product row itself from being deleted.
+const deleteProductImage = async (productId) => {
+  try {
+    if (isCloudinaryEnabled) {
+      const mediaResult = await pool.query(
+        'SELECT public_id, resource_type FROM media WHERE type = $1 AND item_id = $2', ['products', productId]
+      )
+      const media = mediaResult.rows[0]
+      if (media?.public_id) {
+        await cloudinary.uploader.destroy(media.public_id, { resource_type: media.resource_type || 'image' })
+      }
+      await pool.query('DELETE FROM media WHERE type = $1 AND item_id = $2', ['products', productId])
+    } else {
+      findFilesForId(PRODUCT_DIR, 'products', productId).forEach(f => {
+        try { fs.unlinkSync(path.join(PRODUCT_DIR, f)) } catch {}
+      })
+    }
+  } catch (err) {
+    await logError('deleteProductImage', err)
+  }
+}
+
+// Owner wants both Deactivate (temporary, reversible, already above) and
+// Delete (permanent, for duplicates/mistakes). A product with no history
+// anywhere is hard deleted outright, including its options and image; one
+// that's actually been ordered, stocked or pre-ordered is soft deleted
+// instead (deleted_at set) so old orders/analytics keep showing its name
+// and price - and it drops out of every listing query exactly like a
+// deactivated product already does, because is_active is set FALSE too.
+app.delete('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const id = parseInt(req.params.id)
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const existingResult = await client.query('SELECT * FROM products WHERE id = $1 FOR UPDATE', [id])
+    if (existingResult.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Product not found' })
+    }
+    const product = existingResult.rows[0]
+    if (product.deleted_at) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Product not found' })
+    }
+
+    const hasHistory = await productHasHistory(client, id)
+    if (hasHistory) {
+      await client.query(
+        'UPDATE products SET deleted_at = NOW(), is_active = FALSE, updated_at = NOW() WHERE id = $1',
+        [id]
+      )
+      await client.query('COMMIT')
+      await deleteProductImage(id)
+      await addNotification('section', 'Product deleted', `"${product.name}" was deleted.`)
+      return res.json({ success: true, mode: 'soft' })
+    }
+
+    await client.query('DELETE FROM product_variants WHERE product_id = $1', [id])
+    await client.query('DELETE FROM product_options WHERE product_id = $1', [id])
+    await client.query('DELETE FROM product_categories WHERE product_id = $1', [id])
+    await client.query('DELETE FROM products WHERE id = $1', [id])
+    await client.query('COMMIT')
+    await deleteProductImage(id)
+    await addNotification('section', 'Product deleted', `"${product.name}" was deleted.`)
+    res.json({ success: true, mode: 'hard' })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to delete product' })
+    await logError('DELETE /api/admin/products/:id', err, req)
+  } finally {
+    client.release()
+  }
+})
+
+// Sets onSale/salePrice on the product itself, and/or on a list of its
+// options (variants or custom options, whichever it has) in one go, for
+// the admin "Manage Sale" modal. Every value is validated server-side
+// before anything is written - a bad row in the list fails the whole
+// request rather than silently skipping it.
+app.patch('/api/admin/products/:id/sale', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const id = parseInt(req.params.id)
+  const { onSale, salePrice, options } = req.body
+  try {
+    const productResult = await pool.query('SELECT * FROM products WHERE id = $1 AND deleted_at IS NULL', [id])
+    if (productResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
+    const product = productResult.rows[0]
+    const normalPrice = parseFloat(product.price)
+
+    const optionUpdates = []
+    if (Array.isArray(options) && options.length > 0) {
+      const isVariantProduct = (await pool.query(
+        'SELECT 1 FROM product_variants WHERE product_id = $1 LIMIT 1', [id]
+      )).rows.length > 0
+      const table = isVariantProduct ? 'product_variants' : 'product_options'
+      const idsResult = await pool.query(`SELECT id FROM ${table} WHERE product_id = $1`, [id])
+      const validIds = new Set(idsResult.rows.map(r => r.id))
+
+      for (const opt of options) {
+        const optionId = parseInt(opt.id)
+        if (!validIds.has(optionId)) return res.status(400).json({ error: 'One of these options does not belong to this product.' })
+        const optOnSale = !!opt.onSale
+        if (optOnSale) {
+          const error = validateSalePrice(opt.salePrice, normalPrice)
+          if (error) return res.status(400).json({ error: `${error} (option ${optionId})` })
+        }
+        optionUpdates.push({
+          table, id: optionId, onSale: optOnSale,
+          salePrice: opt.salePrice !== undefined && opt.salePrice !== '' && opt.salePrice !== null
+            ? parseFloat(opt.salePrice) : null,
+        })
+      }
+    }
+
+    const productOnSale = !!onSale
+    if (productOnSale) {
+      const error = validateSalePrice(salePrice, normalPrice)
+      if (error) return res.status(400).json({ error })
+    }
+
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      if (onSale !== undefined || salePrice !== undefined) {
+        // Ending a sale (onSale: false) with no new salePrice sent keeps
+        // whatever's already stored, so it can be switched back on later
+        // without retyping it - same rule as for options, just below.
+        const newSalePrice = productOnSale
+          ? parseFloat(salePrice)
+          : (salePrice !== undefined && salePrice !== '' && salePrice !== null ? parseFloat(salePrice) : null)
+        if (newSalePrice !== null) {
+          await client.query('UPDATE products SET on_sale = $1, sale_price = $2 WHERE id = $3', [productOnSale, newSalePrice, id])
+        } else {
+          await client.query('UPDATE products SET on_sale = $1 WHERE id = $2', [productOnSale, id])
+        }
+      }
+      for (const u of optionUpdates) {
+        // Ending a sale (onSale: false) keeps whatever sale price is
+        // already stored unless a new one was sent, so it can be switched
+        // back on later without retyping it.
+        if (u.salePrice !== null) {
+          await client.query(`UPDATE ${u.table} SET on_sale = $1, sale_price = $2 WHERE id = $3`, [u.onSale, u.salePrice, u.id])
+        } else {
+          await client.query(`UPDATE ${u.table} SET on_sale = $1 WHERE id = $2`, [u.onSale, u.id])
+        }
+      }
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
+
+    await addNotification('section', 'Sale updated', `The sale on "${product.name}" was updated.`)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update sale' })
+    await logError('PATCH /api/admin/products/:id/sale', err, req)
+  }
+})
+
+// Turns off every sale on this product in one tap - the product itself and
+// every option - without touching the sale_price values, so the same
+// discount can be switched back on later.
+app.post('/api/admin/products/:id/sale/end', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const id = parseInt(req.params.id)
+  try {
+    const productResult = await pool.query('SELECT * FROM products WHERE id = $1 AND deleted_at IS NULL', [id])
+    if (productResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
+    const product = productResult.rows[0]
+
+    await pool.query('UPDATE products SET on_sale = FALSE WHERE id = $1', [id])
+    await pool.query('UPDATE product_variants SET on_sale = FALSE WHERE product_id = $1', [id])
+    await pool.query('UPDATE product_options SET on_sale = FALSE WHERE product_id = $1', [id])
+
+    await addNotification('section', 'Sale ended', `The sale on "${product.name}" was ended.`)
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to end sale' })
+    await logError('POST /api/admin/products/:id/sale/end', err, req)
+  }
+})
+
 // Adjust stock outside of a sale (restock or a manual correction). Every
 // change is recorded in stock_movements for a full history.
 app.post('/api/admin/products/:id/stock', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
@@ -2020,6 +2304,8 @@ const serializeCustomOption = (o) => ({
   stockQuantity: o.stock_quantity,
   position: o.position,
   isActive: o.is_active,
+  onSale: o.on_sale,
+  salePrice: o.sale_price !== null ? parseFloat(o.sale_price) : null,
 })
 
 app.post('/api/admin/products/:id/options', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
@@ -2231,6 +2517,8 @@ const serializePreorder = (p) => {
     customerName: maskName(p.customer_name),
     optionName: p.option_name,
     price: priceAtOrder,
+    originalPrice: p.original_price_at_order !== null ? parseFloat(p.original_price_at_order) : priceAtOrder,
+    discountAmount: parseFloat(p.discount_amount) || 0,
     deposit: parseFloat(p.deposit_amount),
     deliveryFee,
     amountPaid,
@@ -2769,13 +3057,15 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
         }
       }
 
-      const price = parseFloat(product.price)
+      const { price, originalPrice, saveAmount } = getEffectivePrice(product, variant || customOption)
       subtotal += price * qty
       orderItems.push({
         productId: product.id,
         name: product.name,
         qty,
         price,
+        originalPrice,
+        discountAmount: saveAmount,
         variantId: variant ? variant.id : null,
         lengthMm: variant ? variant.length_mm : null,
         curl: variant ? variant.curl : null,
@@ -2807,9 +3097,9 @@ app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res)
     const order = orderResult.rows[0]
     for (const item of orderItems) {
       await pool.query(
-        `INSERT INTO order_items (order_id, product_id, product_name, qty, price, variant_id, length_mm, curl, product_option_id, option_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [order.id, item.productId, item.name, item.qty, item.price, item.variantId, item.lengthMm, item.curl, item.productOptionId, item.optionName]
+        `INSERT INTO order_items (order_id, product_id, product_name, qty, price, original_price, discount_amount, variant_id, length_mm, curl, product_option_id, option_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [order.id, item.productId, item.name, item.qty, item.price, item.originalPrice, item.discountAmount, item.variantId, item.lengthMm, item.curl, item.productOptionId, item.optionName]
       )
     }
     await addNotification('order', 'New order received',
@@ -2843,6 +3133,8 @@ app.get('/api/orders', authenticate, async (req, res) => {
         name: i.product_name,
         qty: i.qty,
         price: parseFloat(i.price),
+        originalPrice: i.original_price !== null ? parseFloat(i.original_price) : parseFloat(i.price),
+        discountAmount: parseFloat(i.discount_amount) || 0,
         variantId: i.variant_id,
         lengthMm: i.length_mm,
         curl: i.curl,
@@ -3076,7 +3368,10 @@ app.get('/api/orders/by-token/:token', async (req, res) => {
       paymentStatus: order.payment_status,
       status: order.status,
       items: itemsResult.rows.map(i => ({
-        name: i.product_name, qty: i.qty, price: parseFloat(i.price), optionName: i.option_name,
+        name: i.product_name, qty: i.qty, price: parseFloat(i.price),
+        originalPrice: i.original_price !== null ? parseFloat(i.original_price) : parseFloat(i.price),
+        discountAmount: parseFloat(i.discount_amount) || 0,
+        optionName: i.option_name,
       })),
       ozowTransactionId: latestOzow ? latestOzow.ozow_transaction_id : null,
       ozowStatus: latestOzow ? latestOzow.status : null,
@@ -3468,7 +3763,7 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
   try {
     const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [parseInt(productId)])
     const product = productResult.rows[0]
-    if (!product || !product.is_active || !product.preorder_enabled) {
+    if (!product || !product.is_active || product.deleted_at || !product.preorder_enabled) {
       return res.status(400).json({ error: 'This item is not available for pre-order.' })
     }
     const qty = parseInt(quantity) || 1
@@ -3489,7 +3784,8 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
 
     // Price and deposit always come from the database - never trusted from
     // the browser.
-    const priceAtOrder = parseFloat(product.price)
+    const { price: priceAtOrder, originalPrice: originalPriceAtOrder, saveAmount: discountAmount } =
+      getEffectivePrice(product, customOption)
     const depositAmount = parseFloat(product.preorder_deposit)
     const deliveryFee = fulfilmentMethod === 'delivery' ? DELIVERY_FEE : 0
     const publicToken = crypto.randomBytes(24).toString('hex')
@@ -3498,8 +3794,8 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
       `INSERT INTO preorders (
          product_id, quantity, customer_name, customer_phone, customer_email, fulfilment_method,
          delivery_address, delivery_suburb, delivery_city, delivery_postal_code, delivery_notes,
-         price_at_order, deposit_amount, delivery_fee, public_token, product_option_id, option_name
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+         price_at_order, original_price_at_order, discount_amount, deposit_amount, delivery_fee, public_token, product_option_id, option_name
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
       [
         product.id, qty, name.trim(), normalisedPhone, email.trim(), fulfilmentMethod,
         fulfilmentMethod === 'delivery' ? deliveryAddress.trim() : null,
@@ -3507,7 +3803,7 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
         fulfilmentMethod === 'delivery' ? deliveryCity.trim() : null,
         fulfilmentMethod === 'delivery' ? deliveryPostalCode.trim() : null,
         fulfilmentMethod === 'delivery' ? ((deliveryNotes || '').trim() || null) : null,
-        priceAtOrder, depositAmount, deliveryFee, publicToken,
+        priceAtOrder, originalPriceAtOrder, discountAmount, depositAmount, deliveryFee, publicToken,
         customOption ? customOption.id : null, customOption ? customOption.name : null,
       ]
     )
@@ -4259,6 +4555,7 @@ const start = async () => {
   await archiveOldNotifications()
   await archiveOldOrders()
   await cleanupErrorLog()
+  await cleanupSessions()
   server = app.listen(PORT, () => {
     console.log(`Lashes By Retha backend listening on port ${PORT}`)
   })

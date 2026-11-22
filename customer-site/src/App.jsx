@@ -1593,6 +1593,7 @@ function App() {
         ) : (
           <div className="product-image-placeholder">Product Image</div>
         )}
+        {product.onSale && <span className="sale-badge">SAVE R {product.saveAmount.toFixed(2)}</span>}
       </div>
       <div className="product-card-body" style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
         <span className="product-badge" style={{ marginBottom: '8px', background: '#6A1B9A' }}>Pre-order</span>
@@ -1601,7 +1602,16 @@ function App() {
         <div className="product-detail-line" style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
           {product.detail}
         </div>
-        <p className="product-price">R {product.price}</p>
+        {product.onSale ? (
+          <p className="product-price">
+            <span style={{ color: '#C4365B' }}>R {product.price.toFixed(2)}</span>{' '}
+            <span style={{ color: '#9A8A8E', fontWeight: 400, textDecoration: 'line-through', fontSize: '0.85em' }}>
+              R {product.originalPrice.toFixed(2)}
+            </span>
+          </p>
+        ) : (
+          <p className="product-price">R {product.price.toFixed(2)}</p>
+        )}
         <div style={{ fontSize: '12px', color: '#7A6670', marginBottom: '12px' }}>
           Ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days
         </div>
@@ -1658,6 +1668,20 @@ function App() {
       : product.stockQuantity
     const effectiveLowThreshold = hasOptions ? (selectedVariant ? selectedVariant.lowStockThreshold : null) : product.lowStockThreshold
 
+    // Price always comes straight from the backend (product.price/
+    // originalPrice/onSale/saveAmount, or the same fields on the chosen
+    // option) - this never recomputes a sale price itself. With options but
+    // none chosen yet, there's no single price to show - "From R <lowest>"
+    // instead, with a plain "SALE" badge rather than a specific save amount.
+    const activeOption = hasOptions ? selectedVariant : hasCustomOptions ? selectedCustomOption : null
+    const showingFromPrice = (hasOptions || hasCustomOptions) && !activeOption
+    const anyOptionOnSale = hasOptions
+      ? product.options.some(o => o.onSale)
+      : hasCustomOptions
+      ? product.customOptions.some(o => o.onSale)
+      : false
+    const pricing = activeOption || product
+
     // Clicking an already-selected length or curl unselects it.
     const pickLength = (len) => setSelectedOptions(prev => ({
       ...prev,
@@ -1705,7 +1729,9 @@ function App() {
             lengthMm: selectedVariant.lengthMm,
             curl: selectedVariant.curl,
             name: `${product.name}, ${selectedVariant.lengthMm}mm, ${selectedVariant.curl} curl`,
-            price: product.price,
+            price: selectedVariant.price,
+            originalPrice: selectedVariant.originalPrice,
+            onSale: selectedVariant.onSale,
             stockQuantity: selectedVariant.stockQuantity,
             cartKey: `${product.id}-${selectedVariant.id}`,
           }
@@ -1715,7 +1741,9 @@ function App() {
             variantId: null,
             productOptionId: selectedCustomOption.id,
             name: `${product.name}, ${product.optionLabel}: ${selectedCustomOption.name}`,
-            price: product.price,
+            price: selectedCustomOption.price,
+            originalPrice: selectedCustomOption.originalPrice,
+            onSale: selectedCustomOption.onSale,
             stockQuantity: selectedCustomOption.stockQuantity,
             cartKey: `${product.id}-${selectedCustomOption.id}`,
           }
@@ -1726,6 +1754,8 @@ function App() {
             curl: null,
             name: product.name,
             price: product.price,
+            originalPrice: product.originalPrice,
+            onSale: product.onSale,
             stockQuantity: product.stockQuantity,
             cartKey: String(product.id),
           }
@@ -1754,6 +1784,9 @@ function App() {
           ) : (
             <div className="product-image-placeholder">Product Image</div>
           )}
+          {showingFromPrice
+            ? anyOptionOnSale && <span className="sale-badge">SALE</span>
+            : pricing.onSale && <span className="sale-badge">SAVE R {pricing.saveAmount.toFixed(2)}</span>}
         </div>
         <div className="product-card-body" style={{ padding: '16px 18px 20px 18px', flex: 1, display: 'flex', flexDirection: 'column' }}>
           {product.badge && <span className="product-badge" style={{ marginBottom: '8px' }}>{product.badge}</span>}
@@ -1762,7 +1795,18 @@ function App() {
           <div className="product-detail-line" style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
             {product.detail}
           </div>
-          <p className="product-price">R {product.price}</p>
+          {showingFromPrice ? (
+            <p className="product-price">{anyOptionOnSale ? 'From ' : ''}R {pricing.price.toFixed(2)}</p>
+          ) : pricing.onSale ? (
+            <p className="product-price">
+              <span style={{ color: '#C4365B' }}>R {pricing.price.toFixed(2)}</span>{' '}
+              <span style={{ color: '#9A8A8E', fontWeight: 400, textDecoration: 'line-through', fontSize: '0.85em' }}>
+                R {pricing.originalPrice.toFixed(2)}
+              </span>
+            </p>
+          ) : (
+            <p className="product-price">R {pricing.price.toFixed(2)}</p>
+          )}
 
           {hasOptions && (
             <div className="product-options" style={{ marginBottom: '10px' }}>
@@ -2323,6 +2367,20 @@ function App() {
           font-weight: 700;
           color: #C47A8A;
           margin-bottom: 14px;
+        }
+
+        .sale-badge {
+          position: absolute;
+          top: 10px;
+          left: 10px;
+          background-color: #C4365B;
+          color: #FFFFFF;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.3px;
+          padding: 4px 10px;
+          border-radius: 20px;
+          z-index: 1;
         }
 
         .option-select {
@@ -3387,7 +3445,16 @@ function App() {
                 Pre-order {preorderProduct.name}
               </div>
               <p style={{ fontSize: '13px', color: '#9A7A82', marginTop: 0, marginBottom: '16px' }}>
-                Price R{preorderProduct.price} · Deposit R{preorderProduct.preorderDeposit} · Ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days
+                Price{' '}
+                {preorderProduct.onSale ? (
+                  <>
+                    <span style={{ color: '#C4365B', fontWeight: 700 }}>R{preorderProduct.price.toFixed(2)}</span>{' '}
+                    <span style={{ textDecoration: 'line-through' }}>R{preorderProduct.originalPrice.toFixed(2)}</span>
+                  </>
+                ) : (
+                  <>R{preorderProduct.price}</>
+                )}
+                {' '}· Deposit R{preorderProduct.preorderDeposit} · Ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days
               </p>
 
               <input
@@ -4117,7 +4184,16 @@ function App() {
                           <div style={{ fontSize: '14px', fontWeight: 600, color: '#2C2C2C', marginBottom: '4px' }}>
                             {item.name}
                           </div>
-                          <div style={{ fontSize: '13px', color: '#9A7A82' }}>R {item.price}</div>
+                          <div style={{ fontSize: '13px', color: '#9A7A82' }}>
+                            {item.onSale ? (
+                              <>
+                                <span style={{ color: '#C4365B', fontWeight: 700 }}>R {item.price.toFixed(2)}</span>{' '}
+                                <span style={{ textDecoration: 'line-through' }}>R {item.originalPrice.toFixed(2)}</span>
+                              </>
+                            ) : (
+                              <>R {item.price.toFixed(2)}</>
+                            )}
+                          </div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <button
@@ -4626,7 +4702,18 @@ function App() {
                           <span>
                             {item.name}{item.optionName ? `, ${item.optionName}` : ''} x{item.qty}
                           </span>
-                          <span>R {(item.price * item.qty).toFixed(2)}</span>
+                          <span>
+                            {item.discountAmount > 0 ? (
+                              <>
+                                <span style={{ color: '#C4365B', fontWeight: 700 }}>R {(item.price * item.qty).toFixed(2)}</span>{' '}
+                                <span style={{ textDecoration: 'line-through', color: '#9A8A8E' }}>
+                                  R {(item.originalPrice * item.qty).toFixed(2)}
+                                </span>
+                              </>
+                            ) : (
+                              <>R {(item.price * item.qty).toFixed(2)}</>
+                            )}
+                          </span>
                         </div>
                       ))}
                     </div>
