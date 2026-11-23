@@ -17,6 +17,12 @@ import {
 } from './messaging/buildData.js'
 import { renderTemplate, findUnknownPlaceholders, PLACEHOLDERS_BY_GROUP } from './messaging/render.js'
 
+const IconSearch = (props) => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+)
+
 const CLASSES = [
   {
     id: 1,
@@ -199,7 +205,28 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
   const [editingProduct, setEditingProduct] = useState(null)
   // editingProduct shape: { id, name, description, detail, price, badge, lowStockThreshold } or null
   const [showAddProduct, setShowAddProduct] = useState(false)
-  const [newProduct, setNewProduct] = useState({ name: '', description: '', detail: '', price: '', badge: '', stockQuantity: '', lowStockThreshold: '' })
+  const [newProduct, setNewProduct] = useState({ name: '', description: '', detail: '', price: '', badge: '', stockQuantity: '', lowStockThreshold: '', categoryId: '' })
+  // Products page/Image Management "grouped by section" state - search and
+  // which sections are expanded both live in the URL (?q=, ?open=) so a
+  // refresh keeps them. null (not yet initialised) means "work out the
+  // default once products have loaded" - see the effect near fetchProducts.
+  const [productsSearch, setProductsSearch] = useState(() => new URLSearchParams(window.location.search).get('q') || '')
+  const [productsOpenSections, setProductsOpenSections] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.has('open') ? new Set(params.get('open').split(',').filter(Boolean)) : null
+  })
+  const [productsSectionChip, setProductsSectionChip] = useState('All')
+  const [highlightedProductId, setHighlightedProductId] = useState(null)
+  // Products whose full option-chip list is expanded past the >8 summary
+  // ("Show options") - per product id, not persisted anywhere.
+  const [expandedOptionsProductIds, setExpandedOptionsProductIds] = useState(new Set())
+  const toggleOptionsExpanded = (productId) => setExpandedOptionsProductIds(prev => {
+    const next = new Set(prev)
+    next.has(productId) ? next.delete(productId) : next.add(productId)
+    return next
+  })
+  const NO_SECTION_SLUG = 'no-section'
+  const slugify = (s) => (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'section'
   const [productFormStatus, setProductFormStatus] = useState(null)
   const [stockAdjustTarget, setStockAdjustTarget] = useState(null)
   const [stockAdjustAmount, setStockAdjustAmount] = useState('')
@@ -317,7 +344,7 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     try {
       const res = await apiFetch(`/api/orders?view=${view}`)
       const data = await res.json()
-      if (res.ok && Array.isArray(data)) setOrders(data.reverse()) // newest first
+      if (res.ok && Array.isArray(data)) setOrders(data) // GET /api/orders already returns newest first
       else setOrders([])
     } catch {
       // silent fail
@@ -1349,10 +1376,13 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
         body: JSON.stringify({ categoryId: categoryId ? parseInt(categoryId) : null }),
       })
       if (res.ok) {
-        setProductCategories(prev => ({
-          ...prev,
-          [productId]: categoryId ? parseInt(categoryId) : null,
-        }))
+        const newCategoryId = categoryId ? parseInt(categoryId) : null
+        setProductCategories(prev => ({ ...prev, [productId]: newCategoryId }))
+        // The card itself just moves to its new group (nothing here scrolls
+        // or collapses anything) - the toast is what actually confirms it,
+        // since "it moved somewhere in the list" isn't otherwise obvious.
+        const sectionName = newCategoryId ? (categories.find(c => c.id === newCategoryId)?.name || 'section') : 'No section'
+        toast(`Moved to ${sectionName}`, 'success')
       }
     } catch {}
   }
@@ -1414,6 +1444,67 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     return null
   }
 
+  // Groups `list` by section, in the customer site's own section order
+  // (categories is already fetched sorted by position) with "No section"
+  // last - newest product first within each group. Only groups that
+  // actually have a product in `list` are returned, so a search that
+  // empties a section just makes it disappear rather than showing an
+  // empty header.
+  const sectionGroupsForProducts = (list) => {
+    const bySlug = {}
+    const order = []
+    categories.forEach(c => {
+      const slug = slugify(c.name)
+      bySlug[slug] = { slug, name: c.name, categoryId: c.id, products: [] }
+      order.push(slug)
+    })
+    bySlug[NO_SECTION_SLUG] = { slug: NO_SECTION_SLUG, name: 'No section', categoryId: null, products: [] }
+    order.push(NO_SECTION_SLUG)
+    list.forEach(p => {
+      const catId = productCategories[p.id] ?? null
+      const group = (catId != null && Object.values(bySlug).find(g => g.categoryId === catId)) || bySlug[NO_SECTION_SLUG]
+      group.products.push(p)
+    })
+    order.forEach(slug => {
+      bySlug[slug].products.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    })
+    return order.map(slug => bySlug[slug]).filter(g => g.products.length > 0)
+  }
+
+  // Auto-expands sections once products have loaded, the first time -
+  // only when the URL didn't already say which sections were open (see
+  // productsOpenSections' initial state above).
+  useEffect(() => {
+    if (productsOpenSections !== null || products.length === 0) return
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+    const recentSlugs = new Set()
+    sectionGroupsForProducts(products).forEach(g => {
+      if (g.products.some(p => p.createdAt && new Date(p.createdAt).getTime() >= sevenDaysAgo)) recentSlugs.add(g.slug)
+    })
+    setProductsOpenSections(recentSlugs)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, productsOpenSections])
+
+  // Keeps ?q=/&open= in sync with the grouped-by-section product search/
+  // expanded sections, shared between the Products page and Image
+  // Management's Products tab - the same replaceState-not-pushState
+  // pattern as every other page's own cheap sub-state (see Orders'
+  // ?view=, Image Management's own ?tab=).
+  useEffect(() => {
+    const onRelevantPage = activePage === 'products' || (activePage === 'images' && imageTab === 'products')
+    if (!onRelevantPage || productsOpenSections === null) return
+    const url = new URL(window.location.href)
+    if (productsSearch) url.searchParams.set('q', productsSearch); else url.searchParams.delete('q')
+    if (productsOpenSections.size > 0) url.searchParams.set('open', Array.from(productsOpenSections).join(',')); else url.searchParams.delete('open')
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, imageTab, productsSearch, productsOpenSections])
+
+  const toggleProductSection = (slug) => setProductsOpenSections(prev => {
+    const next = new Set(prev || [])
+    next.has(slug) ? next.delete(slug) : next.add(slug)
+    return next
+  })
+
   const createProduct = async () => {
     setProductFormStatus(null)
     if (!newProduct.name.trim() || newProduct.price === '') {
@@ -1427,11 +1518,29 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
       })
       const data = await res.json()
       if (res.ok) {
+        // The product-creation route doesn't know about sections - same
+        // endpoint assignCategory uses, called right after.
+        if (newProduct.categoryId) {
+          await apiFetch(`/api/categories/product/${data.id}`, {
+            method: 'POST',
+            body: JSON.stringify({ categoryId: parseInt(newProduct.categoryId) }),
+          }).then(r => r.ok && setProductCategories(prev => ({ ...prev, [data.id]: parseInt(newProduct.categoryId) }))).catch(() => {})
+        }
         await fetchProducts()
-        setNewProduct({ name: '', description: '', detail: '', price: '', badge: '', stockQuantity: '', lowStockThreshold: '' })
+        const chosenCategory = newProduct.categoryId ? categories.find(c => c.id === parseInt(newProduct.categoryId)) : null
+        const sectionSlug = chosenCategory ? slugify(chosenCategory.name) : NO_SECTION_SLUG
+        setNewProduct({ name: '', description: '', detail: '', price: '', badge: '', stockQuantity: '', lowStockThreshold: '', categoryId: '' })
         setShowAddProduct(false)
         setProductFormStatus({ type: 'success', message: `"${data.name}" was added.` })
         setTimeout(() => setProductFormStatus(null), 3000)
+        // Expand the section it was just added to, scroll to the card once
+        // it's rendered, and give it a brief highlight.
+        setProductsOpenSections(prev => new Set([...(prev || []), sectionSlug]))
+        setHighlightedProductId(data.id)
+        setTimeout(() => {
+          document.getElementById(`product-card-${data.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }, 100)
+        setTimeout(() => setHighlightedProductId(null), 2000)
       } else {
         setProductFormStatus({ type: 'error', message: data.error || 'Failed to add product.' })
       }
@@ -2116,6 +2225,10 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
       if (page === 'notifications') setNotifTab(params.get('tab') || 'all')
       if (page === 'orders') setOrdersView(params.get('view') || 'active')
       if (page === 'preorders') setPreordersTab(params.get('tab') || 'customers')
+      if (page === 'products' || page === 'images') {
+        setProductsSearch(params.get('q') || '')
+        setProductsOpenSections(params.has('open') ? new Set(params.get('open').split(',').filter(Boolean)) : new Set())
+      }
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -3819,7 +3932,17 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
 
                 <button
                   className="upload-btn"
-                  onClick={() => { setShowAddProduct(prev => !prev); setProductFormStatus(null) }}
+                  onClick={() => {
+                    if (!showAddProduct) {
+                      // Pre-select whichever section chip is active, so
+                      // adding a product while filtered to "Wigs" doesn't
+                      // default to "No section" for no reason.
+                      const activeCategory = categories.find(c => c.name === productsSectionChip)
+                      setNewProduct(prev => ({ ...prev, categoryId: activeCategory ? String(activeCategory.id) : '' }))
+                    }
+                    setShowAddProduct(prev => !prev)
+                    setProductFormStatus(null)
+                  }}
                   style={{ marginBottom: 16 }}
                 >
                   {showAddProduct ? 'Cancel' : 'Add Product'}
@@ -3901,21 +4024,105 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                           placeholder="3"
                         />
                       </div>
+                      <div>
+                        <div className="field-label" style={{ marginBottom: 4 }}>Section</div>
+                        <select
+                          className="category-select"
+                          value={newProduct.categoryId}
+                          onChange={e => setNewProduct(p => ({ ...p, categoryId: e.target.value }))}
+                        >
+                          <option value="">No section</option>
+                          {categories.map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                     <button className="upload-btn" onClick={createProduct}>Save Product</button>
                   </div>
                 )}
 
-                <div className="category-list">
-                  {products.length === 0 && (
-                    <p style={{ fontSize: 14, color: '#9A7A82' }}>No products yet. Add one above.</p>
-                  )}
-                  {products.map(p => (
-                    <div
-                      key={p.id}
-                      className="admin-card"
-                      style={{ background: p.isActive ? '#FFFFFF' : '#F5F2F2', opacity: p.isActive ? 1 : 0.65 }}
-                    >
+                {products.length > 0 && (() => {
+                  const allGroups = sectionGroupsForProducts(products)
+                  const chipNames = ['All', ...allGroups.map(g => g.name)]
+                  const term = productsSearch.trim().toLowerCase()
+                  const visibleGroups = allGroups
+                    .filter(g => productsSectionChip === 'All' || g.name === productsSectionChip)
+                    .map(g => ({ ...g, products: term ? g.products.filter(p => p.name.toLowerCase().includes(term)) : g.products }))
+                    .filter(g => g.products.length > 0)
+                  const isOpen = (slug) => !!term || (productsOpenSections || new Set()).has(slug)
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ position: 'relative', marginBottom: 10, maxWidth: 360 }}>
+                        <IconSearch style={{ position: 'absolute', left: 12, top: 12, color: '#9A8A8E' }} />
+                        <input
+                          className="category-input"
+                          style={{ width: '100%', paddingLeft: 36 }}
+                          value={productsSearch}
+                          onChange={e => setProductsSearch(e.target.value)}
+                          placeholder="Search products…"
+                        />
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10, alignItems: 'center' }}>
+                        {chipNames.map(name => (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => setProductsSectionChip(name)}
+                            style={{
+                              padding: '5px 12px', borderRadius: 14, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                              border: `1px solid ${productsSectionChip === name ? '#C47A8A' : '#EDD5DB'}`,
+                              background: productsSectionChip === name ? '#C47A8A' : 'white',
+                              color: productsSectionChip === name ? 'white' : '#7A6670',
+                            }}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                        <span style={{ flex: 1 }} />
+                        <button type="button" onClick={() => setProductsOpenSections(new Set(allGroups.map(g => g.slug)))} style={{ background: 'none', border: 'none', color: '#C47A8A', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Expand all
+                        </button>
+                        <button type="button" onClick={() => setProductsOpenSections(new Set())} style={{ background: 'none', border: 'none', color: '#C47A8A', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Collapse all
+                        </button>
+                      </div>
+
+                      {visibleGroups.length === 0 && (
+                        <p style={{ fontSize: 14, color: '#9A7A82' }}>No products match.</p>
+                      )}
+
+                      {visibleGroups.map(group => (
+                        <div key={group.slug} style={{ marginBottom: 10 }}>
+                          <button
+                            type="button"
+                            onClick={() => toggleProductSection(group.slug)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                              background: '#FAF6F4', border: '1px solid #F0E8E8', borderRadius: 8, padding: '10px 14px',
+                              fontSize: 13, fontWeight: 700, color: '#3E2A30', cursor: 'pointer', fontFamily: 'inherit',
+                            }}
+                          >
+                            <span style={{ transform: isOpen(group.slug) ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', display: 'inline-block' }}>&#9656;</span>
+                            {group.name} ({group.products.length})
+                          </button>
+                          {isOpen(group.slug) && (
+                            <div className="category-list" style={{ marginTop: 8 }}>
+                              {group.products.map(p => (
+                                <div
+                                  key={p.id}
+                                  id={`product-card-${p.id}`}
+                                  className="admin-card"
+                                  style={{
+                                    background: highlightedProductId === p.id ? '#FADADD' : (p.isActive ? '#FFFFFF' : '#F5F2F2'),
+                                    opacity: p.isActive ? 1 : 0.65,
+                                    // Snaps to pink instantly, then fades back
+                                    // out - a transition on the way IN would
+                                    // mean it's barely visible before the
+                                    // 2s timer clears it again.
+                                    transition: highlightedProductId === p.id ? 'none' : 'background 1.8s ease-out',
+                                  }}
+                                >
                       <div className="card-img" style={{ overflow: 'hidden' }}>
                         {productImages[p.id] ? (
                           <img
@@ -4005,8 +4212,18 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                 <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
                                   {p.optionLabel}s{p.customOptions.length > 0 ? ` (${p.customOptions.length})` : ''}
                                 </div>
+                                {p.customOptions.length > 8 && !expandedOptionsProductIds.has(p.id) ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    <span style={{ fontSize: 12, color: '#9A8A8E' }}>
+                                      {p.customOptions.length} options · {p.customOptions.filter(o => o.stockQuantity <= 0).length} out of stock
+                                    </span>
+                                    <button className="secondary-btn" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => toggleOptionsExpanded(p.id)}>
+                                      Show options
+                                    </button>
+                                  </div>
+                                ) : (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                  {p.customOptions.slice(0, 12).map(o => (
+                                  {p.customOptions.map(o => (
                                     <div
                                       key={o.id}
                                       onClick={() => { setStockAdjustTarget({ kind: 'customOption', productId: p.id, optionId: o.id, name: `${p.name}, ${p.optionLabel}: ${o.name}`, stockQuantity: o.stockQuantity }); setProductFormStatus(null) }}
@@ -4032,12 +4249,13 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                       {o.name}: {o.stockQuantity}{!o.isActive ? ' (off)' : ''}
                                     </div>
                                   ))}
-                                  {p.customOptions.length > 12 && (
-                                    <button className="secondary-btn" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => openOptionsManager(p)}>
-                                      +{p.customOptions.length - 12} more
+                                  {p.customOptions.length > 8 && (
+                                    <button className="secondary-btn" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => toggleOptionsExpanded(p.id)}>
+                                      Hide options
                                     </button>
                                   )}
                                 </div>
+                                )}
                               </div>
                             )}
                           </>
@@ -4096,6 +4314,19 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                   onChange={e => setEditingProduct(prev => ({ ...prev, lowStockThreshold: e.target.value }))}
                                   placeholder="Low stock at"
                                 />
+                              </div>
+                              <div style={{ flex: 1 }}>
+                                <div className="field-label" style={{ marginBottom: 4 }}>Section</div>
+                                <select
+                                  className="category-select"
+                                  value={productCategories[p.id] || ''}
+                                  onChange={e => assignCategory(p.id, e.target.value || null)}
+                                >
+                                  <option value="">No section</option>
+                                  {categories.map(c => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                  ))}
+                                </select>
                               </div>
                             </div>
                             <div style={{ marginTop: 10, padding: '10px 12px', background: '#FAF6F4', borderRadius: 8 }}>
@@ -4199,8 +4430,14 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                         )}
                       </div>
                     </div>
-                  ))}
-                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
 
                 {stockAdjustTarget && (
                   <div
@@ -4654,11 +4891,76 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                 {imageTab === 'products' && (
                   <div>
                     <div className="section-heading">Product Images</div>
-                    {products.map((p, index) => (
+                    {products.length > 0 && (() => {
+                      const allGroups = sectionGroupsForProducts(products)
+                      const chipNames = ['All', ...allGroups.map(g => g.name)]
+                      const term = productsSearch.trim().toLowerCase()
+                      const visibleGroups = allGroups
+                        .filter(g => productsSectionChip === 'All' || g.name === productsSectionChip)
+                        .map(g => ({ ...g, products: term ? g.products.filter(p => p.name.toLowerCase().includes(term)) : g.products }))
+                        .filter(g => g.products.length > 0)
+                      const isOpen = (slug) => !!term || (productsOpenSections || new Set()).has(slug)
+                      return (
+                        <div style={{ marginBottom: 16 }}>
+                          <div style={{ position: 'relative', marginBottom: 10, maxWidth: 360 }}>
+                            <IconSearch style={{ position: 'absolute', left: 12, top: 12, color: '#9A8A8E' }} />
+                            <input
+                              className="category-input"
+                              style={{ width: '100%', paddingLeft: 36 }}
+                              value={productsSearch}
+                              onChange={e => setProductsSearch(e.target.value)}
+                              placeholder="Search products…"
+                            />
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10, alignItems: 'center' }}>
+                            {chipNames.map(name => (
+                              <button
+                                key={name}
+                                type="button"
+                                onClick={() => setProductsSectionChip(name)}
+                                style={{
+                                  padding: '5px 12px', borderRadius: 14, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                                  border: `1px solid ${productsSectionChip === name ? '#C47A8A' : '#EDD5DB'}`,
+                                  background: productsSectionChip === name ? '#C47A8A' : 'white',
+                                  color: productsSectionChip === name ? 'white' : '#7A6670',
+                                }}
+                              >
+                                {name}
+                              </button>
+                            ))}
+                            <span style={{ flex: 1 }} />
+                            <button type="button" onClick={() => setProductsOpenSections(new Set(allGroups.map(g => g.slug)))} style={{ background: 'none', border: 'none', color: '#C47A8A', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                              Expand all
+                            </button>
+                            <button type="button" onClick={() => setProductsOpenSections(new Set())} style={{ background: 'none', border: 'none', color: '#C47A8A', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                              Collapse all
+                            </button>
+                          </div>
+
+                          {visibleGroups.length === 0 && (
+                            <p style={{ fontSize: 14, color: '#9A7A82' }}>No products match.</p>
+                          )}
+
+                          {visibleGroups.map(group => (
+                            <div key={group.slug} style={{ marginBottom: 10 }}>
+                              <button
+                                type="button"
+                                onClick={() => toggleProductSection(group.slug)}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                                  background: '#FAF6F4', border: '1px solid #F0E8E8', borderRadius: 8, padding: '10px 14px',
+                                  fontSize: 13, fontWeight: 700, color: '#3E2A30', cursor: 'pointer', fontFamily: 'inherit',
+                                }}
+                              >
+                                <span style={{ transform: isOpen(group.slug) ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', display: 'inline-block' }}>&#9656;</span>
+                                {group.name} ({group.products.length})
+                              </button>
+                              {isOpen(group.slug) && group.products.map(p => (
                       <div
                         key={p.id}
+                        id={`product-card-${p.id}`}
                         className="admin-card"
-                        style={{ background: index % 2 === 0 ? '#F7EEF0' : '#F5F2F8' }}
+                        style={{ background: highlightedProductId === p.id ? '#FADADD' : (p.id % 2 === 0 ? '#F7EEF0' : '#F5F2F8'), transition: highlightedProductId === p.id ? 'none' : 'background 1.8s ease-out' }}
                       >
                         <div className="card-img" style={{ overflow: 'hidden' }}>
                           {productImages[p.id] ? (
@@ -4739,14 +5041,21 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                           )}
                         </div>
                       </div>
-                    ))}
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
 
                 {imageTab === 'classes' && (
                   <div>
                     <div className="section-heading">Class Images</div>
-                    {coursesMerged.map((c, index) => (
+                    {/* No categories for classes, so just newest first - CLASSES
+                        is defined oldest to newest, so reversed here. */}
+                    {[...coursesMerged].reverse().map((c, index) => (
                       <div
                         key={c.id}
                         className="admin-card"

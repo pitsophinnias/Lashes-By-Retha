@@ -2083,6 +2083,7 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
           : p.stock_quantity,
         lowStockThreshold: p.low_stock_threshold,
         isActive: p.is_active,
+        createdAt: p.created_at,
         hasOptions: options.length > 0,
         options: pricedOptions,
         optionLabel: p.option_label,
