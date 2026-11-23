@@ -2123,6 +2123,24 @@ const validatePreorderDeposit = (deposit, price) => {
 // product with options_have_own_prices on (e.g. a wig priced differently
 // per length) - a deposit that's fine against the most expensive length
 // could easily exceed the cheapest one otherwise.
+// The reduced product shape PATCH /api/admin/products/:id and the bulk
+// pre-order routes below all return - not the full admin list shape (no
+// options/customOptions arrays), since every caller of these either
+// already has those from its own list fetch, or (bulk add/remove) never
+// needed them in the first place.
+const serializeProductBasic = (p) => {
+  const hasCustomOptions = !!p.option_label
+  return {
+    id: p.id, name: p.name, description: p.description, detail: p.detail,
+    price: parseFloat(p.price), badge: p.badge,
+    stockQuantity: hasCustomOptions ? null : p.stock_quantity,
+    lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
+    preorderEnabled: p.preorder_enabled, preorderDeposit: parseFloat(p.preorder_deposit),
+    preorderExpectedDate: p.preorder_expected_date,
+    optionLabel: p.option_label, hasCustomOptions, optionsHaveOwnPrices: p.options_have_own_prices,
+  }
+}
+
 const lowestPriceForProduct = async (productRow) => {
   if (!productRow.options_have_own_prices) return parseFloat(productRow.price)
   const optionsResult = await pool.query(
@@ -2272,19 +2290,76 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
         [p.price, id]
       )
     }
-    const hasCustomOptions = !!p.option_label
-    res.json({
-      id: p.id, name: p.name, description: p.description, detail: p.detail,
-      price: parseFloat(p.price), badge: p.badge,
-      stockQuantity: hasCustomOptions ? null : p.stock_quantity,
-      lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
-      preorderEnabled: p.preorder_enabled, preorderDeposit: parseFloat(p.preorder_deposit),
-      preorderExpectedDate: p.preorder_expected_date,
-      optionLabel: p.option_label, hasCustomOptions, optionsHaveOwnPrices: p.options_have_own_prices,
-    })
+    res.json(serializeProductBasic(p))
   } catch (err) {
     res.status(500).json({ error: 'Failed to update product' })
     await logError('PATCH /api/admin/products/:id', err, req)
+  }
+})
+
+// Adds several products to pre-order in one go (the "Add products to
+// pre-order" dialog's review step) - all or nothing: every item is
+// validated first, and if any one of them fails, nothing is saved and the
+// per-product errors are returned so the dialog can show them next to the
+// right rows, exactly as if each had been PATCHed on its own.
+app.post('/api/admin/products/preorder/bulk', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { items } = req.body
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'At least one product is required' })
+  }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const errors = {}
+    const toUpdate = []
+    for (const item of items) {
+      const productId = parseInt(item.productId)
+      const productResult = await client.query(
+        'SELECT * FROM products WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [productId]
+      )
+      const product = productResult.rows[0]
+      if (!product || !product.is_active) {
+        errors[productId] = 'Product not found'
+        continue
+      }
+      if (product.preorder_enabled) {
+        errors[productId] = 'Already on pre-order'
+        continue
+      }
+      const deposit = parseFloat(item.deposit)
+      const lowest = await lowestPriceForProduct(product)
+      const depositError = validatePreorderDeposit(deposit, lowest)
+      if (depositError) {
+        errors[productId] = depositError
+        continue
+      }
+      toUpdate.push({ productId, deposit, expectedDate: item.expectedDate || null })
+    }
+
+    if (Object.keys(errors).length > 0) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Some products could not be added to pre-order', errors })
+    }
+
+    const products = []
+    for (const { productId, deposit, expectedDate } of toUpdate) {
+      const result = await client.query(
+        `UPDATE products SET preorder_enabled = TRUE, preorder_deposit = $1, preorder_expected_date = $2, updated_at = NOW()
+         WHERE id = $3 RETURNING *`,
+        [deposit, expectedDate, productId]
+      )
+      products.push(serializeProductBasic(result.rows[0]))
+    }
+    await client.query('COMMIT')
+    await addNotification('section', 'Products added to pre-order',
+      `${products.length} product${products.length !== 1 ? 's' : ''} added to pre-order.`)
+    res.json({ products })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    res.status(500).json({ error: 'Failed to add products to pre-order' })
+    await logError('POST /api/admin/products/preorder/bulk', err, req)
+  } finally {
+    client.release()
   }
 })
 
