@@ -176,6 +176,8 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
   // both (see PreorderProductDialog below).
   const [preorderProductDialogFor, setPreorderProductDialogFor] = useState(null)
   const [preorderProductSearch, setPreorderProductSearch] = useState('')
+  // Checked rows on the "Pre-order products" list, for "Remove selected".
+  const [preorderProductSelection, setPreorderProductSelection] = useState(new Set())
 
   // ── Business calendar ────────────────────────────────────────────────────
   // Months from the real current month that the dashboard calendar is
@@ -382,10 +384,29 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     return group.preorders.filter(p => !['cancelled', 'refunded'].includes(p.status)).length
   }
 
+  const highestActivePriceFor = (product, lowest) => product.optionsHaveOwnPrices
+    ? Math.max(...((product.hasOptions ? product.options : product.customOptions) || []).filter(o => o.isActive).map(o => o.price), lowest)
+    : lowest
+
   const productsOnPreorder = products.filter(p => p.preorderEnabled)
+  // Every active product, including ones already on pre-order - the
+  // dialog itself greys those out and disables them (see
+  // PreorderProductDialog), rather than this list hiding them outright.
+  // Inactive/deleted products are excluded (deleted ones never appear in
+  // `products` to begin with).
   const productsAvailableForPreorder = products
-    .filter(p => p.isActive && !p.preorderEnabled)
-    .map(p => ({ ...p, lowestPrice: lowestActivePriceFor(p) }))
+    .filter(p => p.isActive)
+    .map(p => {
+      const lowestPrice = lowestActivePriceFor(p)
+      return {
+        ...p,
+        lowestPrice,
+        highestPrice: highestActivePriceFor(p, lowestPrice),
+        categoryId: productCategories[p.id] ?? null,
+        categoryName: categories.find(c => c.id === productCategories[p.id])?.name || 'No section',
+        thumbnail: productImages[p.id] ? mediaUrl(productImages[p.id]) : null,
+      }
+    })
 
   const openAddToPreorder = () => {
     setPreorderProductSearch('')
@@ -393,7 +414,14 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
   }
 
   const openEditPreorderProduct = (product) => {
-    setPreorderProductDialogFor({ mode: 'edit', product: { ...product, lowestPrice: lowestActivePriceFor(product) } })
+    const lowestPrice = lowestActivePriceFor(product)
+    setPreorderProductDialogFor({
+      mode: 'edit',
+      product: {
+        ...product, lowestPrice, highestPrice: highestActivePriceFor(product, lowestPrice),
+        thumbnail: productImages[product.id] ? mediaUrl(productImages[product.id]) : null,
+      },
+    })
   }
 
   const savePreorderProduct = async (product, deposit, expectedDate) => {
@@ -412,6 +440,42 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     toast(`${product.name} is now available for pre-order.`, 'success')
   }
 
+  // items: [{ id, name, deposit, expectedDate }] - one transaction, all or
+  // none (see POST /api/admin/products/preorder/bulk). On a validation
+  // failure the error carries `.errors` ({productId: message}) so the
+  // dialog's review step can show each one next to its own row, rather
+  // than one blocking message that doesn't say which product it's about.
+  const saveBulkPreorderProducts = async (items) => {
+    const res = await apiFetch('/api/admin/products/preorder/bulk', {
+      method: 'POST',
+      body: JSON.stringify({
+        items: items.map(i => ({ productId: i.id, deposit: i.deposit, expectedDate: i.expectedDate || '' })),
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const err = new Error(data.error || 'Failed to add products to pre-order.')
+      err.errors = data.errors || {}
+      throw err
+    }
+    setProducts(prev => prev.map(p => {
+      const updated = data.products.find(u => u.id === p.id)
+      return updated ? { ...p, ...updated } : p
+    }))
+    setPreorderProductDialogFor(null)
+    toast(`${items.length} product${items.length !== 1 ? 's' : ''} are now available for pre-order.`, 'success')
+  }
+
+  const removeOneFromPreorder = async (product) => {
+    const res = await apiFetch(`/api/admin/products/${product.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ preorderEnabled: false }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `Failed to remove ${product.name} from pre-order.`)
+    setProducts(prev => prev.map(p => p.id === data.id ? { ...p, ...data } : p))
+  }
+
   const removeFromPreorder = async (product) => {
     const activeCount = activePreorderCountFor(product.id)
     await confirmDialog({
@@ -422,14 +486,22 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
       confirmLabel: 'Remove from pre-order',
       busyLabel: 'Removing…',
       successMessage: `${product.name} removed from pre-order`,
+      onConfirm: () => removeOneFromPreorder(product),
+    })
+  }
+
+  const removeSelectedFromPreorder = async (selectedProducts) => {
+    const totalActive = selectedProducts.reduce((sum, p) => sum + activePreorderCountFor(p.id), 0)
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Remove from pre-order?',
+      summary: `${selectedProducts.length} product${selectedProducts.length !== 1 ? 's' : ''} will no longer accept new pre-orders.${totalActive > 0 ? ` The ${totalActive} existing pre-order${totalActive !== 1 ? 's' : ''} will stay active.` : ''}`,
+      confirmLabel: 'Remove from pre-order',
+      busyLabel: 'Removing…',
+      successMessage: `${selectedProducts.length} product${selectedProducts.length !== 1 ? 's' : ''} removed from pre-order`,
       onConfirm: async () => {
-        const res = await apiFetch(`/api/admin/products/${product.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ preorderEnabled: false }),
-        })
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(data.error || 'Failed to remove from pre-order.')
-        setProducts(prev => prev.map(p => p.id === data.id ? { ...p, ...data } : p))
+        for (const product of selectedProducts) await removeOneFromPreorder(product)
+        setPreorderProductSelection(new Set())
       },
     })
   }
@@ -5278,57 +5350,96 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                     ))}
                   </div>
 
-                  {preordersTab === 'products' && (
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-                        <div style={{ fontSize: 13, color: '#9A8A8E' }}>
-                          {productsOnPreorder.length} product{productsOnPreorder.length !== 1 ? 's' : ''} on pre-order
-                        </div>
-                        <button className="upload-btn" onClick={openAddToPreorder}>Add product to pre-order</button>
-                      </div>
+                  {preordersTab === 'products' && (() => {
+                    const priceRangeFor = (p) => {
+                      const lowest = lowestActivePriceFor(p)
+                      const highest = p.optionsHaveOwnPrices
+                        ? Math.max(...((p.hasOptions ? p.options : p.customOptions) || []).filter(o => o.isActive).map(o => o.price), lowest)
+                        : lowest
+                      return highest > lowest ? `R ${lowest.toFixed(2)} – R ${highest.toFixed(2)}` : `R ${lowest.toFixed(2)}`
+                    }
+                    const sectionNameFor = (p) => categories.find(c => c.id === productCategories[p.id])?.name || 'No section'
+                    const groups = {}
+                    productsOnPreorder.forEach(p => {
+                      const name = sectionNameFor(p)
+                      if (!groups[name]) groups[name] = []
+                      groups[name].push(p)
+                    })
+                    const sectionNames = Object.keys(groups).sort((a, b) => a.localeCompare(b))
+                    const toggleSelected = (id) => setPreorderProductSelection(prev => {
+                      const next = new Set(prev)
+                      next.has(id) ? next.delete(id) : next.add(id)
+                      return next
+                    })
+                    const selectedProducts = productsOnPreorder.filter(p => preorderProductSelection.has(p.id))
 
-                      {productsOnPreorder.length === 0 ? (
-                        <div className="panel" style={{ padding: 24, textAlign: 'center' }}>
-                          <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 14 }}>No products on pre-order yet.</div>
-                          <button className="upload-btn" onClick={openAddToPreorder}>Add product to pre-order</button>
+                    return (
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+                          <div style={{ fontSize: 13, color: '#9A8A8E' }}>
+                            {productsOnPreorder.length} product{productsOnPreorder.length !== 1 ? 's' : ''} on pre-order
+                          </div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            {selectedProducts.length > 0 && (
+                              <button className="delete-btn" onClick={() => removeSelectedFromPreorder(selectedProducts)}>
+                                Remove selected ({selectedProducts.length})
+                              </button>
+                            )}
+                            <button className="upload-btn" onClick={openAddToPreorder}>Add products to pre-order</button>
+                          </div>
                         </div>
-                      ) : (
-                        <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
-                          {productsOnPreorder.map(p => {
-                            const lowest = lowestActivePriceFor(p)
-                            const highest = p.optionsHaveOwnPrices
-                              ? Math.max(...((p.hasOptions ? p.options : p.customOptions) || []).filter(o => o.isActive).map(o => o.price), lowest)
-                              : lowest
-                            const activeCount = activePreorderCountFor(p.id)
-                            return (
-                              <div key={p.id} className="student-row">
-                                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                                  <div style={{ width: 48, height: 48, borderRadius: 8, overflow: 'hidden', background: '#F7EEF0', flexShrink: 0 }}>
-                                    {productImages[p.id] && (
-                                      <img src={mediaUrl(productImages[p.id])} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                    )}
-                                  </div>
-                                  <div>
-                                    <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20' }}>{p.name}</div>
-                                    <div style={{ fontSize: 12, color: '#9A8A8E' }}>
-                                      {highest > lowest ? `R ${lowest.toFixed(2)} – R ${highest.toFixed(2)}` : `R ${lowest.toFixed(2)}`}
-                                      {' · Deposit R '}{parseFloat(p.preorderDeposit).toFixed(2)}
-                                      {p.preorderExpectedDate && ` · Expected ${new Date(p.preorderExpectedDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}`}
-                                      {` · ${activeCount} active pre-order${activeCount !== 1 ? 's' : ''}`}
-                                    </div>
-                                  </div>
-                                </div>
-                                <div style={{ display: 'flex', gap: 8 }}>
-                                  <button className="secondary-btn" onClick={() => openEditPreorderProduct(p)}>Edit</button>
-                                  <button className="delete-btn" onClick={() => removeFromPreorder(p)}>Remove</button>
-                                </div>
+
+                        {productsOnPreorder.length === 0 ? (
+                          <div className="panel" style={{ padding: 24, textAlign: 'center' }}>
+                            <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 14 }}>No products on pre-order yet.</div>
+                            <button className="upload-btn" onClick={openAddToPreorder}>Add products to pre-order</button>
+                          </div>
+                        ) : (
+                          sectionNames.map(sectionName => (
+                            <div key={sectionName} style={{ marginBottom: 20 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                                {sectionName}
                               </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                              <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+                                {groups[sectionName].map(p => {
+                                  const activeCount = activePreorderCountFor(p.id)
+                                  return (
+                                    <div key={p.id} className="student-row">
+                                      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={preorderProductSelection.has(p.id)}
+                                          onChange={() => toggleSelected(p.id)}
+                                        />
+                                        <div style={{ width: 48, height: 48, borderRadius: 8, overflow: 'hidden', background: '#F7EEF0', flexShrink: 0 }}>
+                                          {productImages[p.id] && (
+                                            <img src={mediaUrl(productImages[p.id])} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                          )}
+                                        </div>
+                                        <div>
+                                          <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20' }}>{p.name}</div>
+                                          <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                                            {priceRangeFor(p)}
+                                            {' · Deposit R '}{parseFloat(p.preorderDeposit).toFixed(2)}
+                                            {p.preorderExpectedDate && ` · Expected ${new Date(p.preorderExpectedDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                                            {` · ${activeCount} active pre-order${activeCount !== 1 ? 's' : ''}`}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div style={{ display: 'flex', gap: 8 }}>
+                                        <button className="secondary-btn" onClick={() => openEditPreorderProduct(p)}>Edit</button>
+                                        <button className="delete-btn" onClick={() => removeFromPreorder(p)}>Remove</button>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )
+                  })()}
 
                   {preordersTab === 'customers' && (
                   <>
@@ -6646,7 +6757,8 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
           search={preorderProductSearch}
           onSearchChange={setPreorderProductSearch}
           onClose={() => setPreorderProductDialogFor(null)}
-          onSave={savePreorderProduct}
+          onSaveSingle={savePreorderProduct}
+          onSaveBulk={saveBulkPreorderProducts}
         />
       )}
     </>

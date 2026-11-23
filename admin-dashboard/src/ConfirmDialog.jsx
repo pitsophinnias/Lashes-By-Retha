@@ -467,6 +467,62 @@ export function ConfirmProvider({ children }) {
           .confirm-action-btn, .confirm-danger-btn { padding: 15px 16px; font-size: 15px; }
           .confirm-cancel-link { padding: 10px 12px; font-size: 14px; }
         }
+
+        /* Shared field styling for every dialog built on this same
+           .confirm-overlay/.confirm-card shell (MessageCustomerPanel,
+           StudentDatesDialog, RecordPaymentDialog, PreorderProductDialog) -
+           defined here, not in any one of them, since ConfirmProvider is
+           the only one of these always mounted: a class defined inside a
+           conditionally-rendered dialog's own <style> only exists in the
+           DOM while that one specific dialog is open. */
+        .message-panel-card { max-width: 560px; text-align: left; }
+        .message-panel-field { margin-bottom: 14px; }
+        .message-panel-label {
+          display: block;
+          font-size: 11px;
+          font-weight: 700;
+          color: #9A8A8E;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          margin-bottom: 6px;
+        }
+        .message-panel-select, .message-panel-input, .message-panel-textarea {
+          width: 100%;
+          padding: 10px 14px;
+          border-radius: 8px;
+          border: 1px solid #EDD5DB;
+          font-size: 13px;
+          font-family: inherit;
+          color: #2C1A20;
+          background: white;
+          outline: none;
+          box-sizing: border-box;
+        }
+        .message-panel-textarea { resize: vertical; line-height: 1.5; }
+        .message-panel-select:focus, .message-panel-input:focus, .message-panel-textarea:focus {
+          border-color: #C47A8A;
+          box-shadow: 0 0 0 3px rgba(196,122,138,0.15);
+        }
+        .message-panel-hint { font-size: 12px; color: #9A8A8E; margin: -4px 0 10px; }
+        .message-panel-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+        .message-panel-btn {
+          width: 100%;
+          padding: 11px 16px;
+          font-size: 13px;
+          font-weight: 700;
+          font-family: inherit;
+          border-radius: 8px;
+          border: none;
+          cursor: pointer;
+          transition: background 0.15s;
+        }
+        .message-panel-btn:disabled { opacity: 0.5; cursor: default; }
+        .message-panel-btn-whatsapp { background: #25D366; color: white; }
+        .message-panel-btn-whatsapp:hover:not(:disabled) { background: #1DA851; }
+        .message-panel-btn-email { background: #C47A8A; color: white; }
+        .message-panel-btn-email:hover:not(:disabled) { background: #A0566A; }
+        .message-panel-btn-copy { background: #F7EEF0; color: #8C5A6A; border: 1px solid #EDD5DB; }
+        .message-panel-btn-copy:hover { background: #EDD5DB; }
       `}</style>
     </ConfirmContext.Provider>
   )
