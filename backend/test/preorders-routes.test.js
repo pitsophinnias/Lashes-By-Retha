@@ -185,6 +185,102 @@ test('GET /api/products exposes preorderEnabled/preorderDeposit for a pre-order 
   assert.strictEqual(row.preorderDeposit, 300)
 })
 
+// ── Admin: managing which products are on pre-order ───────────────────────
+// The Pre-orders page's "Pre-order products" tab and the product Edit
+// form's "Pre-order" checkbox both just PATCH the same product fields
+// (see backend/index.js's PATCH /api/admin/products/:id) - no separate
+// routes of their own.
+
+test('adding a product to pre-order (PATCH) sets the fields the "Add to pre-order" dialog sends, excluding it from a fresh "available" list', async () => {
+  const product = await createProduct({ preorderEnabled: false, price: 800 })
+  const res = await request('PATCH', `/api/admin/products/${product.id}`, {
+    preorderEnabled: true, preorderDeposit: 300, preorderExpectedDate: '2026-12-15',
+  }, ownerHeaders())
+  assert.strictEqual(res.status, 200)
+  assert.strictEqual(res.data.preorderEnabled, true)
+  assert.strictEqual(res.data.preorderDeposit, 300)
+  assert.strictEqual(res.data.preorderExpectedDate.slice(0, 10), '2026-12-15')
+
+  // "Not already on pre-order" (what the Add dialog's search excludes) is
+  // exactly preorderEnabled - confirm the list this product now appears in
+  // reports it correctly, so the frontend's own filter has the right data.
+  const list = await request('GET', '/api/admin/products', undefined, ownerHeaders())
+  const listed = list.data.find(p => p.id === product.id)
+  assert.strictEqual(listed.preorderEnabled, true)
+})
+
+test('editing a pre-order product\'s deposit/date goes through the same PATCH the checkbox uses', async () => {
+  const product = await createProduct({ preorderEnabled: true, deposit: 400, price: 1000 })
+  const res = await request('PATCH', `/api/admin/products/${product.id}`, {
+    preorderDeposit: 250, preorderExpectedDate: '2026-11-01',
+  }, ownerHeaders())
+  assert.strictEqual(res.status, 200)
+  assert.strictEqual(res.data.preorderDeposit, 250)
+  assert.strictEqual(res.data.preorderExpectedDate.slice(0, 10), '2026-11-01')
+  assert.strictEqual(res.data.preorderEnabled, true, 'editing the deposit/date must not turn pre-order off')
+})
+
+test('removing a product from pre-order keeps its existing customer pre-orders active, and turns preorder_enabled off', async () => {
+  const product = await createProduct({ preorderEnabled: true, deposit: 300, price: 1500 })
+  const existing = await createPreorderDirect(product, { status: 'deposit_paid' })
+
+  const res = await request('PATCH', `/api/admin/products/${product.id}`, { preorderEnabled: false }, ownerHeaders())
+  assert.strictEqual(res.status, 200)
+  assert.strictEqual(res.data.preorderEnabled, false)
+
+  const existingRow = (await pool.query('SELECT status FROM preorders WHERE id = $1', [existing.id])).rows[0]
+  assert.strictEqual(existingRow.status, 'deposit_paid', 'an existing pre-order must be completely untouched by removing the product')
+
+  // A new pre-order is blocked via this same flag - already covered by
+  // "POST /api/preorders rejects a product that is not pre-order enabled"
+  // above, so checked here via the DB directly rather than spending
+  // another request against this file's shared ordersLimiter budget.
+  const productRow = (await pool.query('SELECT preorder_enabled FROM products WHERE id = $1', [product.id])).rows[0]
+  assert.strictEqual(productRow.preorder_enabled, false)
+})
+
+// ── Deposit validation ──────────────────────────────────────────────────────
+
+test('a deposit of 0 or less is rejected', async () => {
+  const product = await createProduct({ preorderEnabled: false, price: 800 })
+  const res = await request('PATCH', `/api/admin/products/${product.id}`, {
+    preorderEnabled: true, preorderDeposit: 0,
+  }, ownerHeaders())
+  assert.strictEqual(res.status, 400)
+})
+
+test('a deposit above the product\'s price is rejected', async () => {
+  const product = await createProduct({ preorderEnabled: false, price: 800 })
+  const res = await request('PATCH', `/api/admin/products/${product.id}`, {
+    preorderEnabled: true, preorderDeposit: 900,
+  }, ownerHeaders())
+  assert.strictEqual(res.status, 400)
+  assert.match(res.data.error, /less than the price/i)
+})
+
+test('for a wig-style product with options_have_own_prices, the deposit is checked against the CHEAPEST active option, not the base price', async () => {
+  const product = await createProduct({ preorderEnabled: false, price: 150 })
+  await pool.query('UPDATE products SET option_label = $1, options_have_own_prices = TRUE WHERE id = $2', ['Length', product.id])
+  await pool.query(
+    `INSERT INTO product_options (product_id, name, price, is_active, position) VALUES
+      ($1, '10 inch', 2750, TRUE, 1),
+      ($1, '14 inch', 3200, TRUE, 2)`,
+    [product.id]
+  )
+
+  // A deposit between the base price (150) and the cheapest option (2750)
+  // must still be rejected - the base price is not the right basis here.
+  const tooHighForCheapest = await request('PATCH', `/api/admin/products/${product.id}`, {
+    preorderEnabled: true, preorderDeposit: 2800,
+  }, ownerHeaders())
+  assert.strictEqual(tooHighForCheapest.status, 400)
+
+  const ok = await request('PATCH', `/api/admin/products/${product.id}`, {
+    preorderEnabled: true, preorderDeposit: 1000,
+  }, ownerHeaders())
+  assert.strictEqual(ok.status, 200)
+})
+
 test('GET /api/payments/options reports whether Ozow is available, for the pre-order button', async () => {
   const res = await request('GET', '/api/payments/options')
   assert.strictEqual(res.status, 200)
@@ -392,6 +488,7 @@ after(async () => {
   await pool.query('DELETE FROM preorders WHERE id = ANY($1)', [createdPreorderIds])
   await pool.query('DELETE FROM order_items WHERE order_id = ANY($1)', [createdOrderIds])
   await pool.query('DELETE FROM orders WHERE id = ANY($1)', [createdOrderIds])
+  await pool.query('DELETE FROM product_options WHERE product_id = ANY($1)', [createdProductIds])
   await pool.query('DELETE FROM products WHERE id = ANY($1)', [createdProductIds])
   // The owner-access test above writes an audit log row as the owner test
   // user - that row has no ON DELETE on its user_id, so it must go first.

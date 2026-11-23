@@ -393,6 +393,7 @@ const createTables = async () => {
   await pool.query(`
     ALTER TABLE products ADD COLUMN IF NOT EXISTS preorder_enabled BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS preorder_deposit NUMERIC(10,2) NOT NULL DEFAULT 500;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS preorder_expected_date DATE;
 
     CREATE TABLE IF NOT EXISTS preorders (
       id SERIAL PRIMARY KEY,
@@ -699,6 +700,20 @@ const createTables = async () => {
     ALTER TABLE product_options ADD COLUMN IF NOT EXISTS on_sale BOOLEAN NOT NULL DEFAULT FALSE;
   `)
 
+  // Per-option pricing (e.g. a wig costing more at 14 inches than 10) -
+  // off by default, so a makeup shade or lash length keeps the one
+  // product price it's always had. With the flag on, an option's own
+  // price (when set) is the base price getEffectivePrice uses for it
+  // instead of the product's - see src/pricing/getEffectivePrice.js, the
+  // single place this is decided. Only product_options gets a price
+  // column, not product_variants: this is for named options like wig
+  // lengths, not the lash length/curl variants, which always share one
+  // product price.
+  await pool.query(`
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS options_have_own_prices BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE product_options ADD COLUMN IF NOT EXISTS price NUMERIC(10,2);
+  `)
+
   // Order-item and pre-order price snapshots: what the customer actually
   // paid (already captured in price/price_at_order) alongside the normal
   // price it was discounted from, so analytics never has to look at
@@ -872,6 +887,47 @@ const createTables = async () => {
       WHERE product_id = 2 AND length_mm = 10 AND curl = 'D'
     `)
     console.log('Demo sale pricing seeded')
+  }
+
+  // Demo wig, seeded once so options_have_own_prices has something to try
+  // out: three lengths at three different prices, one of them on sale.
+  // Guarded on this exact product not existing yet, so it's never
+  // reseeded after Retha has since edited or deleted it.
+  const { rows: wigRows } = await pool.query(
+    `SELECT id FROM products WHERE name = 'Luxe Body Wave Wig'`
+  )
+  if (wigRows.length === 0) {
+    const wigResult = await pool.query(
+      `INSERT INTO products (name, description, detail, price, stock_quantity, option_label, options_have_own_prices)
+       VALUES (
+         'Luxe Body Wave Wig',
+         'A soft, full-bodied wave wig in a natural-looking density - cut and ready to wear.',
+         '100% human hair | Lace front',
+         2750, 0, 'Length', TRUE
+       ) RETURNING id`
+    )
+    const wigId = wigResult.rows[0].id
+    await pool.query(
+      `INSERT INTO product_options (product_id, name, price, stock_quantity, position) VALUES
+        ($1, '10 inch', 2750, 5, 1),
+        ($1, '14 inch', 3200, 5, 2),
+        ($1, '18 inch', 3600, 3, 3)`,
+      [wigId]
+    )
+    // The 14 inch length on sale, so the admin Products page and the
+    // customer-site dropdown both have a real sale-against-option-price
+    // example to look at out of the box.
+    await pool.query(
+      `UPDATE product_options SET on_sale = TRUE, sale_price = 2900 WHERE product_id = $1 AND name = '14 inch'`,
+      [wigId]
+    )
+    await pool.query(
+      `INSERT INTO product_categories (product_id, category_id)
+       SELECT $1, id FROM categories WHERE name = 'Wigs'
+       ON CONFLICT (product_id) DO NOTHING`,
+      [wigId]
+    )
+    console.log('Demo wig (per-length pricing) seeded')
   }
 
   console.log('Database tables ready')

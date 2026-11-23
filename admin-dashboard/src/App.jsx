@@ -8,6 +8,7 @@ import { PAGE_TITLES, PATH_TO_PAGE, pageForPath, pathForPage } from './router.js
 import MessageCustomerPanel from './MessageCustomerPanel.jsx'
 import StudentDatesDialog from './StudentDatesDialog.jsx'
 import RecordPaymentDialog from './RecordPaymentDialog.jsx'
+import PreorderProductDialog from './PreorderProductDialog.jsx'
 import { whatsappLink } from './messaging/channels.js'
 import {
   buildOrderTemplateData, buildPreorderTemplateData, buildStudentTemplateData,
@@ -167,6 +168,14 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
   const [preorderSettingsStatus, setPreorderSettingsStatus] = useState(null)
   const [courierTrackingDraft, setCourierTrackingDraft] = useState({}) // preorderId -> text
   const [showTestDataEnabled, setShowTestDataEnabled] = useState(false)
+  // "Customer pre-orders" (existing view) vs "Pre-order products" (which
+  // products currently accept pre-orders) - kept in the URL like Orders'
+  // active/archived view.
+  const [preordersTab, setPreordersTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'customers')
+  // null, 'add', or the product being edited - the same dialog handles
+  // both (see PreorderProductDialog below).
+  const [preorderProductDialogFor, setPreorderProductDialogFor] = useState(null)
+  const [preorderProductSearch, setPreorderProductSearch] = useState('')
 
   // ── Business calendar ────────────────────────────────────────────────────
   // Months from the real current month that the dashboard calendar is
@@ -347,6 +356,82 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     } catch {
       // silent fail
     }
+  }
+
+  // ── Pre-order products (which products currently accept pre-orders) ───────
+  // The cheapest a product can currently be bought for, across its own
+  // ACTIVE options - recomputed here rather than trusted from the
+  // product's own top-level price/effectivePrice fields, since those are
+  // meant for display and (on the admin list) aren't guaranteed to only
+  // ever reflect active options.
+  const lowestActivePriceFor = (product) => {
+    if (product.optionsHaveOwnPrices) {
+      const opts = (product.hasOptions ? product.options : product.customOptions) || []
+      const activePrices = opts.filter(o => o.isActive).map(o => o.price)
+      if (activePrices.length > 0) return Math.min(...activePrices)
+    }
+    return product.price
+  }
+
+  // Count of this product's customer pre-orders that haven't been
+  // cancelled or refunded - shown on the "Pre-order products" row, and in
+  // the Remove confirmation.
+  const activePreorderCountFor = (productId) => {
+    const group = preorderGroups.find(g => g.productId === productId)
+    if (!group) return 0
+    return group.preorders.filter(p => !['cancelled', 'refunded'].includes(p.status)).length
+  }
+
+  const productsOnPreorder = products.filter(p => p.preorderEnabled)
+  const productsAvailableForPreorder = products
+    .filter(p => p.isActive && !p.preorderEnabled)
+    .map(p => ({ ...p, lowestPrice: lowestActivePriceFor(p) }))
+
+  const openAddToPreorder = () => {
+    setPreorderProductSearch('')
+    setPreorderProductDialogFor({ mode: 'add', product: null })
+  }
+
+  const openEditPreorderProduct = (product) => {
+    setPreorderProductDialogFor({ mode: 'edit', product: { ...product, lowestPrice: lowestActivePriceFor(product) } })
+  }
+
+  const savePreorderProduct = async (product, deposit, expectedDate) => {
+    const res = await apiFetch(`/api/admin/products/${product.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        preorderEnabled: true,
+        preorderDeposit: deposit,
+        preorderExpectedDate: expectedDate || '',
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Failed to save.')
+    setProducts(prev => prev.map(p => p.id === data.id ? { ...p, ...data } : p))
+    setPreorderProductDialogFor(null)
+    toast(`${product.name} is now available for pre-order.`, 'success')
+  }
+
+  const removeFromPreorder = async (product) => {
+    const activeCount = activePreorderCountFor(product.id)
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Remove from pre-order?',
+      subject: { image: productImages[product.id] ? mediaUrl(productImages[product.id]) : null, name: product.name },
+      summary: `${product.name} will no longer accept new pre-orders.${activeCount > 0 ? ` The ${activeCount} existing pre-order${activeCount !== 1 ? 's' : ''} will stay active.` : ''}`,
+      confirmLabel: 'Remove from pre-order',
+      busyLabel: 'Removing…',
+      successMessage: `${product.name} removed from pre-order`,
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/admin/products/${product.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ preorderEnabled: false }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Failed to remove from pre-order.')
+        setProducts(prev => prev.map(p => p.id === data.id ? { ...p, ...data } : p))
+      },
+    })
   }
 
   const savePreorderLeadTime = async () => {
@@ -1396,11 +1481,51 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     setOptionsManagerProductId(product.id)
     setOptionLabelDraft(product.optionLabel || '')
     setOptionsManagerSearch('')
-    setNewOptionDraft({ name: '', swatchHex: '', stockQuantity: '' })
+    setNewOptionDraft({ name: '', swatchHex: '', stockQuantity: '', price: product.optionsHaveOwnPrices ? String(product.price) : '' })
     setBulkOptionsOpen(false)
     setBulkOptionsText('')
     setBulkOptionsStartStock('')
     setOptionsManagerStatus(null)
+  }
+
+  // Turning per-option pricing off is a step back from what's currently
+  // shown (every option's own price stops being used), so it's confirmed
+  // first - turning it on isn't, since nothing visible changes until
+  // prices are actually set differently (every option is pre-filled with
+  // the current product price, so nothing can go wrong by switching it
+  // on). Prices already typed in are kept either way.
+  const toggleOptionsHaveOwnPrices = async (product, turnOn) => {
+    if (!turnOn) {
+      await confirmDialog({
+        variant: 'neutral',
+        title: 'Use one price for every option?',
+        summary: `All options will go back to the main product price of R ${Number(product.price).toFixed(2)}.`,
+        confirmLabel: 'Use one price',
+        busyLabel: 'Saving…',
+        successMessage: 'Now using one price for every option',
+        onConfirm: async () => {
+          const res = await apiFetch(`/api/admin/products/${product.id}`, {
+            method: 'PATCH', body: JSON.stringify({ optionsHaveOwnPrices: false }),
+          })
+          if (!res.ok) throw new Error('Failed to update.')
+          await fetchProducts()
+        },
+      })
+      return
+    }
+    try {
+      const res = await apiFetch(`/api/admin/products/${product.id}`, {
+        method: 'PATCH', body: JSON.stringify({ optionsHaveOwnPrices: true }),
+      })
+      if (res.ok) {
+        await fetchProducts()
+        setNewOptionDraft(prev => ({ ...prev, price: String(product.price) }))
+      } else {
+        setOptionsManagerStatus({ type: 'error', message: 'Failed to turn on per-option pricing.' })
+      }
+    } catch {
+      setOptionsManagerStatus({ type: 'error', message: 'Failed to turn on per-option pricing.' })
+    }
   }
 
   const saveOptionLabel = async () => {
@@ -1427,17 +1552,19 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
 
   const addCustomOption = async () => {
     if (!newOptionDraft.name.trim()) return
+    const addedProduct = products.find(p => p.id === optionsManagerProductId)
     try {
       const res = await apiFetch(`/api/admin/products/${optionsManagerProductId}/options`, {
         method: 'POST',
         body: JSON.stringify({
           name: newOptionDraft.name, swatchHex: newOptionDraft.swatchHex || null, stockQuantity: newOptionDraft.stockQuantity,
+          price: newOptionDraft.price,
         }),
       })
       const data = await res.json()
       if (res.ok) {
         await fetchProducts()
-        setNewOptionDraft({ name: '', swatchHex: '', stockQuantity: '' })
+        setNewOptionDraft({ name: '', swatchHex: '', stockQuantity: '', price: addedProduct?.optionsHaveOwnPrices ? String(addedProduct.price) : '' })
         setOptionsManagerStatus(null)
       } else {
         setOptionsManagerStatus({ type: 'error', message: data.error || 'Failed to add option.' })
@@ -1916,6 +2043,7 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
       if (page === 'images') setImageTab(params.get('tab') || 'products')
       if (page === 'notifications') setNotifTab(params.get('tab') || 'all')
       if (page === 'orders') setOrdersView(params.get('view') || 'active')
+      if (page === 'preorders') setPreordersTab(params.get('tab') || 'customers')
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -1961,6 +2089,13 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     url.searchParams.set('view', ordersView)
     window.history.replaceState(null, '', url.pathname + url.search)
   }, [activePage, ordersView])
+
+  useEffect(() => {
+    if (activePage !== 'preorders') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('tab', preordersTab)
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, preordersTab])
 
   const changeBusinessPassword = async () => {
     setBPwMsg('')
@@ -3745,7 +3880,17 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                               {p.description}
                             </div>
                             <div style={{ fontSize: 14, fontWeight: 700, color: '#C47A8A', marginBottom: 4 }}>
-                              R {p.price}
+                              {(() => {
+                                if (p.hasCustomOptions && p.optionsHaveOwnPrices) {
+                                  const activePrices = p.customOptions.filter(o => o.isActive).map(o => o.price)
+                                  if (activePrices.length > 0) {
+                                    const min = Math.min(...activePrices)
+                                    const max = Math.max(...activePrices)
+                                    if (min !== max) return <>R {min.toFixed(2)} &ndash; R {max.toFixed(2)}</>
+                                  }
+                                }
+                                return <>R {p.price}</>
+                              })()}
                               {p.onSale && !p.hasOptions && !p.hasCustomOptions && p.effectivePrice && (
                                 <span style={{ fontSize: 12, fontWeight: 600, color: '#9A8A8E', marginLeft: 6 }}>
                                   &rarr; sale price R {p.effectivePrice.price.toFixed(2)}
@@ -3826,12 +3971,14 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                           </>
                         ) : (
                           <>
+                            <div className="field-label" style={{ marginBottom: 4 }}>Name</div>
                             <input
                               className="category-input"
                               style={{ width: '100%', marginBottom: 8 }}
                               value={editingProduct.name}
                               onChange={e => setEditingProduct(prev => ({ ...prev, name: e.target.value }))}
                             />
+                            <div className="field-label" style={{ marginBottom: 4 }}>Description</div>
                             <textarea
                               className="category-input"
                               style={{ width: '100%', marginBottom: 8, resize: 'vertical' }}
@@ -3839,6 +3986,7 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                               value={editingProduct.description}
                               onChange={e => setEditingProduct(prev => ({ ...prev, description: e.target.value }))}
                             />
+                            <div className="field-label" style={{ marginBottom: 4 }}>Short details</div>
                             <input
                               className="category-input"
                               style={{ width: '100%', marginBottom: 8 }}
@@ -3847,26 +3995,36 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                               placeholder="Detail"
                             />
                             <div style={{ display: 'flex', gap: 8 }}>
-                              <input
-                                className="category-input"
-                                type="number"
-                                value={editingProduct.price}
-                                onChange={e => setEditingProduct(prev => ({ ...prev, price: e.target.value }))}
-                                placeholder="Price (R)"
-                              />
-                              <input
-                                className="category-input"
-                                value={editingProduct.badge || ''}
-                                onChange={e => setEditingProduct(prev => ({ ...prev, badge: e.target.value }))}
-                                placeholder="Badge"
-                              />
-                              <input
-                                className="category-input"
-                                type="number"
-                                value={editingProduct.lowStockThreshold}
-                                onChange={e => setEditingProduct(prev => ({ ...prev, lowStockThreshold: e.target.value }))}
-                                placeholder="Low stock at"
-                              />
+                              <div style={{ flex: 1 }}>
+                                <div className="field-label" style={{ marginBottom: 4 }}>Price (R)</div>
+                                <input
+                                  className="category-input"
+                                  style={{ width: '100%' }}
+                                  type="number"
+                                  value={editingProduct.price}
+                                  onChange={e => setEditingProduct(prev => ({ ...prev, price: e.target.value }))}
+                                />
+                              </div>
+                              <div style={{ flex: 1 }}>
+                                <div className="field-label" style={{ marginBottom: 4 }}>Badge</div>
+                                <input
+                                  className="category-input"
+                                  style={{ width: '100%' }}
+                                  value={editingProduct.badge || ''}
+                                  onChange={e => setEditingProduct(prev => ({ ...prev, badge: e.target.value }))}
+                                />
+                              </div>
+                              <div style={{ flex: 1 }}>
+                                <div className="field-label" style={{ marginBottom: 4 }}>Stock</div>
+                                <input
+                                  className="category-input"
+                                  style={{ width: '100%' }}
+                                  type="number"
+                                  value={editingProduct.lowStockThreshold}
+                                  onChange={e => setEditingProduct(prev => ({ ...prev, lowStockThreshold: e.target.value }))}
+                                  placeholder="Low stock at"
+                                />
+                              </div>
                             </div>
                             <div style={{ marginTop: 10, padding: '10px 12px', background: '#FAF6F4', borderRadius: 8 }}>
                               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: '#3E2A30', cursor: 'pointer' }}>
@@ -3895,16 +4053,24 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                               </label>
                               {editingProduct.preorderEnabled && (
                                 <div style={{ marginTop: 8 }}>
+                                  <div className="field-label" style={{ marginBottom: 4 }}>Deposit (R)</div>
                                   <input
                                     className="category-input"
                                     type="number"
                                     style={{ width: 140 }}
                                     value={editingProduct.preorderDeposit}
                                     onChange={e => setEditingProduct(prev => ({ ...prev, preorderDeposit: e.target.value }))}
-                                    placeholder="Deposit (R)"
+                                  />
+                                  <div className="field-label" style={{ marginTop: 8, marginBottom: 4 }}>Expected arrival date (optional)</div>
+                                  <input
+                                    className="category-input"
+                                    type="date"
+                                    style={{ width: 160 }}
+                                    value={editingProduct.preorderExpectedDate || ''}
+                                    onChange={e => setEditingProduct(prev => ({ ...prev, preorderExpectedDate: e.target.value }))}
                                   />
                                   <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 6 }}>
-                                    Pre-orders are ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days (change this on the Pre-orders page).
+                                    Pre-orders are ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days (change this, or the deposit and arrival date, on the Pre-orders page).
                                   </div>
                                 </div>
                               )}
@@ -3921,6 +4087,7 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                 id: p.id, name: p.name, description: p.description, detail: p.detail,
                                 price: p.price, badge: p.badge || '', lowStockThreshold: p.lowStockThreshold,
                                 preorderEnabled: p.preorderEnabled, preorderDeposit: p.preorderDeposit,
+                                preorderExpectedDate: (p.preorderExpectedDate || '').slice(0, 10),
                               })}
                             >
                               Edit
@@ -4057,6 +4224,25 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                           <button className="secondary-btn" onClick={saveOptionLabel}>Save Label</button>
                         </div>
 
+                        {optProduct.optionLabel && (
+                          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 16, cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              style={{ marginTop: 2 }}
+                              checked={!!optProduct.optionsHaveOwnPrices}
+                              onChange={e => toggleOptionsHaveOwnPrices(optProduct, e.target.checked)}
+                            />
+                            <span>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: '#3E2A30', display: 'block' }}>
+                                Different price per option
+                              </span>
+                              <span style={{ fontSize: 11, color: '#9A8A8E' }}>
+                                Use this when lengths cost different amounts, e.g. wigs.
+                              </span>
+                            </span>
+                          </label>
+                        )}
+
                         {optionsManagerStatus && (
                           <div className={optionsManagerStatus.type === 'error' ? 'error-msg' : 'success-msg'} style={{ marginBottom: 12 }}>
                             {optionsManagerStatus.message}
@@ -4088,6 +4274,16 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                 onChange={e => setNewOptionDraft(prev => ({ ...prev, stockQuantity: e.target.value }))}
                                 placeholder="Stock"
                               />
+                              {optProduct.optionsHaveOwnPrices && (
+                                <input
+                                  className="category-input"
+                                  type="number"
+                                  style={{ width: 100 }}
+                                  value={newOptionDraft.price}
+                                  onChange={e => setNewOptionDraft(prev => ({ ...prev, price: e.target.value }))}
+                                  placeholder="Price (R)"
+                                />
+                              )}
                               <button className="upload-btn" onClick={addCustomOption}>Add</button>
                             </div>
 
@@ -4166,6 +4362,19 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                     onChange={e => updateCustomOption(o.id, { swatchHex: e.target.value })}
                                     style={{ width: 28, height: 28, padding: 0, border: '1px solid #EDD5DB', borderRadius: 6, cursor: 'pointer', flexShrink: 0 }}
                                   />
+                                  {optProduct.optionsHaveOwnPrices && (
+                                    <input
+                                      className="category-input"
+                                      type="number"
+                                      style={{ width: 90, padding: '4px 8px', fontSize: 13 }}
+                                      defaultValue={o.price ?? ''}
+                                      title="Price (R)"
+                                      onBlur={e => {
+                                        const next = e.target.value === '' ? '' : e.target.value
+                                        if (parseFloat(next) !== o.price) updateCustomOption(o.id, { price: next })
+                                      }}
+                                    />
+                                  )}
                                   <span
                                     onClick={() => { setStockAdjustTarget({ kind: 'customOption', productId: optProduct.id, optionId: o.id, name: `${optProduct.name}, ${optProduct.optionLabel}: ${o.name}`, stockQuantity: o.stockQuantity }); setProductFormStatus(null) }}
                                     style={{ fontSize: 12, fontWeight: 600, color: '#8C5A6A', cursor: 'pointer', minWidth: 46, textAlign: 'right' }}
@@ -4207,11 +4416,16 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                     ...prev,
                     options: { ...prev.options, [id]: { ...prev.options[id], ...patch } },
                   }))
-                  const previewSave = (salePriceStr) => {
+                  const previewSave = (salePriceStr, basePrice) => {
                     const salePrice = parseFloat(salePriceStr)
-                    if (isNaN(salePrice) || salePrice <= 0 || salePrice >= normalPrice) return null
-                    return normalPrice - salePrice
+                    if (isNaN(salePrice) || salePrice <= 0 || salePrice >= basePrice) return null
+                    return basePrice - salePrice
                   }
+                  // With options_have_own_prices on, each row's own price is
+                  // the discount base, not the product's (e.g. a wig costing
+                  // more at 14 inches) - falls back to the product price for
+                  // any option that doesn't have its own.
+                  const optionBasePrice = (o) => (saleProduct.optionsHaveOwnPrices && o.price != null) ? o.price : normalPrice
 
                   return (
                     <div
@@ -4226,7 +4440,10 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                           Sale for "{saleProduct.name}"
                         </div>
                         <div style={{ fontSize: 12, color: '#9A8A8E', marginBottom: 16 }}>
-                          No start or end date - you switch it on and off yourself. Normal price: R {normalPrice.toFixed(2)}.
+                          No start or end date - you switch it on and off yourself.
+                          {saleProduct.optionsHaveOwnPrices
+                            ? ' Each option below has its own price - the sale discounts that, not the main product price.'
+                            : ` Normal price: R ${normalPrice.toFixed(2)}.`}
                         </div>
 
                         {saleManagerStatus && (
@@ -4239,7 +4456,8 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
                             {optionList.map(o => {
                               const draft = saleDraft.options[o.id] || { onSale: false, salePrice: '' }
-                              const save = previewSave(draft.salePrice)
+                              const basePrice = optionBasePrice(o)
+                              const save = previewSave(draft.salePrice, basePrice)
                               const name = optionLabel ? o.name : `${o.lengthMm}mm, ${o.curl} curl`
                               return (
                                 <div key={o.id} style={{ border: '1px solid #F0E8E8', borderRadius: 8, padding: 10 }}>
@@ -4251,6 +4469,9 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                                         onChange={e => setOptionDraft(o.id, { onSale: e.target.checked })}
                                       />
                                       {name}
+                                      {saleProduct.optionsHaveOwnPrices && (
+                                        <span style={{ color: '#9A8A8E', fontWeight: 400 }}>· R {basePrice.toFixed(2)}</span>
+                                      )}
                                     </label>
                                     <input
                                       className="category-input"
@@ -5031,6 +5252,86 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
               const cancellable = (status) => !['dispatched', 'collected', 'cancelled', 'refunded'].includes(status)
               return (
                 <div>
+                  <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #EDD5DB', marginBottom: 24 }}>
+                    {[
+                      { label: 'Customer pre-orders', value: 'customers' },
+                      { label: 'Pre-order products', value: 'products' },
+                    ].map(tab => (
+                      <button
+                        key={tab.value}
+                        onClick={() => setPreordersTab(tab.value)}
+                        style={{
+                          padding: '10px 20px',
+                          border: 'none',
+                          background: 'transparent',
+                          fontSize: 14,
+                          fontFamily: 'inherit',
+                          cursor: 'pointer',
+                          color: preordersTab === tab.value ? '#C47A8A' : '#9A8A8E',
+                          borderBottom: preordersTab === tab.value ? '2px solid #C47A8A' : '2px solid transparent',
+                          fontWeight: preordersTab === tab.value ? 700 : 500,
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {preordersTab === 'products' && (
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+                        <div style={{ fontSize: 13, color: '#9A8A8E' }}>
+                          {productsOnPreorder.length} product{productsOnPreorder.length !== 1 ? 's' : ''} on pre-order
+                        </div>
+                        <button className="upload-btn" onClick={openAddToPreorder}>Add product to pre-order</button>
+                      </div>
+
+                      {productsOnPreorder.length === 0 ? (
+                        <div className="panel" style={{ padding: 24, textAlign: 'center' }}>
+                          <div style={{ fontSize: 13, color: '#9A8A8E', marginBottom: 14 }}>No products on pre-order yet.</div>
+                          <button className="upload-btn" onClick={openAddToPreorder}>Add product to pre-order</button>
+                        </div>
+                      ) : (
+                        <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+                          {productsOnPreorder.map(p => {
+                            const lowest = lowestActivePriceFor(p)
+                            const highest = p.optionsHaveOwnPrices
+                              ? Math.max(...((p.hasOptions ? p.options : p.customOptions) || []).filter(o => o.isActive).map(o => o.price), lowest)
+                              : lowest
+                            const activeCount = activePreorderCountFor(p.id)
+                            return (
+                              <div key={p.id} className="student-row">
+                                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                  <div style={{ width: 48, height: 48, borderRadius: 8, overflow: 'hidden', background: '#F7EEF0', flexShrink: 0 }}>
+                                    {productImages[p.id] && (
+                                      <img src={mediaUrl(productImages[p.id])} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20' }}>{p.name}</div>
+                                    <div style={{ fontSize: 12, color: '#9A8A8E' }}>
+                                      {highest > lowest ? `R ${lowest.toFixed(2)} – R ${highest.toFixed(2)}` : `R ${lowest.toFixed(2)}`}
+                                      {' · Deposit R '}{parseFloat(p.preorderDeposit).toFixed(2)}
+                                      {p.preorderExpectedDate && ` · Expected ${new Date(p.preorderExpectedDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                                      {` · ${activeCount} active pre-order${activeCount !== 1 ? 's' : ''}`}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                  <button className="secondary-btn" onClick={() => openEditPreorderProduct(p)}>Edit</button>
+                                  <button className="delete-btn" onClick={() => removeFromPreorder(p)}>Remove</button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {preordersTab === 'customers' && (
+                  <>
                   <div style={{
                     background: 'linear-gradient(135deg, #C47A8A 0%, #9E5A6A 100%)',
                     borderRadius: 14,
@@ -5190,6 +5491,8 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                   <div style={{ fontSize: 11, color: '#9A8A8E', marginTop: 10 }}>
                     Refunds are done in the Ozow dashboard - Cancel and Mark refunded here only record the status change.
                   </div>
+                  </>
+                  )}
                 </div>
               )
             })()}
@@ -6332,6 +6635,18 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
           student={recordPaymentFor}
           onClose={() => setRecordPaymentFor(null)}
           onSave={(amount, note) => savePaymentForStudent(recordPaymentFor, amount, note)}
+        />
+      )}
+
+      {preorderProductDialogFor && (
+        <PreorderProductDialog
+          mode={preorderProductDialogFor.mode}
+          product={preorderProductDialogFor.product}
+          productsAvailable={productsAvailableForPreorder}
+          search={preorderProductSearch}
+          onSearchChange={setPreorderProductSearch}
+          onClose={() => setPreorderProductDialogFor(null)}
+          onSave={savePreorderProduct}
         />
       )}
     </>

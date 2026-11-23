@@ -446,6 +446,7 @@ const fetchCustomOptionsByProduct = async (includeInactive) => {
       isActive: o.is_active,
       onSale: o.on_sale,
       salePrice: o.sale_price !== null ? parseFloat(o.sale_price) : null,
+      price: o.price !== null ? parseFloat(o.price) : null,
     })
   })
   return byProduct
@@ -461,10 +462,10 @@ const fetchCustomOptionsByProduct = async (includeInactive) => {
 const attachEffectivePricing = (productRow, options) => {
   const optionsWithPricing = (options || []).map(o => ({
     ...o,
-    ...getEffectivePrice(productRow, { on_sale: o.onSale, sale_price: o.salePrice }),
+    ...getEffectivePrice(productRow, { on_sale: o.onSale, sale_price: o.salePrice, price: o.price }),
   }))
   const productPricing = options && options.length > 0
-    ? getLowestEffectivePrice(productRow, options.map(o => ({ on_sale: o.onSale, sale_price: o.salePrice })))
+    ? getLowestEffectivePrice(productRow, options.map(o => ({ on_sale: o.onSale, sale_price: o.salePrice, price: o.price })))
     : getEffectivePrice(productRow)
   return { optionsWithPricing, productPricing }
 }
@@ -2010,7 +2011,7 @@ app.post('/api/admin/test-data/delete', authenticate, requireRole('sysadmin'), a
 app.get('/api/products', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, description, detail, price, sale_price, on_sale, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit, option_label
+      `SELECT id, name, description, detail, price, sale_price, on_sale, badge, stock_quantity, low_stock_threshold, preorder_enabled, preorder_deposit, preorder_expected_date, option_label, options_have_own_prices
        FROM products WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY id ASC`
     )
     const variantsByProduct = await fetchVariantsByProduct(false)
@@ -2040,8 +2041,10 @@ app.get('/api/products', async (req, res) => {
         optionLabel: p.option_label,
         hasCustomOptions,
         customOptions: pricedCustomOptions,
+        optionsHaveOwnPrices: p.options_have_own_prices,
         preorderEnabled: p.preorder_enabled,
         preorderDeposit: parseFloat(p.preorder_deposit),
+        preorderExpectedDate: p.preorder_expected_date,
         // price/originalPrice/onSale/saveAmount - the effective price for
         // this product (lowest across its options, if it has any).
         ...productPricing,
@@ -2085,8 +2088,10 @@ app.get('/api/admin/products', authenticate, requireRole('sysadmin', 'owner'), a
         optionLabel: p.option_label,
         hasCustomOptions,
         customOptions: pricedCustomOptions,
+        optionsHaveOwnPrices: p.options_have_own_prices,
         preorderEnabled: p.preorder_enabled,
         preorderDeposit: parseFloat(p.preorder_deposit),
+        preorderExpectedDate: p.preorder_expected_date,
         // The admin screen needs the product's own normal price (price,
         // above) to edit it, plus whether anything on this product is
         // currently on sale, for the "ON SALE" tag and Manage Sale button.
@@ -2111,6 +2116,21 @@ const validatePreorderDeposit = (deposit, price) => {
   if (isNaN(deposit) || deposit < 10) return 'Pre-order deposit must be at least R10.'
   if (deposit >= price) return 'Pre-order deposit must be less than the price.'
   return null
+}
+
+// The price a pre-order deposit is validated against - the product's own
+// price normally, but the CHEAPEST active option's effective price for a
+// product with options_have_own_prices on (e.g. a wig priced differently
+// per length) - a deposit that's fine against the most expensive length
+// could easily exceed the cheapest one otherwise.
+const lowestPriceForProduct = async (productRow) => {
+  if (!productRow.options_have_own_prices) return parseFloat(productRow.price)
+  const optionsResult = await pool.query(
+    'SELECT price, on_sale, sale_price FROM product_options WHERE product_id = $1 AND is_active = TRUE',
+    [productRow.id]
+  )
+  if (optionsResult.rows.length === 0) return parseFloat(productRow.price)
+  return getLowestEffectivePrice(productRow, optionsResult.rows).price
 }
 
 // The R500 default suits most products, but would always fail validation on
@@ -2171,7 +2191,10 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
     const existingResult = await pool.query('SELECT * FROM products WHERE id = $1', [id])
     if (existingResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
     const existing = existingResult.rows[0]
-    const { name, description, detail, price, badge, lowStockThreshold, isActive, preorderEnabled, preorderDeposit, optionLabel } = req.body
+    const {
+      name, description, detail, price, badge, lowStockThreshold, isActive, preorderEnabled, preorderDeposit,
+      preorderExpectedDate, optionLabel, optionsHaveOwnPrices,
+    } = req.body
 
     const merged = {
       name: name !== undefined ? name : existing.name,
@@ -2183,7 +2206,9 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
         ? parseInt(lowStockThreshold) : existing.low_stock_threshold,
       is_active: isActive !== undefined ? !!isActive : existing.is_active,
       preorder_enabled: preorderEnabled !== undefined ? !!preorderEnabled : existing.preorder_enabled,
+      preorder_expected_date: preorderExpectedDate !== undefined ? (preorderExpectedDate || null) : existing.preorder_expected_date,
       option_label: optionLabel !== undefined ? ((optionLabel || '').trim() || null) : existing.option_label,
+      options_have_own_prices: optionsHaveOwnPrices !== undefined ? !!optionsHaveOwnPrices : existing.options_have_own_prices,
     }
 
     // A product can't have both lash length/curl options and named custom
@@ -2196,6 +2221,13 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
       }
     }
 
+    // The basis a deposit is checked against - the cheapest active option's
+    // price when this product has options_have_own_prices on, else just
+    // the (possibly just-changed) product price above.
+    const depositPriceBasis = await lowestPriceForProduct({
+      id, price: merged.price, options_have_own_prices: merged.options_have_own_prices,
+    })
+
     if (preorderDeposit !== undefined && preorderDeposit !== '') {
       merged.preorder_deposit = parseFloat(preorderDeposit)
     } else {
@@ -2205,26 +2237,40 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
       // default), in which case a sensible one is suggested instead of
       // failing on a value nobody actually chose.
       const existingDeposit = parseFloat(existing.preorder_deposit)
-      const existingDepositStillValid = !validatePreorderDeposit(existingDeposit, merged.price)
+      const existingDepositStillValid = !validatePreorderDeposit(existingDeposit, depositPriceBasis)
       merged.preorder_deposit = (merged.preorder_enabled && !existingDepositStillValid)
-        ? suggestedPreorderDeposit(merged.price)
+        ? suggestedPreorderDeposit(depositPriceBasis)
         : existingDeposit
     }
 
     if (merged.preorder_enabled) {
-      const depositError = validatePreorderDeposit(merged.preorder_deposit, parseFloat(merged.price))
+      const depositError = validatePreorderDeposit(merged.preorder_deposit, depositPriceBasis)
       if (depositError) return res.status(400).json({ error: depositError })
     }
 
     const result = await pool.query(
       `UPDATE products SET name=$1, description=$2, detail=$3, price=$4, badge=$5,
-        low_stock_threshold=$6, is_active=$7, preorder_enabled=$8, preorder_deposit=$9, option_label=$10, updated_at = NOW() WHERE id = $11 RETURNING *`,
+        low_stock_threshold=$6, is_active=$7, preorder_enabled=$8, preorder_deposit=$9, option_label=$10,
+        options_have_own_prices=$11, preorder_expected_date=$12, updated_at = NOW() WHERE id = $13 RETURNING *`,
       [merged.name, merged.description, merged.detail, merged.price, merged.badge,
-       merged.low_stock_threshold, merged.is_active, merged.preorder_enabled, merged.preorder_deposit, merged.option_label, id]
+       merged.low_stock_threshold, merged.is_active, merged.preorder_enabled, merged.preorder_deposit, merged.option_label,
+       merged.options_have_own_prices, merged.preorder_expected_date, id]
     )
     const p = result.rows[0]
     if (existing.is_active && !p.is_active) {
       await addNotification('section', 'Product deactivated', `"${p.name}" was deactivated and removed from the shop.`)
+    }
+    // Turning the flag on: any option still missing a price (new, or from
+    // before the flag existed) is pre-filled with the product's own price,
+    // so "every active option needs a price" is immediately true rather
+    // than demanding the owner fill them all in before this save succeeds.
+    // Turning it off keeps whatever prices are stored, so switching back on
+    // later doesn't mean retyping them.
+    if (merged.options_have_own_prices && !existing.options_have_own_prices) {
+      await pool.query(
+        'UPDATE product_options SET price = $1 WHERE product_id = $2 AND price IS NULL',
+        [p.price, id]
+      )
     }
     const hasCustomOptions = !!p.option_label
     res.json({
@@ -2233,7 +2279,8 @@ app.patch('/api/admin/products/:id', authenticate, requireRole('sysadmin', 'owne
       stockQuantity: hasCustomOptions ? null : p.stock_quantity,
       lowStockThreshold: p.low_stock_threshold, isActive: p.is_active,
       preorderEnabled: p.preorder_enabled, preorderDeposit: parseFloat(p.preorder_deposit),
-      optionLabel: p.option_label, hasCustomOptions,
+      preorderExpectedDate: p.preorder_expected_date,
+      optionLabel: p.option_label, hasCustomOptions, optionsHaveOwnPrices: p.options_have_own_prices,
     })
   } catch (err) {
     res.status(500).json({ error: 'Failed to update product' })
@@ -2351,15 +2398,24 @@ app.patch('/api/admin/products/:id/sale', authenticate, requireRole('sysadmin', 
         'SELECT 1 FROM product_variants WHERE product_id = $1 LIMIT 1', [id]
       )).rows.length > 0
       const table = isVariantProduct ? 'product_variants' : 'product_options'
-      const idsResult = await pool.query(`SELECT id FROM ${table} WHERE product_id = $1`, [id])
-      const validIds = new Set(idsResult.rows.map(r => r.id))
+      // product_options also carries its own price (see options_have_own_
+      // prices) - when that's what this product uses, a sale is a discount
+      // off THAT option's price, not the product's.
+      const idsResult = await pool.query(
+        `SELECT id${table === 'product_options' ? ', price' : ''} FROM ${table} WHERE product_id = $1`, [id]
+      )
+      const optionRowsById = new Map(idsResult.rows.map(r => [r.id, r]))
 
       for (const opt of options) {
         const optionId = parseInt(opt.id)
-        if (!validIds.has(optionId)) return res.status(400).json({ error: 'One of these options does not belong to this product.' })
+        const optionRow = optionRowsById.get(optionId)
+        if (!optionRow) return res.status(400).json({ error: 'One of these options does not belong to this product.' })
+        const optionBasePrice = (product.options_have_own_prices && optionRow.price !== null && optionRow.price !== undefined)
+          ? parseFloat(optionRow.price)
+          : normalPrice
         const optOnSale = !!opt.onSale
         if (optOnSale) {
-          const error = validateSalePrice(opt.salePrice, normalPrice)
+          const error = validateSalePrice(opt.salePrice, optionBasePrice)
           if (error) return res.status(400).json({ error: `${error} (option ${optionId})` })
         }
         optionUpdates.push({
@@ -2522,23 +2578,47 @@ const serializeCustomOption = (o) => ({
   isActive: o.is_active,
   onSale: o.on_sale,
   salePrice: o.sale_price !== null ? parseFloat(o.sale_price) : null,
+  price: o.price !== null ? parseFloat(o.price) : null,
 })
+
+// With options_have_own_prices on, every active option needs a price
+// greater than R0 - this checks what the option's state WOULD be after
+// the given patch (new isActive/price if given, else what it already
+// has), so partial updates (e.g. just toggling isActive back on) are
+// validated against the full resulting state, not just what changed.
+const validateOptionPrice = (product, resultingIsActive, resultingPrice) => {
+  if (!product.options_have_own_prices || !resultingIsActive) return null
+  const price = parseFloat(resultingPrice)
+  if (!Number.isFinite(price) || price <= 0) {
+    return `This ${(product.option_label || 'option').toLowerCase()} needs a price greater than R0 while "Different price per option" is on.`
+  }
+  return null
+}
 
 app.post('/api/admin/products/:id/options', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const productId = parseInt(req.params.id)
-  const { name, swatchHex, stockQuantity } = req.body
+  const { name, swatchHex, stockQuantity, price } = req.body
   if (!name || !name.trim()) return res.status(400).json({ error: 'Option name is required' })
   try {
     const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [productId])
     if (productResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
-    if (!productResult.rows[0].option_label) {
+    const product = productResult.rows[0]
+    if (!product.option_label) {
       return res.status(400).json({ error: 'Set an option label for this product before adding options.' })
     }
+    // A new option is always created active, so needs a valid price right
+    // away if the flag is on - defaulting to the product's own price when
+    // none was sent, same as the pre-fill shown when the flag is switched on.
+    const optionPrice = product.options_have_own_prices
+      ? (price !== undefined && price !== '' ? parseFloat(price) : parseFloat(product.price))
+      : (price !== undefined && price !== '' ? parseFloat(price) : null)
+    const priceError = validateOptionPrice(product, true, optionPrice)
+    if (priceError) return res.status(400).json({ error: priceError })
     const result = await pool.query(
-      `INSERT INTO product_options (product_id, name, swatch_hex, stock_quantity, position)
-       VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(position), 0) + 1 FROM product_options WHERE product_id = $1))
+      `INSERT INTO product_options (product_id, name, swatch_hex, stock_quantity, price, position)
+       VALUES ($1, $2, $3, $4, $5, (SELECT COALESCE(MAX(position), 0) + 1 FROM product_options WHERE product_id = $1))
        RETURNING *`,
-      [productId, name.trim(), swatchHex || null, parseInt(stockQuantity) || 0]
+      [productId, name.trim(), swatchHex || null, parseInt(stockQuantity) || 0, optionPrice]
     )
     res.status(201).json(serializeCustomOption(result.rows[0]))
   } catch (err) {
@@ -2560,7 +2640,8 @@ app.post('/api/admin/products/:id/options/bulk', authenticate, requireRole('sysa
   try {
     const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [productId])
     if (productResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
-    if (!productResult.rows[0].option_label) {
+    const product = productResult.rows[0]
+    if (!product.option_label) {
       return res.status(400).json({ error: 'Set an option label for this product before adding options.' })
     }
 
@@ -2568,6 +2649,11 @@ app.post('/api/admin/products/:id/options/bulk', authenticate, requireRole('sysa
       (await pool.query('SELECT lower(name) AS name FROM product_options WHERE product_id = $1', [productId])).rows.map(r => r.name)
     )
     const stock = Math.max(0, parseInt(startStock) || 0)
+    // There's no per-name price field in a bulk paste - each new option
+    // defaults to the product's own price when the flag is on (same as
+    // the single-add form and switching the flag on itself), editable one
+    // at a time afterward if some of them should actually cost more or less.
+    const price = product.options_have_own_prices ? parseFloat(product.price) : null
     const created = []
     const skipped = []
     const seenInBatch = new Set()
@@ -2587,8 +2673,8 @@ app.post('/api/admin/products/:id/options/bulk', authenticate, requireRole('sysa
       seenInBatch.add(key)
       nextPosition += 1
       const result = await pool.query(
-        `INSERT INTO product_options (product_id, name, stock_quantity, position) VALUES ($1, $2, $3, $4) RETURNING *`,
-        [productId, trimmed, stock, nextPosition]
+        `INSERT INTO product_options (product_id, name, stock_quantity, price, position) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [productId, trimmed, stock, price, nextPosition]
       )
       created.push(serializeCustomOption(result.rows[0]))
     }
@@ -2603,8 +2689,11 @@ app.post('/api/admin/products/:id/options/bulk', authenticate, requireRole('sysa
 app.patch('/api/admin/products/:productId/options/:optionId', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const productId = parseInt(req.params.productId)
   const optionId = parseInt(req.params.optionId)
-  const { name, swatchHex, isActive } = req.body
+  const { name, swatchHex, isActive, price } = req.body
   try {
+    const productResult = await pool.query('SELECT * FROM products WHERE id = $1', [productId])
+    if (productResult.rows.length === 0) return res.status(404).json({ error: 'Product not found' })
+    const product = productResult.rows[0]
     const existingResult = await pool.query(
       'SELECT * FROM product_options WHERE id = $1 AND product_id = $2', [optionId, productId]
     )
@@ -2615,10 +2704,13 @@ app.patch('/api/admin/products/:productId/options/:optionId', authenticate, requ
       name: name !== undefined ? name.trim() : existing.name,
       swatch_hex: swatchHex !== undefined ? (swatchHex || null) : existing.swatch_hex,
       is_active: isActive !== undefined ? !!isActive : existing.is_active,
+      price: price !== undefined && price !== '' ? parseFloat(price) : existing.price,
     }
+    const priceError = validateOptionPrice(product, merged.is_active, merged.price)
+    if (priceError) return res.status(400).json({ error: priceError })
     const result = await pool.query(
-      'UPDATE product_options SET name=$1, swatch_hex=$2, is_active=$3, updated_at=NOW() WHERE id=$4 RETURNING *',
-      [merged.name, merged.swatch_hex, merged.is_active, optionId]
+      'UPDATE product_options SET name=$1, swatch_hex=$2, is_active=$3, price=$4, updated_at=NOW() WHERE id=$5 RETURNING *',
+      [merged.name, merged.swatch_hex, merged.is_active, merged.price, optionId]
     )
     res.json(serializeCustomOption(result.rows[0]))
   } catch (err) {
