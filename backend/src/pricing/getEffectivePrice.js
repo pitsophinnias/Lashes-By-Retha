@@ -5,13 +5,19 @@
 //
 // `product` and `option` are raw DB rows (snake_case). `option` is a
 // product_variants or product_options row, or omitted/null for a product
-// with no options - in both cases the normal price always comes from the
-// product; only the sale fields (sale_price/on_sale) come from the option
-// when one is given, since options never carry their own normal price.
+// with no options. The normal price (originalPrice) comes from the
+// option's own `price` only when the product has options_have_own_prices
+// set AND that option has a price (e.g. a wig priced differently per
+// length) - otherwise, as always, from the product. The sale fields
+// (sale_price/on_sale) always come from the option when one is given,
+// since a sale is set per option regardless of whether prices differ.
 const round2 = (n) => Math.round(n * 100) / 100
 
 const getEffectivePrice = (product, option) => {
-  const originalPrice = parseFloat(product.price)
+  const optionPrice = product.options_have_own_prices && option && option.price !== null && option.price !== undefined
+    ? parseFloat(option.price)
+    : NaN
+  const originalPrice = !isNaN(optionPrice) ? optionPrice : parseFloat(product.price)
   const source = option || product
   const onSale = !!source.on_sale
   const rawSalePrice = source.sale_price

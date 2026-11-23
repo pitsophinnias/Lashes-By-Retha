@@ -436,7 +436,17 @@ function PaymentChoiceButtons({ options, selected, onSelect }) {
 // desktop, just more compact on mobile.
 const PANEL_GAP = 6
 
-function OptionPicker({ label, options, value, onChange, isMobile, respectStock = true }) {
+// Whether a "From R X" prefix is warranted - true once the active options'
+// own effective prices (post-sale) genuinely differ, not just when
+// something's on sale (a per-option sale on an otherwise single-priced
+// product already makes prices "differ" this same way). False (a single
+// price, however it's reached) means just show that one price plainly.
+const optionPricesVary = (options) => {
+  const prices = (options || []).filter(o => o.isActive !== false).map(o => o.price)
+  return prices.length > 0 && prices.some(p => p !== prices[0])
+}
+
+function OptionPicker({ label, options, value, onChange, isMobile, respectStock = true, showPrices = false }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [highlightIndex, setHighlightIndex] = useState(-1)
@@ -578,6 +588,11 @@ function OptionPicker({ label, options, value, onChange, isMobile, respectStock 
           >
             {o.swatchHex ? swatchDot(o.swatchHex) : <span style={{ width: '14px', flexShrink: 0 }} />}
             <span style={{ flex: 1 }}>{o.name}</span>
+            {showPrices && !soldOut && (
+              <span style={{ fontSize: '12px', fontWeight: 600, color: o.onSale ? '#C4365B' : '#7A6670' }}>
+                R {o.price.toFixed(2)}
+              </span>
+            )}
             {soldOut && <span style={{ fontSize: '12px', color: '#9A7A82', fontStyle: 'italic' }}>Sold out</span>}
           </div>
         )
@@ -1628,7 +1643,9 @@ function App() {
         <div className="product-detail-line" style={{ fontSize: '11px', color: '#C4A0A8', letterSpacing: '0.3px', marginBottom: '10px', fontStyle: 'italic', textTransform: 'uppercase' }}>
           {product.detail}
         </div>
-        {product.onSale ? (
+        {product.hasCustomOptions && optionPricesVary(product.customOptions) ? (
+          <p className="product-price">From R {product.price.toFixed(2)}</p>
+        ) : product.onSale ? (
           <p className="product-price">
             <span style={{ color: '#C4365B' }}>R {product.price.toFixed(2)}</span>{' '}
             <span style={{ color: '#9A8A8E', fontWeight: 400, textDecoration: 'line-through', fontSize: '0.85em' }}>
@@ -1640,6 +1657,9 @@ function App() {
         )}
         <div style={{ fontSize: '12px', color: '#7A6670', marginBottom: '12px' }}>
           Ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days
+          {product.preorderExpectedDate && (
+            <> · Expected: {new Date(product.preorderExpectedDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}</>
+          )}
         </div>
         <button
           className="btn-add-cart add-to-cart-btn"
@@ -1706,6 +1726,11 @@ function App() {
       : hasCustomOptions
       ? product.customOptions.some(o => o.onSale)
       : false
+    // "From " shows whenever the options' own prices genuinely differ -
+    // which already covers the old "some option is on sale" case (a sale
+    // price differing from the rest counts), plus now a wig-style product
+    // whose lengths just cost different amounts even with nothing on sale.
+    const pricesVary = optionPricesVary(hasOptions ? product.options : hasCustomOptions ? product.customOptions : [])
     const pricing = activeOption || product
 
     // Clicking an already-selected length or curl unselects it.
@@ -1822,7 +1847,7 @@ function App() {
             {product.detail}
           </div>
           {showingFromPrice ? (
-            <p className="product-price">{anyOptionOnSale ? 'From ' : ''}R {pricing.price.toFixed(2)}</p>
+            <p className="product-price">{pricesVary ? 'From ' : ''}R {pricing.price.toFixed(2)}</p>
           ) : pricing.onSale ? (
             <p className="product-price">
               <span style={{ color: '#C4365B' }}>R {pricing.price.toFixed(2)}</span>{' '}
@@ -1932,6 +1957,7 @@ function App() {
                 value={selectedCustomOptionId[product.id] ?? null}
                 onChange={(id) => setSelectedCustomOptionId(prev => ({ ...prev, [product.id]: id }))}
                 isMobile={isMobile}
+                showPrices={product.optionsHaveOwnPrices}
               />
             </div>
           )}
@@ -3481,6 +3507,9 @@ function App() {
                   <>R{preorderProduct.price}</>
                 )}
                 {' '}· Deposit R{preorderProduct.preorderDeposit} · Ready in {preorderLeadTime.minDays} to {preorderLeadTime.maxDays} days
+                {preorderProduct.preorderExpectedDate && (
+                  <> · Expected: {new Date(preorderProduct.preorderExpectedDate).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}</>
+                )}
               </p>
 
               <input
@@ -3523,6 +3552,7 @@ function App() {
                     onChange={setPreorderCustomOptionId}
                     isMobile={isMobile}
                     respectStock={false}
+                    showPrices={preorderProduct.optionsHaveOwnPrices}
                   />
                 </div>
               )}

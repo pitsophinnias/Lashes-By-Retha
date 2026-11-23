@@ -79,3 +79,67 @@ test('getLowestEffectivePrice: no option on sale returns the normal price', () =
   assert.strictEqual(result.price, 150)
   assert.strictEqual(result.onSale, false)
 })
+
+// ── Per-option pricing (options_have_own_prices) ───────────────────────────
+
+test('getEffectivePrice: flag off ignores an option\'s own price, even if set', () => {
+  const product = { price: '150.00', options_have_own_prices: false, on_sale: false, sale_price: null }
+  const option = { price: '300.00', on_sale: false, sale_price: null }
+  const result = getEffectivePrice(product, option)
+  assert.strictEqual(result.price, 150)
+  assert.strictEqual(result.originalPrice, 150)
+})
+
+test('getEffectivePrice: flag on uses the option\'s own price as the base', () => {
+  const product = { price: '150.00', options_have_own_prices: true, on_sale: false, sale_price: null }
+  const option = { price: '300.00', on_sale: false, sale_price: null }
+  const result = getEffectivePrice(product, option)
+  assert.strictEqual(result.price, 300)
+  assert.strictEqual(result.originalPrice, 300)
+})
+
+test('getEffectivePrice: flag on but this option has no price set falls back to the product price', () => {
+  const product = { price: '150.00', options_have_own_prices: true, on_sale: false, sale_price: null }
+  const option = { price: null, on_sale: false, sale_price: null }
+  const result = getEffectivePrice(product, option)
+  assert.strictEqual(result.price, 150)
+  assert.strictEqual(result.originalPrice, 150)
+})
+
+test('getEffectivePrice: flag on, option on sale - sale is compared against the OPTION\'s price, not the product\'s', () => {
+  const product = { price: '150.00', options_have_own_prices: true, on_sale: false, sale_price: null }
+  const option = { price: '300.00', on_sale: true, sale_price: '250.00' }
+  const result = getEffectivePrice(product, option)
+  assert.strictEqual(result.price, 250)
+  assert.strictEqual(result.originalPrice, 300)
+  assert.strictEqual(result.onSale, true)
+  assert.strictEqual(result.saveAmount, 50)
+})
+
+test('getEffectivePrice: flag on with no option given at all (product\'s own line) uses the product price', () => {
+  const product = { price: '150.00', options_have_own_prices: true, on_sale: false, sale_price: null }
+  const result = getEffectivePrice(product)
+  assert.strictEqual(result.price, 150)
+})
+
+test('getLowestEffectivePrice: flag on with mixed option prices - "From" is the genuinely lowest one', () => {
+  const product = { price: '150.00', options_have_own_prices: true, on_sale: false, sale_price: null }
+  const options = [
+    { price: '2750.00', on_sale: false, sale_price: null },
+    { price: '3600.00', on_sale: false, sale_price: null },
+    { price: '3200.00', on_sale: true, sale_price: '2900.00' },
+  ]
+  const result = getLowestEffectivePrice(product, options)
+  assert.strictEqual(result.price, 2750)
+  assert.strictEqual(result.onSale, false)
+})
+
+test('getLowestEffectivePrice: flag on, all options equal price - the "From" price equals every option', () => {
+  const product = { price: '150.00', options_have_own_prices: true, on_sale: false, sale_price: null }
+  const options = [
+    { price: '300.00', on_sale: false, sale_price: null },
+    { price: '300.00', on_sale: false, sale_price: null },
+  ]
+  const result = getLowestEffectivePrice(product, options)
+  assert.strictEqual(result.price, 300)
+})
