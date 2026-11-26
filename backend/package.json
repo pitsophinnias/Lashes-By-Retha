@@ -6,20 +6,20 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "migrate:uploads": "node scripts/migrate-uploads-to-cloudinary.js",
+    "migrate:cloudinary:dry": "node scripts/migrate-cloudinary-to-local.js --dry-run",
+    "migrate:cloudinary": "node scripts/migrate-cloudinary-to-local.js",
     "pretest": "node test/check-test-db.js",
     "test": "node --test --test-force-exit --test-concurrency=1 --import ./test/setup.mjs \"test/**/*.test.js\""
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
-    "cloudinary": "^2.11.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^8.7.1",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.5.0",
     "pg": "^8.12.0"
   },
   "devDependencies": {

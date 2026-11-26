@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Nightly Postgres backup for the Lashes By Retha backend. Runs on the
-# server that actually hosts the database (not Render - its free Postgres
-# plan has no shell access to run pg_dump or cron against it), and reports
-# every run - success or failure - back to the backend so the sysadmin
-# Backups page always knows when the last good backup was.
+# Nightly Postgres + uploads backup for the Lashes By Retha backend. Runs on
+# the server that actually hosts the database (not Render - its free
+# Postgres plan has no shell access to run pg_dump or cron against it), and
+# reports every run - success or failure - back to the backend so the
+# sysadmin Backups page always knows when the last good backup was.
 #
 # Required environment (export these, or set them on the crontab line):
 #   DATABASE_URL          same connection string the backend itself uses
@@ -14,6 +14,9 @@
 #
 # Optional:
 #   BACKUP_DIR    where backups are kept (default /var/backups/hairbyher)
+#   UPLOAD_DIR    the backend's upload folder to also back up (e.g.
+#                 /home/serverha/hbh-uploads) - skipped quietly if unset,
+#                 since uploaded files only matter once local storage is in use
 #   KEEP          how many recent backups to keep on disk (default 14)
 #   RCLONE_REMOTE an rclone remote:path to also copy the backup to, e.g.
 #                 "b2:hairbyher-backups" - if unset, offsite copying is
@@ -22,6 +25,7 @@
 # Crontab example (daily at 02:15, logging to a file for later reading):
 #   15 2 * * * DATABASE_URL=postgresql://... BACKUP_REPORT_TOKEN=... \
 #     REPORT_URL=https://api.hairbyher.co.za/api/system/backups/report \
+#     UPLOAD_DIR=/home/serverha/hbh-uploads \
 #     /path/to/backup.sh >> /var/log/hairbyher-backup.log 2>&1
 
 # Deliberately not using `set -e` - a failure partway through (pg_dump,
@@ -36,12 +40,15 @@ STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 FILENAME="hairbyher-${TIMESTAMP}.dump.gz"
 FILEPATH="${BACKUP_DIR}/${FILENAME}"
+UPLOADS_FILENAME="hairbyher-uploads-${TIMESTAMP}.tar.gz"
+UPLOADS_FILEPATH="${BACKUP_DIR}/${UPLOADS_FILENAME}"
 
 mkdir -p "$BACKUP_DIR"
 
 STATUS="ok"
 MESSAGE=""
 SIZE_BYTES=0
+LOCATION="$FILEPATH"
 
 # 1. Dump the database and compress it.
 #    --format=custom is pg_dump's own compressed format - the only one that
@@ -56,10 +63,27 @@ else
   rm -f "$FILEPATH"
 fi
 
+# 1b. Also archive UPLOAD_DIR (uploaded images/videos) alongside the
+#     database dump, now that they live on this server's disk instead of
+#     Cloudinary. Skipped quietly if UPLOAD_DIR isn't set or doesn't exist -
+#     a missing upload archive never fails an otherwise-good database backup.
+if [ "$STATUS" = "ok" ] && [ -n "${UPLOAD_DIR:-}" ] && [ -d "$UPLOAD_DIR" ]; then
+  if tar -czf "$UPLOADS_FILEPATH" -C "$(dirname "$UPLOAD_DIR")" "$(basename "$UPLOAD_DIR")"; then
+    UPLOADS_SIZE_BYTES=$(stat -c%s "$UPLOADS_FILEPATH" 2>/dev/null || stat -f%z "$UPLOADS_FILEPATH" 2>/dev/null || echo 0)
+    SIZE_BYTES=$((SIZE_BYTES + UPLOADS_SIZE_BYTES))
+    LOCATION="${FILEPATH}, ${UPLOADS_FILEPATH}"
+  else
+    rm -f "$UPLOADS_FILEPATH"
+    MESSAGE="database backup ok, but archiving UPLOAD_DIR failed"
+  fi
+fi
+
 # 2. Keep only the most recent $KEEP backups on disk - delete the rest.
 if [ "$STATUS" = "ok" ]; then
   # shellcheck disable=SC2012
   ls -1t "${BACKUP_DIR}"/hairbyher-*.dump.gz 2>/dev/null | tail -n "+$((KEEP + 1))" | xargs -r rm -f
+  # shellcheck disable=SC2012
+  ls -1t "${BACKUP_DIR}"/hairbyher-uploads-*.tar.gz 2>/dev/null | tail -n "+$((KEEP + 1))" | xargs -r rm -f
 fi
 
 # 3. Optionally copy offsite with rclone. Skipped quietly - not a failure -
@@ -69,6 +93,8 @@ fi
 if [ "$STATUS" = "ok" ] && [ -n "${RCLONE_REMOTE:-}" ] && command -v rclone >/dev/null 2>&1; then
   if ! rclone copy "$FILEPATH" "$RCLONE_REMOTE" >/dev/null 2>&1; then
     MESSAGE="backup ok, but offsite copy to ${RCLONE_REMOTE} failed"
+  elif [ -f "$UPLOADS_FILEPATH" ] && ! rclone copy "$UPLOADS_FILEPATH" "$RCLONE_REMOTE" >/dev/null 2>&1; then
+    MESSAGE="backup ok, but offsite copy of the uploads archive to ${RCLONE_REMOTE} failed"
   fi
 fi
 
@@ -88,7 +114,7 @@ if [ -n "${REPORT_URL:-}" ] && [ -n "${BACKUP_REPORT_TOKEN:-}" ]; then
   curl -fsS -X POST "$REPORT_URL" \
     -H "Authorization: Bearer ${BACKUP_REPORT_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"startedAt\":\"${STARTED_AT}\",\"finishedAt\":\"${FINISHED_AT}\",\"status\":\"${STATUS}\",\"sizeBytes\":${SIZE_BYTES},\"location\":\"${FILEPATH}\",\"message\":${MESSAGE_JSON}}" \
+    -d "{\"startedAt\":\"${STARTED_AT}\",\"finishedAt\":\"${FINISHED_AT}\",\"status\":\"${STATUS}\",\"sizeBytes\":${SIZE_BYTES},\"location\":\"${LOCATION}\",\"message\":${MESSAGE_JSON}}" \
     || echo "Warning: failed to report backup result to ${REPORT_URL}"
 else
   echo "Warning: REPORT_URL or BACKUP_REPORT_TOKEN not set - skipping report"
@@ -99,4 +125,4 @@ if [ "$STATUS" = "failed" ]; then
   exit 1
 fi
 
-echo "Backup complete: ${FILEPATH} (${SIZE_BYTES} bytes)"
+echo "Backup complete: ${LOCATION} (${SIZE_BYTES} bytes)"

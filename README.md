@@ -28,7 +28,8 @@ Copy backend/.env.example to backend/.env and fill in values.
 - ADMIN_SESSION_GRACE_SECONDS — tolerance for clock/network drift between the frontend's idle timer and this server's; defaults to 30. See "Admin session security" below.
 - ALLOWED_ORIGINS — comma-separated list of frontend origins allowed to call the API
 - SETMORE_REFRESH_TOKEN — from the Setmore dashboard, needed for appointment API access
-- CLOUDINARY_URL — from your Cloudinary dashboard; when set, product/class/gallery uploads go to Cloudinary instead of local disk (needed on Render, since its free tier disk is wiped on every restart or sleep). Leave unset for local dev to keep using local disk storage.
+- UPLOAD_DIR — where uploaded images/videos are stored on disk; defaults to `./uploads` (i.e. backend/uploads) for local dev. On the server, point this at a persistent folder outside the repo (e.g. `/home/serverha/hbh-uploads`) so a `git pull` never touches uploaded files.
+- MAX_FILE_SIZE_MB, MAX_VIDEO_FILE_SIZE_MB — max upload size; default to 10MB for images and 100MB for videos.
 - OZOW_SITE_CODE, OZOW_PRIVATE_KEY — from the Ozow dashboard's Sites tab
 - OZOW_API_KEY — from the Ozow dashboard's Merchant Details tab
 - OZOW_IS_TEST — true or false; defaults to true (test mode) when unset, so nothing goes live by accident
@@ -54,7 +55,7 @@ Copy .env.example to .env in each app and fill in values.
 
 The repo has a `render.yaml` Blueprint. On Render: New, Blueprint, pick this repo, and it creates `hairbyher-db`, `hairbyher-api`, `hairbyher-site` and `hairbyher-admin` in one go.
 
-Render will ask for the secret values on first creation: `ADMIN_DEFAULT_PASSWORD`, `CLOUDINARY_URL`, `OZOW_SITE_CODE`, `OZOW_PRIVATE_KEY`, `OZOW_API_KEY`, `PAYFLEX_CLIENT_ID`, `PAYFLEX_CLIENT_SECRET`. `JWT_SECRET` is generated automatically.
+Render will ask for the secret values on first creation: `ADMIN_DEFAULT_PASSWORD`, `OZOW_SITE_CODE`, `OZOW_PRIVATE_KEY`, `OZOW_API_KEY`, `PAYFLEX_CLIENT_ID`, `PAYFLEX_CLIENT_SECRET`. `JWT_SECRET` is generated automatically.
 
 If Render gives a service a different `onrender.com` address than its name (because the name was taken), update `PUBLIC_API_URL`, `ALLOWED_ORIGINS` and both `VITE_API_URL` values in the Blueprint to match, then redeploy the static sites with "Clear build cache & deploy".
 
@@ -62,7 +63,7 @@ Custom domains: the Blueprint adds `www.hairbyher.co.za` and `hairbyher.co.za` t
 
 `OZOW_IS_TEST` stays `true` until a test payment has passed.
 
-If you have existing images under backend/uploads from before CLOUDINARY_URL was set, run `npm run migrate:uploads` from backend/ (with CLOUDINARY_URL set in your environment) to upload them to Cloudinary and update the database. It is safe to run more than once.
+If you have existing images/videos still referenced by `res.cloudinary.com` URLs from before this app moved to local disk storage, run `npm run migrate:cloudinary:dry` from backend/ first to see what it would do, then `npm run migrate:cloudinary` to download them into `UPLOAD_DIR` and rewrite the database. It is safe to run more than once.
 
 ## Database backups
 
@@ -70,7 +71,8 @@ Render's free Postgres plan has no shell access to run `pg_dump` or cron against
 
 1. Set `BACKUP_REPORT_TOKEN` on the backend (any long random string).
 2. On the database server, add a crontab entry that sets `DATABASE_URL`, `BACKUP_REPORT_TOKEN` (same value as above) and `REPORT_URL` (the backend's `/api/system/backups/report` URL), then runs `backend/scripts/backup.sh` - see the comments at the top of that script for the exact variables and an example crontab line.
-3. Optionally set `RCLONE_REMOTE` too, for an offsite copy of each backup via `rclone`.
+3. Also set `UPLOAD_DIR` on that same crontab line (matching the backend's own `UPLOAD_DIR`) so uploaded images/videos are archived alongside the database dump on every run, not just the database itself.
+4. Optionally set `RCLONE_REMOTE` too, for an offsite copy of each backup (database dump and uploads archive) via `rclone`.
 
 ## Sales and deleting products
 

@@ -32,8 +32,6 @@ services:
         generateValue: true
       - key: ADMIN_DEFAULT_PASSWORD
         sync: false
-      - key: CLOUDINARY_URL
-        sync: false
       - key: ALLOWED_ORIGINS
         value: https://www.hairbyher.co.za,https://hairbyher.co.za,https://hairbyher-site-guu9.onrender.com,https://hairbyher-admin-blaa.onrender.com
       - key: PUBLIC_API_URL

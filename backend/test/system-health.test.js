@@ -223,7 +223,6 @@ test('GET /api/admin/system/health reports backend, database, services and syste
   assert.ok(typeof res.data.database.rowCounts.orders === 'number')
   assert.ok(typeof res.data.services.ozow.configured === 'boolean')
   assert.ok(typeof res.data.services.payflex.configured === 'boolean')
-  assert.ok(typeof res.data.services.cloudinary.configured === 'boolean')
   assert.ok(typeof res.data.systemSettings.maintenance.enabled === 'boolean')
   assert.ok(typeof res.data.systemSettings.payments.ozowEnabled === 'boolean')
   // Never a secret value anywhere in the response.
