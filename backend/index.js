@@ -14,7 +14,14 @@ const jwt = require('jsonwebtoken')
 const { authenticate, requireRole, JWT_SECRET } = require('./auth')
 
 const { pool, createTables } = require('./db')
-const { cloudinary, isCloudinaryEnabled, uploadBuffer } = require('./cloudinary')
+const {
+  upload: fileUpload,
+  checkFileSize,
+  relativeUrlForFile,
+  deleteByUrl,
+  isVideoExtension,
+  UPLOAD_DIR,
+} = require('./src/storage/local')
 const ozow = require('./ozow')
 const payflex = require('./payflex')
 const { normaliseSaPhone } = require('./phone')
@@ -311,76 +318,13 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }))
 app.use(globalLimiter)
 
-// ── Upload directories ────────────────────────────────────────────────────────
-const UPLOAD_DIR = path.join(__dirname, 'uploads')
-const PRODUCT_DIR = path.join(UPLOAD_DIR, 'products')
-const CLASS_DIR = path.join(UPLOAD_DIR, 'classes')
-const GALLERY_DIR = path.join(UPLOAD_DIR, 'gallery')
-const CATEGORY_DIR = path.join(UPLOAD_DIR, 'categories')
+// ── Uploads ───────────────────────────────────────────────────────────────────
+// Served directly by Nginx in production (see the deploy notes); mounted
+// here too so it also works unchanged against the Vite dev server.
+app.use('/uploads', express.static(UPLOAD_DIR))
 
-;[UPLOAD_DIR, PRODUCT_DIR, CLASS_DIR, GALLERY_DIR, CATEGORY_DIR].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-})
-
-const TYPE_DIRS = { products: PRODUCT_DIR, classes: CLASS_DIR, gallery: GALLERY_DIR, categories: CATEGORY_DIR }
-
-// Matches only the exact type-id with any extension (e.g. "products-2.jpg"),
-// never a prefix collision like "products-1" matching "products-10.jpg".
-const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const findFilesForId = (dir, type, id) => {
-  const pattern = new RegExp(`^${escapeRegExp(type)}-${escapeRegExp(id)}\\.[a-zA-Z0-9]+$`)
-  return fs.readdirSync(dir).filter(f => pattern.test(f))
-}
-
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
-
-// ── Multer ────────────────────────────────────────────────────────────────────
-// With Cloudinary configured, files are held in memory and streamed up rather
-// than written to Render's disk, which is wiped on every restart or sleep.
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp']
-const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm']
-
-const diskStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    // /api/upload/gallery has no :type param (unlike /api/upload/:type/:id),
-    // so req.params.type is undefined there - treat that as gallery too.
-    cb(null, TYPE_DIRS[req.params.type || 'gallery'])
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase()
-    const base = (req.params.type || 'gallery') === 'gallery'
-      ? `gallery-${Date.now()}`
-      : `${req.params.type}-${req.params.id || Date.now()}`
-    cb(null, `${base}${ext}`)
-  }
-})
-
-const storage = isCloudinaryEnabled ? multer.memoryStorage() : diskStorage
-
-const fileFilter = (req, file, cb) => {
-  const ext = path.extname(file.originalname).toLowerCase()
-  if ([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS].includes(ext)) cb(null, true)
-  else cb(new Error('Only image and video files are allowed'), false)
-}
-
-// Cloudinary's free plan caps images at 10MB and videos at 100MB - the
-// multer limit covers the worst case, and checkFileSize below enforces the
-// tighter image limit with a friendly message instead of a raw 413.
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024
-const MAX_VIDEO_BYTES = 100 * 1024 * 1024
-
-const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_VIDEO_BYTES } })
-
-const checkFileSize = (file) => {
-  const ext = path.extname(file.originalname).toLowerCase()
-  const isVideo = VIDEO_EXTENSIONS.includes(ext)
-  const max = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES
-  if (file.size <= max) return null
-  // In local-disk mode, multer has already written the file by the time we
-  // can check its size - remove it so a rejected upload doesn't linger.
-  if (file.path) { try { fs.unlinkSync(file.path) } catch {} }
-  return isVideo ? 'Videos must be smaller than 100MB.' : 'Images must be smaller than 10MB.'
-}
+const upload = fileUpload
+const UPLOAD_ITEM_TYPES = ['products', 'classes', 'categories']
 
 // ── Notification helper ───────────────────────────────────────────────────────
 // orderId/studentId/preorderId (optional) tag a notification to the order,
@@ -1721,7 +1665,6 @@ app.get('/api/admin/system/health', authenticate, requireRole('sysadmin'), async
     services: {
       ozow: { configured: ozow.isOzowConfigured, isTest: ozow.OZOW_IS_TEST },
       payflex: { configured: payflex.isPayflexConfigured, isTest: payflex.PAYFLEX_IS_TEST },
-      cloudinary: { configured: isCloudinaryEnabled },
     },
     systemSettings: {
       maintenance: { enabled: settings.maintenance.enabled },
@@ -2378,25 +2321,16 @@ const productHasHistory = async (client, productId) => {
   return orderItems.rows.length > 0 || stockMovements.rows.length > 0 || preorders.rows.length > 0
 }
 
-// Permanently removes a product's uploaded image - Cloudinary asset or
-// local file, whichever this install uses. Best-effort: a storage hiccup
-// here never blocks the product row itself from being deleted.
+// Permanently removes a product's uploaded image file and its media row.
+// Best-effort: a storage hiccup here never blocks the product row itself
+// from being deleted.
 const deleteProductImage = async (productId) => {
   try {
-    if (isCloudinaryEnabled) {
-      const mediaResult = await pool.query(
-        'SELECT public_id, resource_type FROM media WHERE type = $1 AND item_id = $2', ['products', productId]
-      )
-      const media = mediaResult.rows[0]
-      if (media?.public_id) {
-        await cloudinary.uploader.destroy(media.public_id, { resource_type: media.resource_type || 'image' })
-      }
-      await pool.query('DELETE FROM media WHERE type = $1 AND item_id = $2', ['products', productId])
-    } else {
-      findFilesForId(PRODUCT_DIR, 'products', productId).forEach(f => {
-        try { fs.unlinkSync(path.join(PRODUCT_DIR, f)) } catch {}
-      })
-    }
+    const mediaResult = await pool.query(
+      'SELECT url FROM media WHERE type = $1 AND item_id = $2', ['products', productId]
+    )
+    if (mediaResult.rows[0]?.url) deleteByUrl(mediaResult.rows[0].url)
+    await pool.query('DELETE FROM media WHERE type = $1 AND item_id = $2', ['products', productId])
   } catch (err) {
     await logError('deleteProductImage', err)
   }
@@ -4664,56 +4598,47 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
 app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const { type, id } = req.params
-  if (!TYPE_DIRS[type]) return res.status(400).json({ error: 'Invalid type' })
+  if (!UPLOAD_ITEM_TYPES.includes(type)) {
+    deleteByUrl(relativeUrlForFile(req.file))
+    return res.status(400).json({ error: 'Invalid type' })
+  }
   const sizeError = checkFileSize(req.file)
-  if (sizeError) return res.status(400).json({ error: sizeError })
+  if (sizeError) {
+    deleteByUrl(relativeUrlForFile(req.file))
+    return res.status(400).json({ error: sizeError })
+  }
+
+  const url = relativeUrlForFile(req.file)
+  const resourceType = isVideoExtension(req.file.filename) ? 'video' : 'image'
 
   try {
-    if (isCloudinaryEnabled) {
-      const result = await uploadBuffer(req.file.buffer, {
-        folder: `hairbyher/${type}`,
-        public_id: `${type}-${id}`,
-        overwrite: true,
-        invalidate: true,
-        resource_type: 'auto',
-      })
-      // A category's cover image lives directly on categories.image_url -
-      // never in media, which is keyed by (type, item_id) for everything
-      // else. It's a cover photo, not operational content, so it's never
-      // worth its own "Image uploaded" notification either.
-      if (type === 'categories') {
-        await pool.query(
-          'UPDATE categories SET image_url = $1, image_public_id = $2 WHERE id = $3',
-          [result.secure_url, result.public_id, id]
-        )
-        return res.json({ success: true, url: result.secure_url })
-      }
-      await pool.query(
-        `INSERT INTO media (type, item_id, url, public_id, resource_type, updated_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         ON CONFLICT (type, item_id) DO UPDATE
-         SET url = $3, public_id = $4, resource_type = $5, updated_at = NOW()`,
-        [type, id, result.secure_url, result.public_id, result.resource_type]
-      )
-      await addNotification('image', 'Image uploaded', `A new image was uploaded for ${type} (id: ${id}).`)
-      return res.json({ success: true, url: result.secure_url })
-    }
-
-    // Local disk fallback - remove any previous file(s) for this id so a
-    // replacement upload with a different extension can't leave the old
-    // image as the one still served.
-    const dir = TYPE_DIRS[type]
-    findFilesForId(dir, type, id)
-      .filter(f => f !== req.file.filename)
-      .forEach(f => { try { fs.unlinkSync(path.join(dir, f)) } catch {} })
-    const url = `/uploads/${type}/${req.file.filename}`
+    // A category's cover image lives directly on categories.image_url -
+    // never in media, which is keyed by (type, item_id) for everything
+    // else. It's a cover photo, not operational content, so it's never
+    // worth its own "Image uploaded" notification either.
     if (type === 'categories') {
-      await pool.query('UPDATE categories SET image_url = $1, image_public_id = NULL WHERE id = $2', [url, id])
+      const existing = await pool.query('SELECT image_url FROM categories WHERE id = $1', [id])
+      await pool.query(
+        'UPDATE categories SET image_url = $1, image_public_id = $2 WHERE id = $3',
+        [url, url, id]
+      )
+      if (existing.rows[0]?.image_url) deleteByUrl(existing.rows[0].image_url)
       return res.json({ success: true, url })
     }
+
+    const existing = await pool.query('SELECT url FROM media WHERE type = $1 AND item_id = $2', [type, id])
+    await pool.query(
+      `INSERT INTO media (type, item_id, url, public_id, resource_type, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (type, item_id) DO UPDATE
+       SET url = $3, public_id = $4, resource_type = $5, updated_at = NOW()`,
+      [type, id, url, url, resourceType]
+    )
+    if (existing.rows[0]?.url) deleteByUrl(existing.rows[0].url)
     await addNotification('image', 'Image uploaded', `A new image was uploaded for ${type} (id: ${id}).`)
     res.json({ success: true, url })
   } catch (err) {
+    deleteByUrl(url)
     res.status(500).json({ error: 'Failed to upload image' })
     await logError('POST /api/upload/:type/:id', err, req)
   }
@@ -4722,33 +4647,23 @@ app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner')
 app.post('/api/upload/gallery', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const sizeError = checkFileSize(req.file)
-  if (sizeError) return res.status(400).json({ error: sizeError })
+  if (sizeError) {
+    deleteByUrl(relativeUrlForFile(req.file))
+    return res.status(400).json({ error: sizeError })
+  }
 
-  const ext = path.extname(req.file.originalname).toLowerCase()
-  const fileType = VIDEO_EXTENSIONS.includes(ext) ? 'video' : 'image'
+  const url = relativeUrlForFile(req.file)
+  const fileType = isVideoExtension(req.file.filename) ? 'video' : 'image'
 
   try {
-    if (isCloudinaryEnabled) {
-      const result = await uploadBuffer(req.file.buffer, {
-        folder: 'hairbyher/gallery',
-        resource_type: 'auto',
-      })
-      await pool.query(
-        'INSERT INTO gallery_images (filename, url, type, public_id) VALUES ($1, $2, $3, $4)',
-        [result.public_id, result.secure_url, fileType, result.public_id]
-      )
-      await addNotification('image', 'Gallery image added', 'A new file was added to the gallery.')
-      return res.json({ success: true, url: result.secure_url, type: fileType })
-    }
-
-    const url = `/uploads/gallery/${req.file.filename}`
     await pool.query(
-      'INSERT INTO gallery_images (filename, url, type) VALUES ($1, $2, $3)',
-      [req.file.filename, url, fileType]
+      'INSERT INTO gallery_images (filename, url, type, public_id) VALUES ($1, $2, $3, $4)',
+      [req.file.filename, url, fileType, url]
     )
     await addNotification('image', 'Gallery image added', 'A new file was added to the gallery.')
     res.json({ success: true, url, type: fileType })
   } catch (err) {
+    deleteByUrl(url)
     res.status(500).json({ error: 'Failed to save gallery image' })
     await logError('POST /api/upload/gallery', err, req)
   }
@@ -4770,13 +4685,7 @@ app.delete('/api/gallery/:id', authenticate, requireRole('sysadmin', 'owner'), a
     const row = result.rows[0]
     if (!row) return res.status(404).json({ error: 'Gallery item not found' })
 
-    if (isCloudinaryEnabled && row.public_id) {
-      await cloudinary.uploader.destroy(row.public_id, {
-        resource_type: row.type === 'video' ? 'video' : 'image',
-      })
-    } else if (!isCloudinaryEnabled) {
-      try { fs.unlinkSync(path.join(GALLERY_DIR, row.filename)) } catch {}
-    }
+    deleteByUrl(row.public_id || row.url)
 
     await pool.query('DELETE FROM gallery_images WHERE id = $1', [id])
     res.json({ success: true })
@@ -4790,16 +4699,11 @@ app.get('/api/upload/:type/:id', async (req, res) => {
   const { type, id } = req.params
   if (type !== 'products' && type !== 'classes') return res.status(400).json({ error: 'Invalid type' })
   try {
-    if (isCloudinaryEnabled) {
-      const result = await pool.query(
-        'SELECT url FROM media WHERE type = $1 AND item_id = $2',
-        [type, id]
-      )
-      return res.json({ url: result.rows[0]?.url || null })
-    }
-    const dir = TYPE_DIRS[type]
-    const [match] = findFilesForId(dir, type, id)
-    res.json({ url: match ? `/uploads/${type}/${match}` : null })
+    const result = await pool.query(
+      'SELECT url FROM media WHERE type = $1 AND item_id = $2',
+      [type, id]
+    )
+    res.json({ url: result.rows[0]?.url || null })
   } catch {
     res.json({ url: null })
   }
@@ -4920,16 +4824,9 @@ app.patch('/api/categories/:id/move', authenticate, requireRole('sysadmin', 'own
 app.delete('/api/categories/:id/image', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const id = parseInt(req.params.id)
   try {
-    const result = await pool.query('SELECT image_url, image_public_id FROM categories WHERE id = $1', [id])
+    const result = await pool.query('SELECT image_url FROM categories WHERE id = $1', [id])
     if (result.rows.length === 0) return res.status(404).json({ error: 'Category not found' })
-    const { image_public_id: publicId } = result.rows[0]
-    if (isCloudinaryEnabled && publicId) {
-      await cloudinary.uploader.destroy(publicId)
-    } else if (!isCloudinaryEnabled) {
-      findFilesForId(CATEGORY_DIR, 'categories', id).forEach(f => {
-        try { fs.unlinkSync(path.join(CATEGORY_DIR, f)) } catch {}
-      })
-    }
+    deleteByUrl(result.rows[0].image_url)
     await pool.query('UPDATE categories SET image_url = NULL, image_public_id = NULL WHERE id = $1', [id])
     res.json({ success: true })
   } catch (err) {
@@ -4941,16 +4838,10 @@ app.delete('/api/categories/:id/image', authenticate, requireRole('sysadmin', 'o
 app.delete('/api/categories/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
   const id = parseInt(req.params.id)
   try {
-    const catResult = await pool.query('SELECT name, image_public_id FROM categories WHERE id = $1', [id])
+    const catResult = await pool.query('SELECT name, image_url FROM categories WHERE id = $1', [id])
     if (catResult.rows.length === 0) return res.status(404).json({ error: 'Category not found' })
-    const { name, image_public_id: publicId } = catResult.rows[0]
-    if (isCloudinaryEnabled && publicId) {
-      try { await cloudinary.uploader.destroy(publicId) } catch {}
-    } else if (!isCloudinaryEnabled) {
-      findFilesForId(CATEGORY_DIR, 'categories', id).forEach(f => {
-        try { fs.unlinkSync(path.join(CATEGORY_DIR, f)) } catch {}
-      })
-    }
+    const { name, image_url } = catResult.rows[0]
+    deleteByUrl(image_url)
     await pool.query('DELETE FROM categories WHERE id = $1', [id])
     await addNotification('section', 'Section removed',
       `The product section "${name}" was removed.`)
@@ -5097,11 +4988,11 @@ app.use((err, req, res, next) => {
     return
   }
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-    res.status(400).json({ error: 'File is too large. Videos must be under 100MB, images under 10MB.' })
+    res.status(400).json({ error: 'File is too large.' })
     logError('Upload', err, req)
     return
   }
-  if (err.message === 'Only image and video files are allowed') {
+  if (err.message?.startsWith('Only jpg, jpeg, png, webp, gif images')) {
     res.status(400).json({ error: err.message })
     logError('Upload', err, req)
     return

@@ -55,8 +55,9 @@ const CLASSES = [
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3002'
 
-// Cloudinary URLs are already absolute; local-disk URLs are relative and
-// need the API host in front of them.
+// Uploaded files are served from the API host as relative URLs
+// (/uploads/...) and need it added in front; an already-absolute URL is
+// passed through unchanged.
 const mediaUrl = (url) => (url && /^https?:\/\//.test(url) ? url : `${API}${url}`)
 
 // Mirrors backend/src/siteSettings/defaults.js exactly, so the Website

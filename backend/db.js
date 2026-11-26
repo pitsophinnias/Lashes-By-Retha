@@ -190,8 +190,8 @@ const createTables = async () => {
     ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS variant_id INTEGER REFERENCES product_variants(id);
   `)
 
-  // Cloudinary public id for a gallery file, so it can be migrated or
-  // removed from Cloudinary later without re-deriving it from the filename.
+  // Holds the file's relative /uploads/... URL, so it can be deleted from
+  // disk later without re-deriving the path from the filename alone.
   await pool.query(`
     ALTER TABLE gallery_images ADD COLUMN IF NOT EXISTS public_id VARCHAR(255);
   `)
@@ -458,7 +458,7 @@ const createTables = async () => {
   }
 
   // "Shop by category" grid on the customer site - position orders the
-  // category cards, image_url/image_public_id hold an optional Cloudinary
+  // category cards, image_url/image_public_id hold an optional uploaded
   // cover photo per category (mirrors media's url/public_id columns, but
   // kept directly on categories since there's only ever one cover image).
   await pool.query(`

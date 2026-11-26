@@ -1360,7 +1360,6 @@ export default function SysAdminDashboard({ user, onLogout }) {
                         {[
                           ['Ozow', health.services.ozow],
                           ['Payflex', health.services.payflex],
-                          ['Cloudinary', health.services.cloudinary],
                         ].map(([label, info]) => (
                           <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
                             <span style={{ color: '#9A8A8E' }}>{label}</span>
