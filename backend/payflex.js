@@ -27,6 +27,11 @@ console.log(`Payflex payments: ${isPayflexConfigured ? `enabled (api: ${PAYFLEX_
 let notifyAdmin = async () => {}
 const setNotifier = (fn) => { notifyAdmin = fn }
 
+// Same pattern, for logging a security event when Payflex's own order API
+// rejects us - worth surfacing on the sysadmin Security page.
+let logSecurityIssue = async () => {}
+const setSecurityLogger = (fn) => { logSecurityIssue = fn }
+
 const generateMerchantReference = (referenceId) => `HBH-${referenceId}-${crypto.randomBytes(3).toString('hex')}`
 
 // ── OAuth2 client-credentials token, cached in memory ────────────────────────
@@ -155,6 +160,7 @@ async function getPayflexOrder(payflexOrderId) {
       let bodyText = ''
       try { bodyText = (await res.text()).slice(0, 300) } catch {}
       console.error(`Payflex get order API returned ${res.status} - body: ${bodyText}`)
+      await logSecurityIssue(`Payflex get order API returned ${res.status}`, payflexOrderId)
       return null
     }
     return await res.json()
@@ -268,4 +274,5 @@ module.exports = {
   isAmountWithinRange,
   reconcilePayflexPayment,
   setNotifier,
+  setSecurityLogger,
 }

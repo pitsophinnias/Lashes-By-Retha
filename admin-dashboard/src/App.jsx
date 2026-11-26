@@ -1370,6 +1370,48 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
     })
   }
 
+  const removeProductImage = async (product) => {
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Remove Image',
+      subject: { image: productImages[product.id], name: product.name },
+      summary: 'This image will be removed. You can upload a new one any time.',
+      confirmLabel: 'Remove this image',
+      busyLabel: 'Removing…',
+      successMessage: 'Image removed',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/upload/products/${product.id}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Failed to remove image.')
+        setProductImages(prev => {
+          const next = { ...prev }
+          delete next[product.id]
+          return next
+        })
+      },
+    })
+  }
+
+  const removeClassImage = async (course) => {
+    await confirmDialog({
+      variant: 'neutral',
+      title: 'Remove Image',
+      subject: { image: classImages[course.id], name: course.name },
+      summary: 'This image will be removed. You can upload a new one any time.',
+      confirmLabel: 'Remove this image',
+      busyLabel: 'Removing…',
+      successMessage: 'Image removed',
+      onConfirm: async () => {
+        const res = await apiFetch(`/api/upload/classes/${course.id}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Failed to remove image.')
+        setClassImages(prev => {
+          const next = { ...prev }
+          delete next[course.id]
+          return next
+        })
+      },
+    })
+  }
+
   const assignCategory = async (productId, categoryId) => {
     try {
       const res = await apiFetch(`/api/categories/product/${productId}`, {
@@ -5028,6 +5070,9 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                             onChange={(e) => handleUpload('products', p.id, e.target.files[0])}
                           />
                           {productImages[p.id] && (
+                            <button className="delete-btn" onClick={() => removeProductImage(p)}>Remove Image</button>
+                          )}
+                          {productImages[p.id] && (
                             <div className="adjust-controls">
                               <button className="adj-btn" onClick={() => adjustPosition('products', p.id, 'up')}>^</button>
                               <div className="adjust-row">
@@ -5124,6 +5169,9 @@ function AppInner({ user, onLogout, onSessionExpired, onUnsavedChanges }) {
                             accept="image/*"
                             onChange={(e) => handleUpload('classes', c.id, e.target.files[0])}
                           />
+                          {classImages[c.id] && (
+                            <button className="delete-btn" onClick={() => removeClassImage(c)}>Remove Image</button>
+                          )}
                         </div>
                       </div>
                     ))}

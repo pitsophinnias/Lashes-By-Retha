@@ -68,6 +68,7 @@ export const SYSADMIN_PAGE_TO_PATH = {
   testData: '/sysadmin/test-data',
   backups: '/sysadmin/backups',
   loginActivity: '/sysadmin/login-activity',
+  security: '/sysadmin/security',
   settings: '/sysadmin/settings',
 }
 
@@ -87,6 +88,7 @@ export const SYSADMIN_PAGE_TITLES = {
   testData: 'Test Data',
   backups: 'Backups',
   loginActivity: 'Login Activity',
+  security: 'Security',
   settings: 'Settings',
 }
 

@@ -1,7 +1,6 @@
 const express = require('express')
 const cors = require('cors')
 const helmet = require('helmet')
-const rateLimit = require('express-rate-limit')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
@@ -48,9 +47,24 @@ const { listTemplates, getTemplate, saveTemplateOverride, resetTemplate } = requ
 const { findUnknownPlaceholders } = require('./src/messaging/templates')
 const { selectReminder } = require('./src/messaging/reminders')
 const { recalculateStudentBalance } = require('./src/students/balance')
+const {
+  generalApiLimiter,
+  loginUsernameLimiter,
+  loginIpLimiter,
+  orderCreationIpLimiter,
+  orderCreationPhoneLimiter,
+  paymentInitIpLimiter,
+  paymentInitKeyLimiter,
+  uploadLimiter,
+} = require('./src/security/rateLimits')
+const { logSecurityEvent, alertIfDue, cleanupSecurityEvents, SEVERITY } = require('./src/security/events')
+const { checkSecurityAlerts } = require('./src/security/alerts')
+const { getSslDaysRemaining } = require('./src/security/sslCheck')
+const { getDiskUsage } = require('./src/security/diskUsage')
 
 const app = express()
 const PORT = process.env.PORT || 3002
+const HOST = process.env.HOST || '0.0.0.0'
 const isProd = process.env.NODE_ENV === 'production'
 
 // Shown on the sysadmin System Health page as the running code version.
@@ -88,8 +102,9 @@ const timingSafeStringEqual = (a, b) => {
 // orders always get their fee computed here, never from the browser.
 const DELIVERY_FEE = 120
 
-// Render sits in front of this app as a reverse proxy - trust its
-// X-Forwarded-For header so rate limiting sees the real visitor IP.
+// Cloudflare (proxied) -> Nginx -> this app. Nginx sets X-Forwarded-For
+// from Cloudflare's CF-Connecting-IP, so trusting one hop here gives
+// req.ip the real visitor IP, confirmed in production.
 app.set('trust proxy', 1)
 
 app.use(helmet({
@@ -97,41 +112,13 @@ app.use(helmet({
 }))
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
-// Defined before the Ozow routes below, which need globalLimiter at
-// registration time.
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' },
-  skip: (req) => req.path === '/api/health' || (req.method === 'GET' && req.path.startsWith('/uploads')),
-})
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  message: { error: 'Too many failed login attempts. Please try again later.' },
-})
-
-const ordersLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many orders from this address. Please try again later.' },
-})
-
-const enrolmentsLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many enrolments from this address. Please try again later.' },
-})
+// See src/security/rateLimits.js for every limiter's keying and env vars.
+// Defined there (not here) before the Ozow/Payflex routes below, which need
+// generalApiLimiter at registration time - Ozow/Payflex's own server-to-
+// server notify/callback routes deliberately have NO limiter at all (see
+// below): their servers share IPs across all merchants, and they're
+// already protected by hash/signature checks and the provider's own status
+// API, not by rate limiting.
 
 // ── Ozow return & notify ─────────────────────────────────────────────────────
 // Mounted before the CORS middleware below: Ozow's browser redirects come
@@ -191,21 +178,34 @@ const handleOzowReturn = async (req, res) => {
   res.redirect(303, redirectUrl.toString())
 }
 
-app.get('/api/payments/ozow/return/:outcome', globalLimiter, handleOzowReturn)
-app.post('/api/payments/ozow/return/:outcome', globalLimiter, ozowFormParser, handleOzowReturn)
+app.get('/api/payments/ozow/return/:outcome', generalApiLimiter, handleOzowReturn)
+app.post('/api/payments/ozow/return/:outcome', generalApiLimiter, ozowFormParser, handleOzowReturn)
 
-app.post('/api/payments/ozow/notify', globalLimiter, ozowFormParser, async (req, res) => {
+// No rate limiter - Ozow's own servers call this, not a customer's browser.
+app.post('/api/payments/ozow/notify', ozowFormParser, async (req, res) => {
   if (!ozow.isOzowConfigured) return res.status(503).end()
   const body = req.body || {}
 
   if (String(body.SiteCode) !== String(ozow.OZOW_SITE_CODE)) {
     console.warn('Ozow notify: site code mismatch')
     await logPaymentEvent('ozow', 'site_code_mismatch', body.TransactionReference)
+    await logSecurityEvent({
+      type: 'payment_site_code_mismatch', severity: SEVERITY.CRITICAL, ip: req.ip,
+      identifier: body.TransactionReference, route: 'POST /api/payments/ozow/notify',
+      details: 'Ozow notify: site code mismatch',
+    })
+    await alertIfDue('Ozow site code mismatch', `A notification claiming to be from Ozow had the wrong site code (reference ${body.TransactionReference || 'unknown'}).`)
     return res.status(400).json({ error: 'Invalid notification' })
   }
   if (!ozow.verifyResponseHash(body, ozow.OZOW_PRIVATE_KEY)) {
     console.warn('Ozow notify: hash verification failed')
     await logPaymentEvent('ozow', 'hash_mismatch', body.TransactionReference)
+    await logSecurityEvent({
+      type: 'payment_hash_mismatch', severity: SEVERITY.CRITICAL, ip: req.ip,
+      identifier: body.TransactionReference, route: 'POST /api/payments/ozow/notify',
+      details: 'Ozow notify: hash verification failed',
+    })
+    await alertIfDue('Ozow hash verification failed', `A notification claiming to be from Ozow failed hash verification (reference ${body.TransactionReference || 'unknown'}).`)
     return res.status(400).json({ error: 'Invalid notification' })
   }
 
@@ -261,10 +261,11 @@ const handlePayflexReturn = async (req, res) => {
   res.redirect(303, redirectUrl.toString())
 }
 
-app.get('/api/payments/payflex/return/:outcome', globalLimiter, handlePayflexReturn)
-app.post('/api/payments/payflex/return/:outcome', globalLimiter, payflexJsonParser, handlePayflexReturn)
+app.get('/api/payments/payflex/return/:outcome', generalApiLimiter, handlePayflexReturn)
+app.post('/api/payments/payflex/return/:outcome', generalApiLimiter, payflexJsonParser, handlePayflexReturn)
 
-app.post('/api/payments/payflex/callback', globalLimiter, payflexJsonParser, async (req, res) => {
+// No rate limiter - Payflex's own servers call this, not a customer's browser.
+app.post('/api/payments/payflex/callback', payflexJsonParser, async (req, res) => {
   if (!payflex.isPayflexConfigured) return res.status(503).end()
   const body = req.body || {}
   // Never trust this body for status - it's only used to find which payment
@@ -287,6 +288,11 @@ app.post('/api/payments/payflex/callback', globalLimiter, payflexJsonParser, asy
     await payflex.reconcilePayflexPayment(identifier)
   } else {
     await logPaymentEvent('payflex', 'unmatched_callback', identifier)
+    await logSecurityEvent({
+      type: 'payment_callback_unmatched', severity: SEVERITY.WARNING, ip: req.ip,
+      identifier, route: 'POST /api/payments/payflex/callback',
+      details: 'Payflex callback did not match any known payment',
+    })
   }
   res.status(200).send('OK')
 })
@@ -316,7 +322,7 @@ app.use(cors({
 }))
 
 app.use(express.json({ limit: '1mb' }))
-app.use(globalLimiter)
+app.use(generalApiLimiter)
 
 // ── Uploads ───────────────────────────────────────────────────────────────────
 // Served directly by Nginx in production (see the deploy notes); mounted
@@ -343,6 +349,12 @@ const addNotification = async (type, title, message, { orderId, studentId, preor
 
 ozow.setNotifier(addNotification)
 payflex.setNotifier(addNotification)
+
+const logPaymentStatusApiFailure = (details, reference) => logSecurityEvent({
+  type: 'payment_status_api_failure', severity: SEVERITY.WARNING, identifier: reference, details,
+})
+ozow.setSecurityLogger(logPaymentStatusApiFailure)
+payflex.setSecurityLogger(logPaymentStatusApiFailure)
 
 // Lash length/curl options, grouped by product id, for attaching to a
 // product list response. Pass includeInactive to also return deactivated
@@ -614,6 +626,15 @@ setInterval(cleanupErrorLog, 24 * 60 * 60 * 1000)
 // ── Session cleanup ──────────────────────────────────────────────────────────
 setInterval(cleanupSessions, 24 * 60 * 60 * 1000)
 
+// ── Security events: alerts + 90-day retention ───────────────────────────────
+// Event-triggered alerts (username lockout, payment hash/signature
+// mismatches) fire immediately where they happen; everything threshold-
+// based (failed-login rate, repeat rate-limit IPs, server error rate,
+// backups, SSL, disk) is only ever knowable by looking back over a window,
+// so it's swept periodically here instead.
+setInterval(() => checkSecurityAlerts(UPLOAD_DIR), 5 * 60 * 1000)
+setInterval(cleanupSecurityEvents, 24 * 60 * 60 * 1000)
+
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', project: 'Lashes By Retha' })
@@ -621,7 +642,7 @@ app.get('/api/health', (req, res) => {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 // Login
-app.post('/api/auth/login', loginLimiter, async (req, res) => {
+app.post('/api/auth/login', loginIpLimiter, loginUsernameLimiter, async (req, res) => {
   const { username, password } = req.body
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' })
@@ -634,14 +655,57 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       [username]
     )
     if (result.rows.length === 0) {
+      // Checked only to tell a security event apart - the response stays
+      // identical either way, so a login attempt can never be used to
+      // enumerate which usernames exist.
+      const deactivated = await pool.query('SELECT 1 FROM users WHERE username = $1 AND is_active = FALSE', [username])
+      if (deactivated.rows.length > 0) {
+        await logSecurityEvent({
+          type: 'login_deactivated', severity: SEVERITY.WARNING, ip: req.ip,
+          identifier: username, route: 'POST /api/auth/login', details: 'Login attempt on a deactivated account',
+        })
+      } else {
+        await logSecurityEvent({
+          type: 'login_failed', severity: SEVERITY.INFO, ip: req.ip,
+          identifier: username, route: 'POST /api/auth/login', details: 'Unknown username',
+        })
+      }
       return res.status(401).json({ error: 'Invalid username or password' })
     }
     const user = result.rows[0]
     const valid = await bcrypt.compare(password, user.password_hash)
     if (!valid) {
       await addAuditLog(user.id, user.username, 'LOGIN_FAILED', 'Invalid password', req.ip)
+      await logSecurityEvent({
+        type: 'login_failed', severity: SEVERITY.INFO, ip: req.ip,
+        identifier: username, route: 'POST /api/auth/login', details: 'Invalid password',
+      })
       return res.status(401).json({ error: 'Invalid username or password' })
     }
+
+    // A successful login is a stronger signal than "don't count this
+    // request" (skipSuccessfulRequests on the limiter already does that) -
+    // it clears any failed attempts already on this username's counter.
+    loginUsernameLimiter.resetKey(`user:${username.trim().toLowerCase()}`)
+
+    const priorLogin = await pool.query(
+      `SELECT 1 FROM audit_logs WHERE user_id = $1 AND action = 'LOGIN' LIMIT 1`, [user.id]
+    )
+    const priorFromThisIp = await pool.query(
+      `SELECT 1 FROM audit_logs WHERE user_id = $1 AND action = 'LOGIN' AND ip_address = $2 LIMIT 1`,
+      [user.id, req.ip]
+    )
+    if (priorLogin.rows.length > 0 && priorFromThisIp.rows.length === 0) {
+      await logSecurityEvent({
+        type: 'login_new_ip', severity: SEVERITY.WARNING, ip: req.ip,
+        identifier: user.username, route: 'POST /api/auth/login', details: 'Successful login from a new IP',
+      })
+      await alertIfDue(
+        `New IP for ${user.username}`,
+        `"${user.username}" just logged in from an IP address (${req.ip}) they haven't used before.`
+      )
+    }
+
     const session = await createSession(user.id, req)
     // The JWT's own expiry is just an outer safety net, set well past the
     // max session age - the real enforcement is checkAndTouchSession()
@@ -1024,6 +1088,175 @@ app.get('/api/admin/backups', authenticate, requireRole('sysadmin'), async (req,
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch backup runs' })
     await logError('GET /api/admin/backups', err, req)
+  }
+})
+
+// ── Security page (sysadmin only) ───────────────────────────────────────────
+const SECURITY_EVENT_TYPES = [
+  'rate_limit', 'login_failed', 'login_lockout', 'login_deactivated', 'login_new_ip',
+  'deactivated_access', 'forbidden_admin_access',
+  'payment_hash_mismatch', 'payment_site_code_mismatch', 'payment_status_api_failure', 'payment_callback_unmatched',
+  'upload_rejected',
+]
+const FAILED_LOGIN_TYPES = ['login_failed', 'login_lockout', 'login_deactivated']
+const PAYMENT_PROBLEM_TYPES = ['payment_hash_mismatch', 'payment_site_code_mismatch', 'payment_status_api_failure', 'payment_callback_unmatched']
+
+app.get('/api/admin/security/summary', authenticate, requireRole('sysadmin'), async (req, res) => {
+  const countSince = async (hours, typeList) => {
+    const result = await pool.query(
+      `SELECT COUNT(*) FROM security_events WHERE type = ANY($1) AND created_at > NOW() - INTERVAL '${hours} hours'`,
+      [typeList]
+    )
+    return parseInt(result.rows[0].count, 10)
+  }
+  const countErrorsSince = async (hours) => {
+    const result = await pool.query(
+      `SELECT COUNT(*) FROM error_log WHERE status >= 500 AND created_at > NOW() - INTERVAL '${hours} hours'`
+    )
+    return parseInt(result.rows[0].count, 10)
+  }
+  try {
+    const windows = [24, 24 * 7]
+    const [h24, d7] = await Promise.all(windows.map(async (hours) => ({
+      failedLogins: await countSince(hours, FAILED_LOGIN_TYPES),
+      rateLimitHits: await countSince(hours, ['rate_limit']),
+      paymentProblems: await countSince(hours, PAYMENT_PROBLEM_TYPES),
+      rejectedUploads: await countSince(hours, ['upload_rejected']),
+      serverErrors: await countErrorsSince(hours),
+    })))
+    res.json({ last24h: h24, last7d: d7 })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load security summary' })
+    await logError('GET /api/admin/security/summary', err, req)
+  }
+})
+
+app.get('/api/admin/security/events', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const limit = 50
+    const offset = (page - 1) * limit
+    const conditions = []
+    const params = []
+    if (req.query.type && SECURITY_EVENT_TYPES.includes(req.query.type)) {
+      params.push(req.query.type)
+      conditions.push(`type = $${params.length}`)
+    }
+    if (req.query.severity && ['info', 'warning', 'critical'].includes(req.query.severity)) {
+      params.push(req.query.severity)
+      conditions.push(`severity = $${params.length}`)
+    }
+    if (req.query.start) {
+      params.push(req.query.start)
+      conditions.push(`created_at >= $${params.length}`)
+    }
+    if (req.query.end) {
+      params.push(req.query.end)
+      conditions.push(`created_at <= $${params.length}`)
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
+    const [eventsResult, countResult] = await Promise.all([
+      pool.query(
+        `SELECT * FROM security_events ${where} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+        params
+      ),
+      pool.query(`SELECT COUNT(*) FROM security_events ${where}`, params),
+    ])
+    const total = parseInt(countResult.rows[0].count, 10)
+    res.json({
+      events: eventsResult.rows.map(r => ({
+        id: r.id, type: r.type, severity: r.severity, ip: r.ip,
+        identifier: r.identifier, route: r.route, details: r.details, createdAt: r.created_at,
+      })),
+      total,
+      page,
+      pages: Math.max(1, Math.ceil(total / limit)),
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load security events' })
+    await logError('GET /api/admin/security/events', err, req)
+  }
+})
+
+app.get('/api/admin/security/top-ips', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ip, COUNT(*) AS count FROM security_events
+       WHERE ip IS NOT NULL AND created_at > NOW() - INTERVAL '24 hours'
+       GROUP BY ip ORDER BY count DESC LIMIT 10`
+    )
+    res.json(result.rows.map(r => ({ ip: r.ip, count: parseInt(r.count, 10) })))
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load top IPs' })
+    await logError('GET /api/admin/security/top-ips', err, req)
+  }
+})
+
+app.get('/api/admin/security/health', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const [disk, sslDaysRemaining, lastBackupResult] = await Promise.all([
+      getDiskUsage(UPLOAD_DIR),
+      getSslDaysRemaining(),
+      pool.query('SELECT started_at, status FROM backup_runs ORDER BY started_at DESC LIMIT 1'),
+    ])
+    const lastBackup = lastBackupResult.rows[0] || null
+    res.json({
+      disk,
+      uptimeSeconds: Math.round(process.uptime()),
+      sslDaysRemaining,
+      lastBackup: lastBackup ? { at: lastBackup.started_at, status: lastBackup.status } : null,
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load server health' })
+    await logError('GET /api/admin/security/health', err, req)
+  }
+})
+
+// Alerts reuse the notifications table (type = 'security') rather than a
+// separate table - see src/security/events.js's alertIfDue. Deliberately
+// its own endpoints, not the owner/staff /api/notifications* ones: those
+// explicitly exclude type = 'security' so a security alert never shows up
+// in the owner/staff bell.
+app.get('/api/admin/security/alerts', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM notifications WHERE type = 'security' ORDER BY created_at DESC LIMIT 100`
+    )
+    res.json(result.rows.map(r => ({
+      id: r.id, title: r.title, message: r.message, read: r.read, createdAt: r.created_at,
+    })))
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load security alerts' })
+    await logError('GET /api/admin/security/alerts', err, req)
+  }
+})
+
+app.get('/api/admin/security/alerts/unread-count', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*) FROM notifications WHERE type = 'security' AND read = FALSE`
+    )
+    res.json({ count: parseInt(result.rows[0].count, 10) })
+  } catch {
+    res.json({ count: 0 })
+  }
+})
+
+app.patch('/api/admin/security/alerts/read-all', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    await pool.query(`UPDATE notifications SET read = TRUE WHERE type = 'security'`)
+    res.json({ success: true })
+  } catch {
+    res.status(500).json({ error: 'Failed to mark all alerts seen' })
+  }
+})
+
+app.patch('/api/admin/security/alerts/:id/seen', authenticate, requireRole('sysadmin'), async (req, res) => {
+  try {
+    await pool.query(`UPDATE notifications SET read = TRUE WHERE id = $1 AND type = 'security'`, [req.params.id])
+    res.json({ success: true })
+  } catch {
+    res.status(500).json({ error: 'Failed to mark alert seen' })
   }
 })
 
@@ -3320,6 +3553,13 @@ app.delete('/api/classes/:classId/students/:studentId/payments/:paymentId', auth
 // Public: the customer site has no login and must be able to place orders.
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
 
+// Catches an over-length field before it reaches the database as a raw,
+// unfriendly "value too long for type character varying(255)" error - every
+// public order/enrolment/pre-order route below checks its own free-text
+// fields against these before doing anything else.
+const FIELD_MAX_LENGTHS = { name: 255, email: 255, address: 255, suburb: 255, city: 255, postalCode: 20, notes: 2000 }
+const isTooLong = (value, max) => typeof value === 'string' && value.length > max
+
 // Training runs Tuesday to Saturday (same days as pickup) - a preferred
 // start date must be one of those days and strictly in the future, in SA's
 // own timezone rather than the server's.
@@ -3439,13 +3679,22 @@ app.get('/api/dashboard/calendar', authenticate, requireRole('sysadmin', 'owner'
   }
 })
 
-app.post('/api/orders', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/orders', orderCreationIpLimiter, orderCreationPhoneLimiter, requireNotInMaintenance, async (req, res) => {
   const {
     customerName, customerPhone, customerEmail, items, fulfilmentMethod, paymentMethod,
     deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
   } = req.body
   if (!customerName || !customerPhone || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Missing required fields' })
+  }
+  if (isTooLong(customerName, FIELD_MAX_LENGTHS.name) || isTooLong(customerEmail, FIELD_MAX_LENGTHS.email) ||
+      isTooLong(deliveryAddress, FIELD_MAX_LENGTHS.address) || isTooLong(deliverySuburb, FIELD_MAX_LENGTHS.suburb) ||
+      isTooLong(deliveryCity, FIELD_MAX_LENGTHS.city) || isTooLong(deliveryPostalCode, FIELD_MAX_LENGTHS.postalCode) ||
+      isTooLong(deliveryNotes, FIELD_MAX_LENGTHS.notes)) {
+    return res.status(400).json({ error: 'One of the fields is too long.' })
+  }
+  if (items.length > 100 || items.some(i => typeof i !== 'object' || i === null)) {
+    return res.status(400).json({ error: 'Invalid order items.' })
   }
   const normalisedPhone = normaliseSaPhone(customerPhone)
   if (!normalisedPhone) {
@@ -3701,7 +3950,7 @@ app.get('/api/payments/options', async (req, res) => {
   res.json({ ozow: isProviderEnabled('ozow', settings), payflex: payflexOptions })
 })
 
-app.post('/api/payments/ozow/start', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/payments/ozow/start', paymentInitIpLimiter, paymentInitKeyLimiter, requireNotInMaintenance, async (req, res) => {
   const startSettings = await getSystemSettings(req)
   if (!isProviderEnabled('ozow', startSettings)) {
     return res.status(503).json({ error: 'Ozow payments are not available right now.' })
@@ -3736,7 +3985,7 @@ app.post('/api/payments/ozow/start', ordersLimiter, requireNotInMaintenance, asy
   }
 })
 
-app.post('/api/payments/payflex/start', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/payments/payflex/start', paymentInitIpLimiter, paymentInitKeyLimiter, requireNotInMaintenance, async (req, res) => {
   const startSettings = await getSystemSettings(req)
   if (!isProviderEnabled('payflex', startSettings)) {
     return res.status(503).json({ error: 'Payflex payments are not available right now.' })
@@ -3917,10 +4166,13 @@ app.patch('/api/orders/:token/switch-provider', async (req, res) => {
 })
 
 // ── Training enrolment ───────────────────────────────────────────────────────
-app.post('/api/enrolments', enrolmentsLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/enrolments', orderCreationIpLimiter, orderCreationPhoneLimiter, requireNotInMaintenance, async (req, res) => {
   const { courseId, name, phone, email, preferredStartDate, paymentOption } = req.body
   if (!name || !name.trim() || !phone || !email || !preferredStartDate || !paymentOption) {
     return res.status(400).json({ error: 'Missing required fields' })
+  }
+  if (isTooLong(name, FIELD_MAX_LENGTHS.name) || isTooLong(email, FIELD_MAX_LENGTHS.email)) {
+    return res.status(400).json({ error: 'One of the fields is too long.' })
   }
   const normalisedPhone = normaliseSaPhone(phone)
   if (!normalisedPhone) {
@@ -4083,7 +4335,7 @@ app.get('/api/enrolments/by-token/:token', async (req, res) => {
   }
 })
 
-app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/enrolments/:token/pay-balance', paymentInitIpLimiter, paymentInitKeyLimiter, requireNotInMaintenance, async (req, res) => {
   const { provider } = req.body
   if (!['ozow', 'payflex'].includes(provider)) {
     return res.status(400).json({ error: 'Please choose Ozow or Payflex.' })
@@ -4149,7 +4401,7 @@ app.post('/api/enrolments/:token/pay-balance', enrolmentsLimiter, requireNotInMa
 // same amount and purpose) - for when a deposit or full-price attempt was
 // cancelled or failed, before anything has been paid. Pay-balance above is
 // for a *new* balance payment once something already has been.
-app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/enrolments/:token/retry', paymentInitIpLimiter, paymentInitKeyLimiter, requireNotInMaintenance, async (req, res) => {
   try {
     const retrySettings = await getSystemSettings(req)
     const studentResult = await pool.query('SELECT * FROM students WHERE public_token = $1', [req.params.token])
@@ -4217,13 +4469,19 @@ app.post('/api/enrolments/:token/retry', enrolmentsLimiter, requireNotInMaintena
 // browser as anything else. Refunds through Payflex would affect the
 // business's standing with that provider, so Payflex is never wired up here
 // at all, even when it's enabled for the shop.
-app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/preorders', orderCreationIpLimiter, orderCreationPhoneLimiter, requireNotInMaintenance, async (req, res) => {
   const {
     productId, name, phone, email, quantity, fulfilmentMethod, acceptedTerms, provider, productOptionId,
     deliveryAddress, deliverySuburb, deliveryCity, deliveryPostalCode, deliveryNotes,
   } = req.body
   if (!productId || !name || !name.trim() || !phone || !email) {
     return res.status(400).json({ error: 'Missing required fields' })
+  }
+  if (isTooLong(name, FIELD_MAX_LENGTHS.name) || isTooLong(email, FIELD_MAX_LENGTHS.email) ||
+      isTooLong(deliveryAddress, FIELD_MAX_LENGTHS.address) || isTooLong(deliverySuburb, FIELD_MAX_LENGTHS.suburb) ||
+      isTooLong(deliveryCity, FIELD_MAX_LENGTHS.city) || isTooLong(deliveryPostalCode, FIELD_MAX_LENGTHS.postalCode) ||
+      isTooLong(deliveryNotes, FIELD_MAX_LENGTHS.notes)) {
+    return res.status(400).json({ error: 'One of the fields is too long.' })
   }
   if (provider !== undefined && provider !== 'ozow') {
     return res.status(400).json({ error: 'Pre-orders can only be paid with Ozow.' })
@@ -4260,7 +4518,7 @@ app.post('/api/preorders', ordersLimiter, requireNotInMaintenance, async (req, r
       return res.status(400).json({ error: 'This item is not available for pre-order.' })
     }
     const qty = parseInt(quantity) || 1
-    if (qty <= 0) return res.status(400).json({ error: 'Invalid quantity' })
+    if (qty <= 0 || qty > 100) return res.status(400).json({ error: 'Invalid quantity' })
 
     // Pre-orders are never limited by stock, but a product with custom
     // options still needs a valid, active one chosen.
@@ -4385,7 +4643,7 @@ app.get('/api/preorders/by-token/:token', async (req, res) => {
   }
 })
 
-app.post('/api/preorders/:token/pay-balance', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/preorders/:token/pay-balance', paymentInitIpLimiter, paymentInitKeyLimiter, requireNotInMaintenance, async (req, res) => {
   const balanceSettings = await getSystemSettings(req)
   if (!isProviderEnabled('ozow', balanceSettings)) {
     return res.status(503).json({ error: 'Ozow payments are not available right now.' })
@@ -4431,7 +4689,7 @@ app.post('/api/preorders/:token/pay-balance', ordersLimiter, requireNotInMainten
 
 // Retries the most recent Ozow attempt (deposit or balance) exactly as it
 // was - for when it was cancelled or failed, before anything was paid.
-app.post('/api/preorders/:token/retry', ordersLimiter, requireNotInMaintenance, async (req, res) => {
+app.post('/api/preorders/:token/retry', paymentInitIpLimiter, paymentInitKeyLimiter, requireNotInMaintenance, async (req, res) => {
   if (!isProviderEnabled('ozow', await getSystemSettings(req))) {
     return res.status(503).json({ error: 'Ozow payments are not available right now.' })
   }
@@ -4595,7 +4853,7 @@ app.patch('/api/orders/:id/confirm', authenticate, async (req, res) => {
 })
 
 // ── Image uploads ─────────────────────────────────────────────────────────────
-app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
+app.post('/api/upload/:type/:id', authenticate, uploadLimiter, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const { type, id } = req.params
   if (!UPLOAD_ITEM_TYPES.includes(type)) {
@@ -4605,6 +4863,10 @@ app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner')
   const sizeError = checkFileSize(req.file)
   if (sizeError) {
     deleteByUrl(relativeUrlForFile(req.file))
+    await logSecurityEvent({
+      type: 'upload_rejected', severity: SEVERITY.INFO, ip: req.ip, identifier: req.user?.username,
+      route: 'POST /api/upload/:type/:id', details: sizeError,
+    })
     return res.status(400).json({ error: sizeError })
   }
 
@@ -4644,11 +4906,15 @@ app.post('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner')
   }
 })
 
-app.post('/api/upload/gallery', authenticate, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
+app.post('/api/upload/gallery', authenticate, uploadLimiter, requireRole('sysadmin', 'owner'), upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
   const sizeError = checkFileSize(req.file)
   if (sizeError) {
     deleteByUrl(relativeUrlForFile(req.file))
+    await logSecurityEvent({
+      type: 'upload_rejected', severity: SEVERITY.INFO, ip: req.ip, identifier: req.user?.username,
+      route: 'POST /api/upload/gallery', details: sizeError,
+    })
     return res.status(400).json({ error: sizeError })
   }
 
@@ -4706,6 +4972,32 @@ app.get('/api/upload/:type/:id', async (req, res) => {
     res.json({ url: result.rows[0]?.url || null })
   } catch {
     res.json({ url: null })
+  }
+})
+
+// Removes a product/class/category's image entirely - deletes the file
+// from disk and clears the reference, using the same deleteByUrl() every
+// replacement upload above already uses. Same sysadmin/owner-only access
+// as uploading or replacing one.
+app.delete('/api/upload/:type/:id', authenticate, requireRole('sysadmin', 'owner'), async (req, res) => {
+  const { type, id } = req.params
+  if (!UPLOAD_ITEM_TYPES.includes(type)) return res.status(400).json({ error: 'Invalid type' })
+  try {
+    if (type === 'categories') {
+      const result = await pool.query('SELECT image_url FROM categories WHERE id = $1', [id])
+      if (result.rows.length === 0) return res.status(404).json({ error: 'Category not found' })
+      deleteByUrl(result.rows[0].image_url)
+      await pool.query('UPDATE categories SET image_url = NULL, image_public_id = NULL WHERE id = $1', [id])
+      return res.json({ success: true })
+    }
+    const result = await pool.query('SELECT url FROM media WHERE type = $1 AND item_id = $2', [type, id])
+    if (result.rows.length === 0) return res.status(404).json({ error: 'No image found' })
+    deleteByUrl(result.rows[0].url)
+    await pool.query('DELETE FROM media WHERE type = $1 AND item_id = $2', [type, id])
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to remove image' })
+    await logError('DELETE /api/upload/:type/:id', err, req)
   }
 })
 
@@ -4911,10 +5203,17 @@ const TEST_NOTIFICATION_EXCLUSION = `
   AND NOT EXISTS (SELECT 1 FROM preorders pre WHERE pre.id = notifications.preorder_id AND pre.is_test = TRUE)
 `
 
+// Security alerts (type = 'security') live in this same table but are
+// sysadmin-only - read and acknowledged through /api/admin/security/alerts*
+// instead - so every owner/staff-facing notifications route below excludes
+// them, the same way test data is excluded above.
+const SECURITY_NOTIFICATION_EXCLUSION = `AND notifications.type != 'security'`
+
 app.get('/api/notifications/archived', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT * FROM notifications WHERE archived = TRUE
+       ${SECURITY_NOTIFICATION_EXCLUSION}
        ${(await canIncludeTestData(req)) ? '' : TEST_NOTIFICATION_EXCLUSION}
        ORDER BY created_at DESC LIMIT 100`
     )
@@ -4931,6 +5230,7 @@ app.get('/api/notifications/unread-count', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT COUNT(*) FROM notifications WHERE read = FALSE AND archived = FALSE
+       ${SECURITY_NOTIFICATION_EXCLUSION}
        ${(await canIncludeTestData(req)) ? '' : TEST_NOTIFICATION_EXCLUSION}`
     )
     res.json({ count: parseInt(result.rows[0].count) })
@@ -4943,6 +5243,7 @@ app.get('/api/notifications', authenticate, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT * FROM notifications WHERE archived = FALSE
+       ${SECURITY_NOTIFICATION_EXCLUSION}
        ${(await canIncludeTestData(req)) ? '' : TEST_NOTIFICATION_EXCLUSION}
        ORDER BY created_at DESC LIMIT 50`
     )
@@ -4961,7 +5262,7 @@ app.get('/api/notifications', authenticate, async (req, res) => {
 
 app.patch('/api/notifications/read-all', authenticate, async (req, res) => {
   try {
-    await pool.query('UPDATE notifications SET read = TRUE WHERE archived = FALSE')
+    await pool.query(`UPDATE notifications SET read = TRUE WHERE archived = FALSE ${SECURITY_NOTIFICATION_EXCLUSION}`)
     res.json({ success: true })
   } catch {
     res.status(500).json({ error: 'Failed to mark all read' })
@@ -4970,7 +5271,7 @@ app.patch('/api/notifications/read-all', authenticate, async (req, res) => {
 
 app.patch('/api/notifications/:id/read', authenticate, async (req, res) => {
   try {
-    await pool.query('UPDATE notifications SET read = TRUE WHERE id = $1', [req.params.id])
+    await pool.query(`UPDATE notifications SET read = TRUE WHERE id = $1 ${SECURITY_NOTIFICATION_EXCLUSION}`, [req.params.id])
     res.json({ success: true })
   } catch {
     res.status(500).json({ error: 'Failed to mark read' })
@@ -4990,13 +5291,24 @@ app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
     res.status(400).json({ error: 'File is too large.' })
     logError('Upload', err, req)
+    logSecurityEvent({
+      type: 'upload_rejected', severity: SEVERITY.INFO, ip: req.ip, identifier: req.user?.username,
+      route: `${req.method} ${req.path}`, details: 'File too large',
+    })
     return
   }
   if (err.message?.startsWith('Only jpg, jpeg, png, webp, gif images')) {
     res.status(400).json({ error: err.message })
     logError('Upload', err, req)
+    logSecurityEvent({
+      type: 'upload_rejected', severity: SEVERITY.INFO, ip: req.ip, identifier: req.user?.username,
+      route: `${req.method} ${req.path}`, details: err.message,
+    })
     return
   }
+  // Never leaks a stack trace, SQL error or other internal detail to the
+  // client, in production or otherwise - logError already captured those
+  // details server-side above.
   res.status(500).json({ error: 'Something went wrong' })
   logError('Unhandled', err, req)
 })
@@ -5010,8 +5322,10 @@ const start = async () => {
   await archiveOldOrders()
   await cleanupErrorLog()
   await cleanupSessions()
-  server = app.listen(PORT, () => {
-    console.log(`Lashes By Retha backend listening on port ${PORT}`)
+  await cleanupSecurityEvents()
+  checkSecurityAlerts(UPLOAD_DIR)
+  server = app.listen(PORT, HOST, () => {
+    console.log(`Lashes By Retha backend listening on ${HOST}:${PORT}`)
   })
 }
 

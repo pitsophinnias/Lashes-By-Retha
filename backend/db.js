@@ -346,6 +346,29 @@ const createTables = async () => {
     );
   `)
 
+  // The sysadmin Security page's event log - everything that doesn't
+  // already fit audit_logs (admin actions), error_log (server errors) or
+  // payment_events (payment confirmations/rejections), which are reused
+  // as-is rather than duplicated here. identifier is a username, an
+  // already-masked phone number, an order/enrolment token or an IP - never
+  // a password, token or full card/bank detail (see maskPhone in
+  // src/security/events.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS security_events (
+      id SERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      type VARCHAR(50) NOT NULL,
+      severity VARCHAR(10) NOT NULL DEFAULT 'info',
+      ip VARCHAR(64),
+      identifier VARCHAR(255),
+      route VARCHAR(255),
+      details TEXT
+    );
+    CREATE INDEX IF NOT EXISTS security_events_created_at_idx ON security_events (created_at);
+    CREATE INDEX IF NOT EXISTS security_events_type_created_at_idx ON security_events (type, created_at);
+    CREATE INDEX IF NOT EXISTS security_events_ip_created_at_idx ON security_events (ip, created_at);
+  `)
+
   // Marks sandbox/UAT orders and training enrolments so Retha's owner/staff
   // views never see them - set automatically (see index.js's
   // markOrderTestIfNeeded/markStudentTestIfNeeded and the startup backfill

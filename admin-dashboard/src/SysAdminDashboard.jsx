@@ -88,6 +88,24 @@ export default function SysAdminDashboard({ user, onLogout }) {
   const [loggingOutUser, setLoggingOutUser] = useState(false)
   const [loginActivityMsg, setLoginActivityMsg] = useState('')
 
+  // Security
+  const [securitySummary, setSecuritySummary] = useState(null)
+  const [securityEvents, setSecurityEvents] = useState([])
+  const [securityEventsTotal, setSecurityEventsTotal] = useState(0)
+  const [securityEventsPage, setSecurityEventsPage] = useState(() => parseInt(queryParams().get('page')) || 1)
+  const [securityEventsPages, setSecurityEventsPages] = useState(1)
+  const [securityFilters, setSecurityFilters] = useState(() => ({
+    type: queryParams().get('type') || '',
+    severity: queryParams().get('severity') || '',
+    start: queryParams().get('start') || '',
+    end: queryParams().get('end') || '',
+  }))
+  const [topIps, setTopIps] = useState([])
+  const [securityHealth, setSecurityHealth] = useState(null)
+  const [securityAlerts, setSecurityAlerts] = useState([])
+  const [securityAlertCount, setSecurityAlertCount] = useState(0)
+  const [securityLoading, setSecurityLoading] = useState(false)
+
   const getHeaders = () => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${localStorage.getItem('hbh_token')}`,
@@ -121,6 +139,15 @@ export default function SysAdminDashboard({ user, onLogout }) {
       }
       if (page === 'errors') {
         setErrorFilters({ resolved: params.get('resolved') || 'unresolved', days: params.get('days') || '' })
+      }
+      if (page === 'security') {
+        setSecurityEventsPage(parseInt(params.get('page')) || 1)
+        setSecurityFilters({
+          type: params.get('type') || '',
+          severity: params.get('severity') || '',
+          start: params.get('start') || '',
+          end: params.get('end') || '',
+        })
       }
     }
     window.addEventListener('popstate', handlePopState)
@@ -207,6 +234,36 @@ export default function SysAdminDashboard({ user, onLogout }) {
   useEffect(() => {
     if (activePage === 'loginActivity') fetchLoginActivity()
   }, [activePage])
+
+  useEffect(() => {
+    if (activePage !== 'security') return
+    const url = new URL(window.location.href)
+    url.searchParams.set('page', String(securityEventsPage))
+    Object.entries(securityFilters).forEach(([key, value]) => {
+      if (value) url.searchParams.set(key, value)
+      else url.searchParams.delete(key)
+    })
+    window.history.replaceState(null, '', url.pathname + url.search)
+  }, [activePage, securityEventsPage, securityFilters])
+
+  useEffect(() => {
+    if (activePage === 'security') {
+      fetchSecuritySummary()
+      fetchSecurityEvents(securityEventsPage)
+      fetchTopIps()
+      fetchSecurityHealth()
+      fetchSecurityAlerts()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePage, securityEventsPage, securityFilters])
+
+  // Polls the alert badge regardless of which page is open, so a sysadmin
+  // sees a new alert without having to be on the Security page already.
+  useEffect(() => {
+    fetchSecurityAlertCount()
+    const interval = setInterval(fetchSecurityAlertCount, 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
 
   const fetchUsers = async () => {
     try {
@@ -547,6 +604,78 @@ export default function SysAdminDashboard({ user, onLogout }) {
     setLoginActivityLoading(false)
   }
 
+  const fetchSecuritySummary = async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/security/summary`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && data.last24h) setSecuritySummary(data)
+    } catch {}
+  }
+
+  const fetchSecurityEvents = async (page) => {
+    setSecurityLoading(true)
+    try {
+      const params = new URLSearchParams({ page: String(page) })
+      Object.entries(securityFilters).forEach(([key, value]) => { if (value) params.set(key, value) })
+      const res = await fetch(`${API}/api/admin/security/events?${params.toString()}`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && Array.isArray(data.events)) {
+        setSecurityEvents(data.events)
+        setSecurityEventsTotal(data.total)
+        setSecurityEventsPages(data.pages)
+      }
+    } catch {}
+    setSecurityLoading(false)
+  }
+
+  const fetchTopIps = async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/security/top-ips`, { headers: getHeaders() })
+      const data = await res.json()
+      if (Array.isArray(data)) setTopIps(data)
+    } catch {}
+  }
+
+  const fetchSecurityHealth = async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/security/health`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data) setSecurityHealth(data)
+    } catch {}
+  }
+
+  const fetchSecurityAlerts = async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/security/alerts`, { headers: getHeaders() })
+      const data = await res.json()
+      if (Array.isArray(data)) setSecurityAlerts(data)
+    } catch {}
+  }
+
+  const fetchSecurityAlertCount = async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/security/alerts/unread-count`, { headers: getHeaders() })
+      const data = await res.json()
+      if (data && typeof data.count === 'number') setSecurityAlertCount(data.count)
+    } catch {}
+  }
+
+  const markAlertSeen = async (id) => {
+    try {
+      await fetch(`${API}/api/admin/security/alerts/${id}/seen`, { method: 'PATCH', headers: getHeaders() })
+      setSecurityAlerts(prev => prev.map(a => a.id === id ? { ...a, read: true } : a))
+      fetchSecurityAlertCount()
+    } catch {}
+  }
+
+  const markAllAlertsSeen = async () => {
+    try {
+      await fetch(`${API}/api/admin/security/alerts/read-all`, { method: 'PATCH', headers: getHeaders() })
+      setSecurityAlerts(prev => prev.map(a => ({ ...a, read: true })))
+      setSecurityAlertCount(0)
+    } catch {}
+  }
+
   const logoutUserEverywhere = async (user) => {
     setLoggingOutUser(true)
     setLoginActivityMsg('')
@@ -584,6 +713,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
     { label: 'Test Data', value: 'testData' },
     { label: 'Backups', value: 'backups' },
     { label: 'Login Activity', value: 'loginActivity' },
+    { label: 'Security', value: 'security', badge: securityAlertCount },
     { label: 'Settings', value: 'settings' },
   ]
 
@@ -599,6 +729,7 @@ export default function SysAdminDashboard({ user, onLogout }) {
     testData: 'Test Data',
     backups: 'Backups',
     loginActivity: 'Login Activity',
+    security: 'Security',
     settings: 'Settings',
   }
 
@@ -727,6 +858,11 @@ export default function SysAdminDashboard({ user, onLogout }) {
                   <span style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: 3, height: 20, background: '#C47A8A', borderRadius: 2 }} />
                 )}
                 <span style={{ marginLeft: activePage === item.value ? 10 : 0 }}>{item.label}</span>
+                {!!item.badge && (
+                  <span style={{ marginLeft: 8, background: '#C47A8A', color: 'white', borderRadius: 10, fontSize: 11, fontWeight: 700, padding: '1px 7px', minWidth: 18, textAlign: 'center' }}>
+                    {item.badge}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -1839,6 +1975,170 @@ export default function SysAdminDashboard({ user, onLogout }) {
                         <button className="sa-btn-secondary" onClick={() => setLogoutConfirmUser(null)}>Cancel</button>
                       </div>
                     </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Security */}
+            {activePage === 'security' && (
+              <div>
+                {securitySummary && (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#9A8A8E', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Last 24 hours / last 7 days</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16 }}>
+                      {[
+                        { label: 'Failed Logins', key: 'failedLogins', bg: '#C47A8A' },
+                        { label: 'Rate Limit Hits', key: 'rateLimitHits', bg: '#8C5A6A' },
+                        { label: 'Payment Problems', key: 'paymentProblems', bg: '#6A1B9A' },
+                        { label: 'Rejected Uploads', key: 'rejectedUploads', bg: '#7A9E8A' },
+                        { label: 'Server Errors', key: 'serverErrors', bg: '#9A8A8E' },
+                      ].map(stat => (
+                        <div key={stat.key} style={{ background: stat.bg, borderRadius: 12, padding: '18px 20px', boxShadow: '0 2px 8px rgba(44,20,28,0.1)' }}>
+                          <div style={{ fontSize: 22, fontWeight: 700, color: 'white' }}>
+                            {securitySummary.last24h[stat.key]} <span style={{ fontSize: 14, fontWeight: 500, opacity: 0.8 }}>/ {securitySummary.last7d[stat.key]}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600, marginTop: 4 }}>{stat.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 20 }}>
+                  <div className="sa-panel">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20' }}>Alerts</div>
+                      {securityAlerts.some(a => !a.read) && (
+                        <button className="sa-btn-secondary" style={{ padding: '5px 10px', fontSize: 11 }} onClick={markAllAlertsSeen}>Mark all seen</button>
+                      )}
+                    </div>
+                    {securityAlerts.length === 0 && <div style={{ color: '#AAAAAA', fontSize: 13 }}>No alerts.</div>}
+                    {securityAlerts.slice(0, 10).map(a => (
+                      <div key={a.id} style={{ padding: '10px 0', borderBottom: '1px solid #F7F0F2', opacity: a.read ? 0.55 : 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>{a.title}</div>
+                          {!a.read && (
+                            <button className="sa-btn-secondary" style={{ padding: '3px 8px', fontSize: 10, flexShrink: 0 }} onClick={() => markAlertSeen(a.id)}>Seen</button>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#9A8A8E', marginTop: 2 }}>{a.message}</div>
+                        <div style={{ fontSize: 11, color: '#C4A0A8', marginTop: 2 }}>
+                          {new Date(a.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="sa-panel">
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 14 }}>Server Health</div>
+                    {securityHealth ? (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Disk space used</span>
+                          <span style={{ fontWeight: 600, color: securityHealth.disk && securityHealth.disk.usedPercent > 85 ? '#C47A8A' : '#2C1A20' }}>
+                            {securityHealth.disk ? `${securityHealth.disk.usedPercent}% (${formatBytes(securityHealth.disk.freeBytes)} free)` : 'Unknown'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Backend uptime</span>
+                          <span style={{ fontWeight: 600, color: '#2C1A20' }}>{formatUptime(securityHealth.uptimeSeconds)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>Last backup</span>
+                          <span style={{ fontWeight: 600, color: securityHealth.lastBackup?.status === 'ok' ? '#2C1A20' : '#C47A8A' }}>
+                            {securityHealth.lastBackup
+                              ? `${securityHealth.lastBackup.status} - ${new Date(securityHealth.lastBackup.at).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+                              : 'Never'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: 13 }}>
+                          <span style={{ color: '#9A8A8E' }}>SSL certificate</span>
+                          <span style={{ fontWeight: 600, color: securityHealth.sslDaysRemaining !== null && securityHealth.sslDaysRemaining < 14 ? '#C47A8A' : '#2C1A20' }}>
+                            {securityHealth.sslDaysRemaining !== null ? `${securityHealth.sslDaysRemaining} days left` : 'Unknown'}
+                          </span>
+                        </div>
+                      </>
+                    ) : <div style={{ color: '#AAAAAA', fontSize: 13 }}>Loading...</div>}
+                  </div>
+
+                  <div className="sa-panel">
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#2C1A20', marginBottom: 14 }}>Top IPs (24h)</div>
+                    {topIps.length === 0 && <div style={{ color: '#AAAAAA', fontSize: 13 }}>No events in the last 24 hours.</div>}
+                    {topIps.map(row => (
+                      <div key={row.ip} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #F7F0F2', fontSize: 13 }}>
+                        <span>{row.ip}</span>
+                        <span className="sa-badge" style={{ background: '#F7EEF0', color: '#8C5A6A' }}>{row.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                  <select className="sa-input" style={{ marginBottom: 0, width: 190 }} value={securityFilters.type} onChange={e => { setSecurityFilters(p => ({ ...p, type: e.target.value })); setSecurityEventsPage(1) }}>
+                    <option value="">All types</option>
+                    {['rate_limit', 'login_failed', 'login_lockout', 'login_deactivated', 'login_new_ip', 'deactivated_access', 'forbidden_admin_access', 'payment_hash_mismatch', 'payment_site_code_mismatch', 'payment_status_api_failure', 'payment_callback_unmatched', 'upload_rejected'].map(t => (
+                      <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+                    ))}
+                  </select>
+                  <select className="sa-input" style={{ marginBottom: 0, width: 140 }} value={securityFilters.severity} onChange={e => { setSecurityFilters(p => ({ ...p, severity: e.target.value })); setSecurityEventsPage(1) }}>
+                    <option value="">All severities</option>
+                    <option value="info">Info</option>
+                    <option value="warning">Warning</option>
+                    <option value="critical">Critical</option>
+                  </select>
+                  <input type="date" className="sa-input" style={{ marginBottom: 0, width: 150 }} value={securityFilters.start} onChange={e => { setSecurityFilters(p => ({ ...p, start: e.target.value })); setSecurityEventsPage(1) }} />
+                  <input type="date" className="sa-input" style={{ marginBottom: 0, width: 150 }} value={securityFilters.end} onChange={e => { setSecurityFilters(p => ({ ...p, end: e.target.value })); setSecurityEventsPage(1) }} />
+                </div>
+
+                <div style={{ marginBottom: 16, fontSize: 13, color: '#9A8A8E' }}>{securityEventsTotal} total events</div>
+                <div className="sa-panel" style={{ overflowX: 'auto' }}>
+                  <table className="sa-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Type</th>
+                        <th>Severity</th>
+                        <th>IP</th>
+                        <th>Identifier</th>
+                        <th>Route</th>
+                        <th>Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {securityEvents.map(ev => (
+                        <tr key={ev.id}>
+                          <td style={{ whiteSpace: 'nowrap', color: '#9A8A8E', fontSize: 12 }}>
+                            {new Date(ev.createdAt).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td><span className="sa-badge" style={{ background: '#F7EEF0', color: '#8C5A6A' }}>{ev.type.replace(/_/g, ' ')}</span></td>
+                          <td>
+                            <span className="sa-badge" style={
+                              ev.severity === 'critical' ? { background: '#FDE8EC', color: '#C47A8A' }
+                                : ev.severity === 'warning' ? { background: '#FFF3E0', color: '#E65100' }
+                                : { background: '#F5F5F5', color: '#9E9E9E' }
+                            }>{ev.severity}</span>
+                          </td>
+                          <td style={{ fontSize: 12 }}>{ev.ip || '-'}</td>
+                          <td style={{ fontSize: 12 }}>{ev.identifier || '-'}</td>
+                          <td style={{ fontSize: 12, color: '#9A8A8E' }}>{ev.route || '-'}</td>
+                          <td style={{ fontSize: 12, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ev.details}>{ev.details || '-'}</td>
+                        </tr>
+                      ))}
+                      {!securityLoading && securityEvents.length === 0 && (
+                        <tr><td colSpan={7} style={{ color: '#AAAAAA', padding: '16px 0' }}>No events match these filters.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {securityEventsPages > 1 && (
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    {Array.from({ length: securityEventsPages }, (_, i) => i + 1).map(p => (
+                      <button key={p} onClick={() => setSecurityEventsPage(p)}
+                        style={{ background: p === securityEventsPage ? '#C47A8A' : '#F7EEF0', color: p === securityEventsPage ? 'white' : '#8C5A6A', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                        {p}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
