@@ -114,6 +114,12 @@ function mapOzowStatus(status) {
 let notifyAdmin = async () => {}
 const setNotifier = (fn) => { notifyAdmin = fn }
 
+// Same pattern, for logging a security event when Ozow's own status API
+// rejects us (e.g. "No merchant found") - a sign something's misconfigured
+// or being probed, worth surfacing on the sysadmin Security page.
+let logSecurityIssue = async () => {}
+const setSecurityLogger = (fn) => { logSecurityIssue = fn }
+
 // Logs only the key names of the first live response, once per process, so
 // we can confirm the actual field casing without ever logging values.
 let loggedStatusResponseKeys = false
@@ -132,6 +138,7 @@ async function fetchOzowStatus(transactionReference, isTest) {
       let bodyText = ''
       try { bodyText = (await res.text()).slice(0, 300) } catch {}
       console.error(`Ozow status API returned ${res.status} from ${base} - body: ${bodyText}`)
+      await logSecurityIssue(`Ozow status API returned ${res.status}`, transactionReference)
       return null
     }
     const data = await res.json()
@@ -269,4 +276,5 @@ module.exports = {
   generateTransactionReference,
   reconcileOzowPayment,
   setNotifier,
+  setSecurityLogger,
 }

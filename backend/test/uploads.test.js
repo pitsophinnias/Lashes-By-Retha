@@ -111,6 +111,7 @@ const tokenFor = (role) => jwt.sign(
   { expiresIn: '1h' }
 )
 const sysadminHeaders = () => ({ Authorization: `Bearer ${tokenFor('sysadmin')}` })
+const staffHeaders = () => ({ Authorization: `Bearer ${tokenFor('staff')}` })
 
 const createProduct = async () => {
   const result = await pool.query(
@@ -149,6 +150,16 @@ before(async () => {
   )).rows[0]
   roleTokenInfo.sysadmin = { id: sysadminRow.id, username: sysadminRow.username, tokenVersion: sysadminRow.token_version }
   roleTokenInfo.sysadmin.sessionId = await createTestSessionId(pool, sysadminRow.id)
+
+  const staffRoleRow = (await pool.query(`SELECT id FROM roles WHERE name = 'staff'`)).rows[0]
+  const staffResult = await pool.query(
+    `INSERT INTO users (username, password_hash, role_id, is_active, must_change_password)
+     VALUES ($1, 'x', $2, TRUE, FALSE) RETURNING *`,
+    [`upload-test-staff-${randRef()}`, staffRoleRow.id]
+  )
+  testUserIds.push(staffResult.rows[0].id)
+  roleTokenInfo.staff = { id: staffResult.rows[0].id, username: staffResult.rows[0].username, tokenVersion: staffResult.rows[0].token_version }
+  roleTokenInfo.staff.sessionId = await createTestSessionId(pool, staffResult.rows[0].id)
 })
 
 after(async () => {
@@ -296,4 +307,62 @@ test('hard-deleting a product with no history removes its uploaded image file to
   assert.strictEqual(del.data.mode, 'hard')
   assert.ok(!fs.existsSync(filePath))
   createdProductIds.splice(createdProductIds.indexOf(product.id), 1)
+})
+
+// ── Remove Image (DELETE /api/upload/:type/:id) ─────────────────────────────
+
+test('DELETE /api/upload/products/:id removes the file from disk and clears the media row', async () => {
+  const product = await createProduct()
+  const uploaded = await uploadRequest('POST', `/api/upload/products/${product.id}`, {
+    filename: 'remove-me.jpg', contentType: 'image/jpeg', bytes: FAKE_IMAGE_BYTES, headers: sysadminHeaders(),
+  })
+  const filePath = uploadDirFor(uploaded.data.url)
+  assert.ok(fs.existsSync(filePath))
+
+  const del = await request('DELETE', `/api/upload/products/${product.id}`, undefined, sysadminHeaders())
+  assert.strictEqual(del.status, 200)
+  assert.ok(!fs.existsSync(filePath), 'the file should be deleted from disk')
+
+  const row = (await pool.query('SELECT 1 FROM media WHERE type = $1 AND item_id = $2', ['products', product.id])).rows[0]
+  assert.strictEqual(row, undefined, 'the media row should be cleared')
+
+  const lookup = await request('GET', `/api/upload/products/${product.id}`)
+  assert.strictEqual(lookup.data.url, null)
+})
+
+test('DELETE /api/upload/categories/:id removes the file and clears image_url', async () => {
+  const category = await createCategory()
+  const uploaded = await uploadRequest('POST', `/api/upload/categories/${category.id}`, {
+    filename: 'cover.jpg', contentType: 'image/jpeg', bytes: FAKE_IMAGE_BYTES, headers: sysadminHeaders(),
+  })
+  const filePath = uploadDirFor(uploaded.data.url)
+
+  const del = await request('DELETE', `/api/upload/categories/${category.id}`, undefined, sysadminHeaders())
+  assert.strictEqual(del.status, 200)
+  assert.ok(!fs.existsSync(filePath))
+
+  const row = (await pool.query('SELECT image_url FROM categories WHERE id = $1', [category.id])).rows[0]
+  assert.strictEqual(row.image_url, null)
+})
+
+test('DELETE /api/upload/:type/:id 404s when there is no image to remove', async () => {
+  const product = await createProduct()
+  const res = await request('DELETE', `/api/upload/products/${product.id}`, undefined, sysadminHeaders())
+  assert.strictEqual(res.status, 404)
+})
+
+test('removing an image requires sysadmin or owner - staff is blocked', async () => {
+  const product = await createProduct()
+  await uploadRequest('POST', `/api/upload/products/${product.id}`, {
+    filename: 'staff-blocked.jpg', contentType: 'image/jpeg', bytes: FAKE_IMAGE_BYTES, headers: sysadminHeaders(),
+  })
+
+  const staffAttempt = await request('DELETE', `/api/upload/products/${product.id}`, undefined, staffHeaders())
+  assert.strictEqual(staffAttempt.status, 403)
+
+  const unauthenticated = await request('DELETE', `/api/upload/products/${product.id}`, undefined)
+  assert.strictEqual(unauthenticated.status, 401)
+
+  const row = (await pool.query('SELECT 1 FROM media WHERE type = $1 AND item_id = $2', ['products', product.id])).rows[0]
+  assert.ok(row, 'the image should still be there after a blocked attempt')
 })

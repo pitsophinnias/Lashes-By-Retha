@@ -19,6 +19,7 @@ Copy backend/.env.example to backend/.env and fill in values.
 - DATABASE_URL — PostgreSQL connection string
 - TEST_DATABASE_URL — a separate local database `npm test` runs against, never DATABASE_URL - must be on localhost/127.0.0.1 with a name ending in `_test` (e.g. `postgresql://hbh_admin:hbh_password@localhost:5432/hairbyher_test`), or the suite refuses to run. Create it once with `psql -U postgres -c "CREATE DATABASE hairbyher_test OWNER hbh_admin;"`. Every table in it is truncated and reseeded before each test file runs, so it only ever holds whatever that file creates.
 - PORT — port the API listens on (defaults to 3002)
+- HOST — interface the API binds to; defaults to 0.0.0.0. On the production server, set this to 127.0.0.1 so the API is only reachable through Nginx, never directly from the internet.
 - NODE_ENV — development or production; production enforces the required secrets below
 - JWT_SECRET — signs auth tokens; required in production, must be at least 32 characters
 - ADMIN_DEFAULT_PASSWORD — password for the seeded sysadmin account; required in production
@@ -42,6 +43,24 @@ Copy backend/.env.example to backend/.env and fill in values.
 - PAYFLEX_AUTH_URL — defaults to the sandbox auth endpoint, https://auth-uat.payflex.co.za/auth/merchant; use https://auth.payflex.co.za/auth/merchant in production
 - PAYFLEX_AUDIENCE — defaults to the sandbox audience, https://auth-dev.payflex.co.za; use https://auth-production.payflex.co.za in production
 - BACKUP_REPORT_TOKEN — shared secret backend/scripts/backup.sh sends as a Bearer token when it reports each backup run to POST /api/system/backups/report. Leave unset to disable that endpoint entirely.
+- RATE_LIMIT_* — tunes the rate limit tiers below without a deploy; see "Rate limiting" for each one's name and default.
+- SSL_CHECK_HOST — hostname the sysadmin Security page connects to over TLS to read the certificate's days-until-expiry; defaults to hairbyher.co.za.
+
+## Rate limiting
+
+Every limit is keyed per IP, per username, per phone number or per order/enrolment - never a single counter shared by every visitor. This matters because most customers are on South African mobile networks (Vodacom, MTN, Telkom, Cell C), which often put many customers behind one shared public IP (CGNAT); an IP-only limit tight enough to stop one abusive visitor would also block everyone else behind that same IP.
+
+| Tier | Limit | Env vars |
+| --- | --- | --- |
+| General API (product lists, settings, etc.) | 1000 requests / minute / IP | `RATE_LIMIT_GENERAL_MAX`, `RATE_LIMIT_GENERAL_WINDOW_MS` |
+| Order/enrolment creation | 100 / 15 min / IP **and** 10 / hour / customer phone number (normalised, so 082…, 82… and +2782… all count as the same number) | `RATE_LIMIT_ORDER_IP_MAX`, `RATE_LIMIT_ORDER_IP_WINDOW_MS`, `RATE_LIMIT_ORDER_PHONE_MAX`, `RATE_LIMIT_ORDER_PHONE_WINDOW_MS` |
+| Payment initiation (Ozow/Payflex start, pay-balance, retry) | 100 / 15 min / IP **and** 10 / hour / order or enrolment | `RATE_LIMIT_PAYMENT_IP_MAX`, `RATE_LIMIT_PAYMENT_IP_WINDOW_MS`, `RATE_LIMIT_PAYMENT_KEY_MAX`, `RATE_LIMIT_PAYMENT_KEY_WINDOW_MS` |
+| Admin login | 5 failed attempts / 15 min / username **and** 30 failed attempts / 15 min / IP. A successful login never counts and resets that username's counter. | `RATE_LIMIT_LOGIN_USERNAME_MAX`, `RATE_LIMIT_LOGIN_IP_MAX`, `RATE_LIMIT_LOGIN_WINDOW_MS` |
+| Uploads | 60 / 15 min / authenticated user | `RATE_LIMIT_UPLOAD_MAX`, `RATE_LIMIT_UPLOAD_WINDOW_MS` |
+
+Ozow's notify and Payflex's callback routes (server-to-server, not a customer's browser) have **no rate limiter at all** - their servers share IPs across every merchant using them, so limiting by IP there would be both useless and likely to drop genuine notifications. They're protected instead by the hash/signature and site-code checks already in place, backed up by each provider's own status API.
+
+A blocked request always gets a friendly `{"error": "..."}` body and a `Retry-After` header (set automatically), never a raw rate-limit error - the customer site and admin login just display that message as-is.
 
 Ozow counts as configured only when OZOW_SITE_CODE, OZOW_PRIVATE_KEY, OZOW_API_KEY, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Payflex counts as configured only when PAYFLEX_CLIENT_ID, PAYFLEX_CLIENT_SECRET, PAYFLEX_API_URL, PAYFLEX_AUTH_URL, PAYFLEX_AUDIENCE, PUBLIC_API_URL and CUSTOMER_SITE_URL are all set. Checkout only offers whichever of Ozow/Payflex is configured; if neither is, ordering is blocked with a message to contact Retha on WhatsApp instead.
 
@@ -73,6 +92,14 @@ Render's free Postgres plan has no shell access to run `pg_dump` or cron against
 2. On the database server, add a crontab entry that sets `DATABASE_URL`, `BACKUP_REPORT_TOKEN` (same value as above) and `REPORT_URL` (the backend's `/api/system/backups/report` URL), then runs `backend/scripts/backup.sh` - see the comments at the top of that script for the exact variables and an example crontab line.
 3. Also set `UPLOAD_DIR` on that same crontab line (matching the backend's own `UPLOAD_DIR`) so uploaded images/videos are archived alongside the database dump on every run, not just the database itself.
 4. Optionally set `RCLONE_REMOTE` too, for an offsite copy of each backup (database dump and uploads archive) via `rclone`.
+
+## Security
+
+The sysadmin dashboard's **Security** page (`/sysadmin/security`, sysadmin only) is the one place to check security: 24h/7d counts of failed logins, rate limit hits, payment problems, rejected uploads and server errors; a filterable, paged events list; the top 10 IPs by event count in the last 24 hours; and server health cards (disk space, backend uptime, last backup, SSL days left). Events live in the `security_events` table and are kept for 90 days; `audit_logs`, `error_log` and `payment_events` are reused as-is for what already fits there rather than duplicating them.
+
+Alerts (20+ failed logins in 15 min, a username lockout, the same IP hitting rate limits 5+ times in an hour, any payment hash/signature/site-code mismatch, 10+ server errors in 15 min, an overdue backup, an SSL certificate with under 14 days left, or disk over 85% used) create a sysadmin notification and badge the Security nav item, and never repeat the same alert more than once an hour. Phone numbers are always masked in events (e.g. `082***5399`) - never a password, token or full card/bank detail.
+
+On the server, `authenticate` re-checks the user is still active on every request (a deactivated staff member is locked out on their very next request, not at their next login), and `JWT_SECRET` is required to be at least 32 characters in production (enforced at startup). Set `HOST=127.0.0.1` in production so the API is only reachable through Nginx.
 
 ## Sales and deleting products
 

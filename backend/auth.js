@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken')
 const { pool } = require('./db')
 const { checkAndTouchSession } = require('./src/sessions/store')
+const { logSecurityEvent, SEVERITY } = require('./src/security/events')
 
 const isProd = process.env.NODE_ENV === 'production'
 let JWT_SECRET = process.env.JWT_SECRET
@@ -40,6 +41,13 @@ const authenticate = async (req, res, next) => {
       [decoded.id]
     )
     const user = result.rows[0]
+    if (user && !user.is_active) {
+      logSecurityEvent({
+        type: 'deactivated_access', severity: SEVERITY.WARNING, ip: req.ip,
+        identifier: user.username, route: `${req.method} ${req.path}`,
+        details: 'A deactivated account tried to use an existing session',
+      })
+    }
     if (!user || !user.is_active || user.token_version !== decoded.tokenVersion) {
       return res.status(401).json({ error: 'Invalid or expired token' })
     }
@@ -66,6 +74,11 @@ const authenticate = async (req, res, next) => {
 const requireRole = (...roles) => (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Not authenticated' })
   if (!roles.includes(req.user.role)) {
+    logSecurityEvent({
+      type: 'forbidden_admin_access', severity: SEVERITY.WARNING, ip: req.ip,
+      identifier: req.user.username, route: `${req.method} ${req.path}`,
+      details: `Role "${req.user.role}" is not allowed (needs one of: ${roles.join(', ')})`,
+    })
     return res.status(403).json({ error: 'Insufficient permissions' })
   }
   next()
